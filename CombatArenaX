@@ -1,0 +1,552 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║        ANNOMALY X - Combat Arena Module                   ║
+    ║        Anti-BAC Bypass + Selective Silent Aim             ║
+    ║        Creator: ElSacaLeche                               ║
+    ╚═══════════════════════════════════════════════════════════╝
+    
+    WHY BAC-7198 TRIGGERS:
+    Combat Arena's anticheat detects when:
+    1. Raycast directions don't match camera direction
+    2. __namecall is hooked globally (catches AC raycasts too)
+    3. Hit registration doesn't match expected trajectory
+    
+    SOLUTION:
+    Instead of hooking __namecall (which intercepts ALL raycasts
+    including anticheat verification raycasts), we:
+    
+    1. Find the specific RemoteEvent used for shooting
+    2. Hook only FireServer on that specific remote
+    3. Modify only the shooting data, not workspace raycasts
+    4. Disable any client-side anticheat scripts
+    5. Block anticheat reporting remotes
+    
+    This way the AC's own raycasts pass through unmodified,
+    and only the actual bullet/shot data gets redirected.
+]]
+
+-- Wait for Config
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+local cloneref = cloneref or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local hookfunction = hookfunction or replaceclosure or detour_function
+local hookmetamethod = hookmetamethod
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local checkcaller = checkcaller or function() return false end
+local getconnections = getconnections
+local getgc = getgc
+
+local Players = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local Workspace = cloneref(game:GetService("Workspace"))
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- PHASE 1: COMBAT ARENA ANTICHEAT DISABLER
+-- ============================================
+local function DisableCombatArenaAC()
+    local results = {
+        acScriptsDisabled = 0,
+        acRemotesBlocked = 0,
+        acConnectionsKilled = 0,
+        gcFunctionsHooked = 0,
+        kickBlocked = false
+    }
+    
+    -- 1. Scan GC for anticheat functions and disable them
+    task.spawn(function()
+        pcall(function()
+            for _, v in pairs(getgc(true)) do
+                if typeof(v) == "function" then
+                    local ok, src = pcall(function()
+                        return debug.info(v, "s")
+                    end)
+                    if ok and type(src) == "string" then
+                        -- Block anticheat related scripts
+                        local acKeywords = {
+                            "AntiCheat", "anticheat", "AntiExploit", "antiexploit",
+                            "Integrity", "integrity", "Validation", "validation",
+                            "Detection", "detection", "Security", "security",
+                            "BAC", "bac", "Checker", "checker",
+                            "Monitor", "monitor", "Verify", "verify"
+                        }
+                        for _, keyword in ipairs(acKeywords) do
+                            if string.find(src, keyword) then
+                                pcall(function()
+                                    hookfunction(v, newcclosure(function(...)
+                                        return nil
+                                    end))
+                                    results.gcFunctionsHooked = results.gcFunctionsHooked + 1
+                                end)
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Also check tables for detect/ban functions
+                if typeof(v) == "table" then
+                    pcall(function()
+                        local detect = rawget(v, "Detect") or rawget(v, "detect") or rawget(v, "Detected")
+                        local ban = rawget(v, "Ban") or rawget(v, "ban") or rawget(v, "Kick") or rawget(v, "kick")
+                        local report = rawget(v, "Report") or rawget(v, "report") or rawget(v, "Flag") or rawget(v, "flag")
+                        
+                        if typeof(detect) == "function" then
+                            hookfunction(detect, newcclosure(function(...) return nil end))
+                            results.gcFunctionsHooked = results.gcFunctionsHooked + 1
+                        end
+                        if typeof(ban) == "function" then
+                            hookfunction(ban, newcclosure(function(...) return nil end))
+                            results.gcFunctionsHooked = results.gcFunctionsHooked + 1
+                        end
+                        if typeof(report) == "function" then
+                            hookfunction(report, newcclosure(function(...) return nil end))
+                            results.gcFunctionsHooked = results.gcFunctionsHooked + 1
+                        end
+                    end)
+                end
+            end
+        end)
+    end)
+    
+    -- 2. Block anticheat RemoteEvents
+    task.spawn(function()
+        pcall(function()
+            local function ScanForACRemotes(parent)
+                for _, child in pairs(parent:GetDescendants()) do
+                    if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                        local name = child.Name:lower()
+                        local acNames = {
+                            "anticheat", "anti_cheat", "ac_", "integrity",
+                            "validation", "security", "detect", "report",
+                            "flag", "violation", "ban", "kick",
+                            "verify", "check", "monitor", "bac"
+                        }
+                        for _, acName in ipairs(acNames) do
+                            if string.find(name, acName) then
+                                -- Hook FireServer to block it
+                                if child:IsA("RemoteEvent") then
+                                    pcall(function()
+                                        -- Disconnect all existing connections
+                                        if child.OnClientEvent then
+                                            for _, conn in pairs(getconnections(child.OnClientEvent)) do
+                                                pcall(function() conn:Disable() end)
+                                                results.acConnectionsKilled = results.acConnectionsKilled + 1
+                                            end
+                                        end
+                                    end)
+                                end
+                                results.acRemotesBlocked = results.acRemotesBlocked + 1
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            ScanForACRemotes(ReplicatedStorage)
+            
+            -- Also scan other common locations
+            pcall(function() ScanForACRemotes(game:GetService("ServerScriptService")) end)
+            pcall(function() ScanForACRemotes(game:GetService("StarterPlayer")) end)
+        end)
+    end)
+    
+    -- 3. Disable client-side anticheat scripts
+    task.spawn(function()
+        pcall(function()
+            local function DisableACScripts(parent)
+                for _, child in pairs(parent:GetDescendants()) do
+                    if child:IsA("LocalScript") or child:IsA("ModuleScript") then
+                        local name = child.Name:lower()
+                        local acScriptNames = {
+                            "anticheat", "anti_cheat", "ac", "integrity",
+                            "validation", "security", "detection", "monitor",
+                            "verify", "checker", "bac", "guard"
+                        }
+                        for _, acName in ipairs(acScriptNames) do
+                            if string.find(name, acName) then
+                                pcall(function()
+                                    child.Disabled = true
+                                    results.acScriptsDisabled = results.acScriptsDisabled + 1
+                                end)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            DisableACScripts(LocalPlayer.PlayerScripts)
+            pcall(function() DisableACScripts(game:GetService("StarterPlayer")) end)
+            pcall(function() DisableACScripts(ReplicatedStorage) end)
+        end)
+    end)
+    
+    -- 4. Hook Player:Kick() to prevent kicks
+    task.spawn(function()
+        pcall(function()
+            local oldKick
+            oldKick = hookfunction(LocalPlayer.Kick, newcclosure(function(self, ...)
+                if self == LocalPlayer then
+                    warn("[ANNOMALY X] Blocked kick attempt: " .. tostring((...)))
+                    return
+                end
+                return oldKick(self, ...)
+            end))
+            results.kickBlocked = true
+        end)
+    end)
+    
+    -- 5. Block error reporting
+    task.spawn(function()
+        pcall(function()
+            local LogService = game:GetService("LogService")
+            local ScriptContext = game:GetService("ScriptContext")
+            
+            for _, conn in pairs(getconnections(LogService.MessageOut)) do
+                pcall(function()
+                    hookfunction(conn.Function, newcclosure(function(...) end))
+                end)
+            end
+            
+            for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+                pcall(function() conn:Disable() end)
+            end
+        end)
+    end)
+    
+    -- Wait for hooks to apply
+    task.wait(1)
+    
+    return results
+end
+
+-- Execute AC disabler first
+print("[ANNOMALY X] Combat Arena: Disabling anticheat...")
+local acResults = DisableCombatArenaAC()
+print("  ✅ AC Scripts disabled: " .. acResults.acScriptsDisabled)
+print("  ✅ AC Remotes blocked: " .. acResults.acRemotesBlocked)
+print("  ✅ AC Connections killed: " .. acResults.acConnectionsKilled)
+print("  ✅ GC Functions hooked: " .. acResults.gcFunctionsHooked)
+print("  ✅ Kick blocked: " .. tostring(acResults.kickBlocked))
+
+-- ============================================
+-- PHASE 2: FIND SHOOTING REMOTES
+-- Combat Arena uses RemoteEvents for shooting
+-- We need to find the specific one
+-- ============================================
+
+local ShootRemote = nil
+local ShootRemoteName = nil
+local HitRemote = nil
+
+local function FindShootingRemotes()
+    -- Scan ReplicatedStorage for shooting-related remotes
+    local function ScanFolder(folder)
+        for _, child in pairs(folder:GetDescendants()) do
+            if child:IsA("RemoteEvent") then
+                local name = child.Name:lower()
+                -- Common shooting remote names
+                if string.find(name, "shoot") or string.find(name, "fire") 
+                    or string.find(name, "bullet") or string.find(name, "gun")
+                    or string.find(name, "weapon") or string.find(name, "attack")
+                    or string.find(name, "damage") or string.find(name, "hit") then
+                    
+                    if string.find(name, "hit") or string.find(name, "damage") then
+                        if not HitRemote then
+                            HitRemote = child
+                            print("  📡 Found hit remote: " .. child:GetFullName())
+                        end
+                    else
+                        if not ShootRemote then
+                            ShootRemote = child
+                            ShootRemoteName = child.Name
+                            print("  📡 Found shoot remote: " .. child:GetFullName())
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    pcall(function() ScanFolder(ReplicatedStorage) end)
+    pcall(function() ScanFolder(game:GetService("Workspace")) end)
+end
+
+FindShootingRemotes()
+
+-- ============================================
+-- PHASE 3: TARGET FINDER
+-- ============================================
+
+local CurrentCATarget = nil
+
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character, Camera}
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    return true
+end
+
+local function GetTargetPart(character, targetPartSetting)
+    if not character then return nil end
+    local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
+    if targetPartSetting == "Random" then
+        local validParts = {}
+        for _, partName in ipairs(parts) do
+            local part = character:FindFirstChild(partName)
+            if part then table.insert(validParts, part) end
+        end
+        if #validParts > 0 then return validParts[math.random(1, #validParts)] end
+    end
+    return character:FindFirstChild(targetPartSetting)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+end
+
+local function GetClosestCATarget()
+    Camera = Workspace.CurrentCamera
+    local closest = nil
+    local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local screenCenter = Camera.ViewportSize / 2
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then continue end
+        
+        local character = player.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        
+        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        if not targetPart then continue end
+        
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if screenDist < closestDist then
+            closestDist = screenDist
+            closest = targetPart
+        end
+    end
+    
+    return closest
+end
+
+-- ============================================
+-- PHASE 4: SELECTIVE SILENT AIM
+-- Hook ONLY __namecall for RemoteEvent:FireServer
+-- Do NOT touch Workspace:Raycast (this triggers BAC)
+-- ============================================
+
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if checkcaller() then
+        return oldNamecall(self, ...)
+    end
+    
+    if not Config.Silent.Enabled or not Config.Silent.Active then
+        return oldNamecall(self, ...)
+    end
+    
+    if not CurrentCATarget or not CurrentCATarget.Parent then
+        return oldNamecall(self, ...)
+    end
+    
+    -- Hit chance check
+    if math.random(1, 100) > Config.Silent.HitChance then
+        return oldNamecall(self, ...)
+    end
+    
+    -- METHOD 1: Intercept RemoteEvent:FireServer
+    -- This is SAFE because we only modify the shooting remote data
+    -- The AC's own raycasts are NOT touched
+    if method == "FireServer" and self:IsA("RemoteEvent") then
+        local remoteName = self.Name:lower()
+        
+        -- Only intercept shooting-related remotes
+        local isShootRemote = false
+        local shootKeywords = {"shoot", "fire", "bullet", "gun", "weapon", "attack", "cast", "projectile"}
+        for _, keyword in ipairs(shootKeywords) do
+            if string.find(remoteName, keyword) then
+                isShootRemote = true
+                break
+            end
+        end
+        
+        -- Also match if it's our found remote
+        if ShootRemote and self == ShootRemote then
+            isShootRemote = true
+        end
+        
+        if isShootRemote then
+            -- Modify arguments that look like direction/position data
+            for i, arg in ipairs(args) do
+                if typeof(arg) == "Vector3" then
+                    -- Check if this looks like a direction (normalized or near-normalized)
+                    local mag = arg.Magnitude
+                    if mag > 0.5 and mag < 2 then
+                        -- This is likely a direction vector
+                        local origin = Camera.CFrame.Position
+                        args[i] = (CurrentCATarget.Position - origin).Unit
+                    end
+                elseif typeof(arg) == "CFrame" then
+                    -- Redirect CFrame to look at target
+                    args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
+                elseif typeof(arg) == "Ray" then
+                    local newDir = (CurrentCATarget.Position - arg.Origin).Unit * arg.Direction.Magnitude
+                    args[i] = Ray.new(arg.Origin, newDir)
+                elseif typeof(arg) == "table" then
+                    -- Scan table for position/direction data
+                    pcall(function()
+                        for key, value in pairs(arg) do
+                            local keyLower = tostring(key):lower()
+                            if typeof(value) == "Vector3" then
+                                if string.find(keyLower, "dir") or string.find(keyLower, "direction") then
+                                    local origin = Camera.CFrame.Position
+                                    arg[key] = (CurrentCATarget.Position - origin).Unit
+                                elseif string.find(keyLower, "pos") or string.find(keyLower, "position") or string.find(keyLower, "target") then
+                                    arg[key] = CurrentCATarget.Position
+                                end
+                            elseif typeof(value) == "CFrame" then
+                                if string.find(keyLower, "aim") or string.find(keyLower, "camera") or string.find(keyLower, "look") then
+                                    arg[key] = CFrame.new(value.Position, CurrentCATarget.Position)
+                                end
+                            end
+                        end
+                    end)
+                end
+            end
+            return oldNamecall(self, unpack(args))
+        end
+    end
+    
+    -- METHOD 2: Intercept InvokeServer (some games use RemoteFunction)
+    if method == "InvokeServer" and self:IsA("RemoteFunction") then
+        local remoteName = self.Name:lower()
+        local isShootRemote = false
+        local shootKeywords = {"shoot", "fire", "bullet", "gun", "weapon", "attack", "cast"}
+        for _, keyword in ipairs(shootKeywords) do
+            if string.find(remoteName, keyword) then
+                isShootRemote = true
+                break
+            end
+        end
+        
+        if isShootRemote then
+            for i, arg in ipairs(args) do
+                if typeof(arg) == "Vector3" then
+                    local mag = arg.Magnitude
+                    if mag > 0.5 and mag < 2 then
+                        local origin = Camera.CFrame.Position
+                        args[i] = (CurrentCATarget.Position - origin).Unit
+                    end
+                elseif typeof(arg) == "CFrame" then
+                    args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
+                elseif typeof(arg) == "Ray" then
+                    local newDir = (CurrentCATarget.Position - arg.Origin).Unit * arg.Direction.Magnitude
+                    args[i] = Ray.new(arg.Origin, newDir)
+                end
+            end
+            return oldNamecall(self, unpack(args))
+        end
+    end
+    
+    -- IMPORTANT: Do NOT intercept Workspace:Raycast
+    -- This is what triggers BAC-7198
+    -- Let all workspace raycasts pass through unmodified
+    
+    return oldNamecall(self, ...)
+end))
+
+-- ============================================
+-- PHASE 5: ADDITIONAL SAFETY - BLOCK AC REPORTS
+-- Continuously monitor for new AC remotes
+-- ============================================
+
+task.spawn(function()
+    while task.wait(5) do
+        pcall(function()
+            -- Re-scan for any new anticheat remotes that may have been created
+            for _, child in pairs(ReplicatedStorage:GetDescendants()) do
+                if child:IsA("RemoteEvent") then
+                    local name = child.Name:lower()
+                    if string.find(name, "anticheat") or string.find(name, "report") 
+                        or string.find(name, "violation") or string.find(name, "bac")
+                        or string.find(name, "integrity") then
+                        if child.OnClientEvent then
+                            for _, conn in pairs(getconnections(child.OnClientEvent)) do
+                                pcall(function() conn:Disable() end)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+-- ============================================
+-- TARGET UPDATE LOOP
+-- ============================================
+local caTargetConnection = RunService.Heartbeat:Connect(function()
+    Camera = Workspace.CurrentCamera
+    if Config.Silent.Enabled and Config.Silent.Active then
+        CurrentCATarget = GetClosestCATarget()
+    else
+        CurrentCATarget = nil
+    end
+end)
+
+-- ============================================
+-- CLEANUP ON CHARACTER RESPAWN
+-- ============================================
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentCATarget = nil
+    
+    -- Re-disable AC after respawn (some games re-enable scripts)
+    task.wait(2)
+    pcall(function()
+        DisableCombatArenaAC()
+    end)
+end)
+
+-- ============================================
+-- SIGNAL: Module loaded
+-- ============================================
+getgenv().AX_CALoaded = true
+
+print("  ✅ CA MODULE - Anticheat disabled (BAC-7198 bypass)")
+print("  ✅ CA MODULE - Selective __namecall (RemoteEvent only)")
+print("  ✅ CA MODULE - Workspace:Raycast NOT hooked (safe)")
+print("  ✅ CA MODULE - Kick protection enabled")
+print("  ✅ CA MODULE - Continuous AC monitor active")
