@@ -1,7 +1,7 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v16.8
-    BASED ON THE VERSION THAT WORKED
-    Only fixed: Aimbot precision + TeamCheck
+    ANNOMALY X - Blox Strike Module (BSX) v16.9
+    ONLY handles: Aimbot via mousemoverel
+    ESP is handled by main script
     Creator: ElSacaLeche
 ]]
 
@@ -21,211 +21,182 @@ local LocalPlayer = Players.LocalPlayer
 
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
--- GuiInset for precision fix
 local GuiInset = Vector2.new(0, 36)
-pcall(function()
-    GuiInset = GuiService:GetGuiInset()
-end)
+pcall(function() GuiInset = GuiService:GetGuiInset() end)
+
+local LockedPlayer = nil
+local RandomPart = "Head"
+local LastRandomSwitch = 0
 
 -- ============================================
--- VARIABLES (same as working version)
+-- TEAM CHECK (same as main script)
 -- ============================================
-local AimbotLockedPlayer = nil
-local AimbotRandomPart = "Head"
-local AimbotLastRandomSwitch = 0
-
--- ============================================
--- TEAM CHECK - SIMPLE
--- ============================================
-local function IsSameTeam(p1, p2)
-    if not p1 or not p2 then return false end
-
-    local ok1, r1 = pcall(function()
-        return p1.Team and p2.Team and p1.Team == p2.Team
+local function SameTeam(a, b)
+    if not a or not b then return false end
+    local s1, r1 = pcall(function()
+        return a.Team and b.Team and a.Team == b.Team
     end)
-    if ok1 and r1 then return true end
-
-    local ok2, r2 = pcall(function()
-        return p1.TeamColor and p2.TeamColor
-            and tostring(p1.TeamColor) ~= "White"
-            and p1.TeamColor == p2.TeamColor
+    if s1 and r1 then return true end
+    local s2, r2 = pcall(function()
+        return a.TeamColor and b.TeamColor and a.TeamColor == b.TeamColor
     end)
-    if ok2 and r2 then return true end
-
+    if s2 and r2 then return true end
     return false
 end
 
 -- ============================================
--- FUNCTIONS (exact same as working version)
+-- TARGET PART
 -- ============================================
-local function GetAimbotTargetPart(character)
-    if not character then return nil end
-    if Config.Aimbot.TargetPart == "Random" then
+local function GetPart(char)
+    if not char then return nil end
+    local s = Config.Aimbot.TargetPart
+    if s == "Random" then
         local t = tick()
-        if t - AimbotLastRandomSwitch >= (Config.Aimbot.RandomInterval or 0.5) then
-            local opts = {}
-            for _, n in ipairs({"Head","HumanoidRootPart","UpperTorso","Torso"}) do
-                if character:FindFirstChild(n) then table.insert(opts, n) end
+        if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local o = {}
+            for _, n in ipairs({"Head","HumanoidRootPart","Torso","UpperTorso"}) do
+                if char:FindFirstChild(n) then table.insert(o, n) end
             end
-            if #opts > 0 then AimbotRandomPart = opts[math.random(1, #opts)] end
-            AimbotLastRandomSwitch = t
+            if #o > 0 then RandomPart = o[math.random(#o)] end
+            LastRandomSwitch = t
         end
-        return character:FindFirstChild(AimbotRandomPart)
-            or character:FindFirstChild("Head")
-            or character:FindFirstChild("HumanoidRootPart")
+        return char:FindFirstChild(RandomPart) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
     end
-    return character:FindFirstChild(Config.Aimbot.TargetPart)
-        or character:FindFirstChild("Head")
-        or character:FindFirstChild("HumanoidRootPart")
+    return char:FindFirstChild(s) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 
-local function IsVisible(targetPart)
-    if not targetPart then return false end
-    local character = LocalPlayer.Character
-    if not character then return true end
+-- ============================================
+-- VISIBILITY
+-- ============================================
+local function CanSee(part)
+    if not part then return false end
+    local c = LocalPlayer.Character
+    if not c then return true end
     local cam = Workspace.CurrentCamera
     if not cam then return true end
-
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {character, cam}
-
-    local origin = cam.CFrame.Position
-    local direction = targetPart.Position - origin
-    local result = Workspace:Raycast(origin, direction, params)
-
-    if result then
-        return result.Instance:IsDescendantOf(targetPart.Parent)
-    end
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    p.FilterDescendantsInstances = {c, cam}
+    local o = cam.CFrame.Position
+    local d = part.Position - o
+    local r = Workspace:Raycast(o, d, p)
+    if r then return r.Instance:IsDescendantOf(part.Parent) end
     return true
 end
 
-local function IsPlayerValid(player)
-    if not player or not player.Parent then return false end
-    if player == LocalPlayer then return false end
-    if Config.Aimbot.TeamCheck and IsSameTeam(LocalPlayer, player) then return false end
+-- ============================================
+-- VALID CHECK
+-- ============================================
+local function Valid(player)
+    if not player or player == LocalPlayer or not player.Parent then return false end
+    if Config.Aimbot.TeamCheck and SameTeam(LocalPlayer, player) then return false end
     local c = player.Character
     if not c then return false end
     local h = c:FindFirstChildOfClass("Humanoid")
     return h and h.Health > 0
 end
 
-local function GetAimbotTarget()
+-- ============================================
+-- FIND TARGET
+-- ============================================
+local function FindTarget()
     local cam = Workspace.CurrentCamera
     if not cam then return nil end
-    local method = Config.Aimbot.Method
 
-    if method == "Aimlock" then
-        if AimbotLockedPlayer and IsPlayerValid(AimbotLockedPlayer) then
-            local tp = GetAimbotTargetPart(AimbotLockedPlayer.Character)
-            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
+    if Config.Aimbot.Method == "Aimlock" and LockedPlayer then
+        if Valid(LockedPlayer) then
+            local tp = GetPart(LockedPlayer.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or CanSee(tp)) then
                 local sp, on = cam:WorldToViewportPoint(tp.Position)
                 if on then return tp end
             end
-            AimbotLockedPlayer = nil
         end
-
-        local mousePos = UserInputService:GetMouseLocation()
-        local closestPart, closestDist, closestPlayer = nil, Config.Aimbot.FOVRadius, nil
-        for _, player in ipairs(Players:GetPlayers()) do
-            if not IsPlayerValid(player) then continue end
-            local tp = GetAimbotTargetPart(player.Character)
-            if not tp then continue end
-            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
-            local sp, on = cam:WorldToViewportPoint(tp.Position)
-            if not on then continue end
-            local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
-            if d < closestDist then
-                closestDist = d
-                closestPart = tp
-                closestPlayer = player
-            end
-        end
-        if closestPlayer then AimbotLockedPlayer = closestPlayer end
-        return closestPart
-
-    else
-        local vpSize = cam.ViewportSize
-        local center = Vector2.new(vpSize.X / 2, vpSize.Y / 2)
-        local closestPart, closestDist = nil, Config.Aimbot.FOVRadius
-        for _, player in ipairs(Players:GetPlayers()) do
-            if not IsPlayerValid(player) then continue end
-            local tp = GetAimbotTargetPart(player.Character)
-            if not tp then continue end
-            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
-            local sp, on = cam:WorldToViewportPoint(tp.Position)
-            if not on then continue end
-            local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
-            if d < closestDist then
-                closestDist = d
-                closestPart = tp
-            end
-        end
-        return closestPart
+        LockedPlayer = nil
     end
+
+    local vp = cam.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mouse = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mouse
+
+    local best, bestD, bestP = nil, Config.Aimbot.FOVRadius or 150, nil
+    for _, p in ipairs(Players:GetPlayers()) do
+        if not Valid(p) then continue end
+        local tp = GetPart(p.Character)
+        if not tp then continue end
+        if Config.Aimbot.VisibleCheck and not CanSee(tp) then continue end
+        local sp, on = cam:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        local d = (ref - Vector2.new(sp.X, sp.Y)).Magnitude
+        if d < bestD then best = tp bestD = d bestP = p end
+    end
+    if Config.Aimbot.Method == "Aimlock" and bestP then LockedPlayer = bestP end
+    return best
 end
 
 -- ============================================
--- AIMBOT LOOP (same mousemoverel as working version)
--- ONLY CHANGE: GuiInset offset for precision
+-- AIMBOT LOOP
+-- Uses mousemoverel only
+-- NO GuiInset correction - direct screen delta
 -- ============================================
 RunService.RenderStepped:Connect(function()
     Camera = Workspace.CurrentCamera
-
     if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
-        if not Config.Aimbot.Active then AimbotLockedPlayer = nil end
+        if not Config.Aimbot.Active then LockedPlayer = nil end
         return
     end
 
     local cam = Workspace.CurrentCamera
     if not cam then return end
 
-    local tp = GetAimbotTarget()
+    local tp = FindTarget()
     if not tp then return end
 
-    local targetPos = tp.Position
-    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-        pcall(function()
-            local vel = tp.AssemblyLinearVelocity
-            if vel and vel.Magnitude > 0.1 then
-                targetPos = targetPos + vel * Config.Aimbot.Prediction
-            end
-        end)
-    end
+    local pos = tp.Position
+    pcall(function()
+        if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+            local v = tp.AssemblyLinearVelocity
+            if v and v.Magnitude > 0.1 then pos = pos + v * Config.Aimbot.Prediction end
+        end
+    end)
 
-    local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
-    if not onScreen then return end
+    local sp, on = cam:WorldToViewportPoint(pos)
+    if not on then return end
 
-    local mousePos = UserInputService:GetMouseLocation()
+    -- Use ViewportPointToRay to get the exact screen center the game uses
+    local mouse = UserInputService:GetMouseLocation()
 
-    -- PRECISION FIX:
-    -- GetMouseLocation() includes GuiInset (adds ~36px Y)
-    -- WorldToViewportPoint() does NOT include GuiInset
-    -- So we add GuiInset.Y to screenPos to match mouse space
-    local deltaX = screenPos.X - mousePos.X
-    local deltaY = (screenPos.Y + GuiInset.Y) - mousePos.Y
-
-    local dist = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    -- Delta calculation
+    -- mouse already has GuiInset, sp does not
+    -- Add GuiInset to sp to match
+    local dx = sp.X - mouse.X
+    local dy = (sp.Y + GuiInset.Y) - mouse.Y
+    local dist = math.sqrt(dx * dx + dy * dy)
 
     if dist < 1 then return end
 
-    local smoothness = math.max(Config.Aimbot.Smoothness or 5, 1)
-    local speed = 1 / smoothness
+    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+    local speed = 1 / sm
 
-    local moveX = deltaX * speed
-    local moveY = deltaY * speed
+    -- Scale movement
+    local mx = dx * speed
+    local my = dy * speed
 
-    -- Snap when very close to avoid jitter
-    if dist < 3 then
-        moveX = deltaX
-        moveY = deltaY
+    -- Prevent oscillation: if very close, use smaller movements
+    if dist < 5 then
+        mx = dx * 0.5
+        my = dy * 0.5
+    end
+    if dist < 2 then
+        mx = dx * 0.3
+        my = dy * 0.3
     end
 
-    moveX = math.clamp(moveX, -200, 200)
-    moveY = math.clamp(moveY, -200, 200)
+    mx = math.clamp(mx, -150, 150)
+    my = math.clamp(my, -150, 150)
 
-    if math.abs(moveX) > 0.3 or math.abs(moveY) > 0.3 then
-        mousemoverel(moveX, moveY)
+    if math.abs(mx) > 0.15 or math.abs(my) > 0.15 then
+        mousemoverel(mx, my)
     end
 end)
 
@@ -235,18 +206,19 @@ end)
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
-    AimbotLockedPlayer = nil
+    LockedPlayer = nil
     pcall(function() GuiInset = GuiService:GetGuiInset() end)
 end)
 
-Players.PlayerRemoving:Connect(function(player)
-    if AimbotLockedPlayer == player then AimbotLockedPlayer = nil end
+Players.PlayerRemoving:Connect(function(p)
+    if LockedPlayer == p then LockedPlayer = nil end
 end)
 
 -- ============================================
 -- SIGNAL
--- Tell main script BSX handles aimbot
--- Do NOT set AX_PF_HandlesESP so main script ESP works
+-- BSX handles aimbot only, NOT ESP
+-- Main script handles ESP for BSX
 -- ============================================
 getgenv().AX_BSXLoaded = true
 getgenv().AX_BSX_HandlesAimbot = true
+-- DO NOT set AX_PF_HandlesESP - main script handles ESP
