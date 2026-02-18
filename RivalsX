@@ -1,0 +1,374 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║            ANNOMALY X - Rivals Silent Aim Module           ║
+    ║            Antiban + Raycast/Remote Silent Aim             ║
+    ║            Creator: ElSacaLeche                            ║
+    ╚═══════════════════════════════════════════════════════════╝
+    
+    HOW RIVALS SILENT AIM WORKS:
+    
+    1. First, disable the anticheat system:
+       - Hook AnalyticsPipelineController functions (hang them)
+       - Hook AnalyticsPipeline RemoteEvent connections
+       - Disable LogService.MessageOut connections
+       - Disable ScriptContext.Error connections
+       - Hook Player:Kick() to prevent kicks
+    
+    2. Then hook the shooting system:
+       - Rivals uses Workspace:Raycast() for hit detection
+       - We hook __namecall to redirect Raycast directions
+       - Also hook any Attack remotes if they exist
+    
+    ANTI-DETECTION MEASURES:
+    - AnalyticsPipeline completely disabled
+    - Error logging suppressed
+    - Kick function neutered
+    - All hooks wrapped in newcclosure
+    - checkcaller() protection on __namecall
+]]
+
+-- Wait for Config
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+local cloneref = cloneref or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local hookfunction = hookfunction or replaceclosure or detour_function
+local hookmetamethod = hookmetamethod
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local checkcaller = checkcaller or function() return false end
+local getconnections = getconnections
+local getgc = getgc
+
+local Players = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local Workspace = cloneref(game:GetService("Workspace"))
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local LogService = cloneref(game:GetService("LogService"))
+local ScriptContext = cloneref(game:GetService("ScriptContext"))
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- PHASE 1: ANTICHEAT DISABLER
+-- ============================================
+local function DisableRivalsAnticheat()
+    local results = {
+        pipelineFunctions = 0,
+        remoteConnections = 0,
+        messageOutHooks = 0,
+        errorConnections = 0,
+        kickHooked = false
+    }
+    
+    -- 1. Hook AnalyticsPipelineController functions
+    task.spawn(function()
+        pcall(function()
+            for _, v in pairs(getgc(true)) do
+                if typeof(v) == "function" then
+                    local ok, src = pcall(function()
+                        return debug.info(v, "s")
+                    end)
+                    if ok and type(src) == "string" and string.find(src, "AnalyticsPipelineController") then
+                        results.pipelineFunctions = results.pipelineFunctions + 1
+                        hookfunction(v, newcclosure(function(...)
+                            return task.wait(9e9)
+                        end))
+                    end
+                end
+            end
+        end)
+    end)
+    
+    -- 2. Hook AnalyticsPipeline RemoteEvent connections
+    task.spawn(function()
+        pcall(function()
+            local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+            if not remotes then return end
+            
+            local pipeline = remotes:FindFirstChild("AnalyticsPipeline")
+            if not pipeline then return end
+            
+            local remoteEvent = pipeline:FindFirstChild("RemoteEvent")
+            if not remoteEvent then return end
+            
+            if remoteEvent.OnClientEvent then
+                for _, conn in pairs(getconnections(remoteEvent.OnClientEvent)) do
+                    if conn and conn.Function then
+                        pcall(function()
+                            hookfunction(conn.Function, newcclosure(function(...)
+                            end))
+                            results.remoteConnections = results.remoteConnections + 1
+                        end)
+                    end
+                end
+            end
+        end)
+    end)
+    
+    -- 3. Hook LogService.MessageOut connections
+    task.spawn(function()
+        pcall(function()
+            for _, conn in pairs(getconnections(LogService.MessageOut)) do
+                if conn and conn.Function then
+                    pcall(function()
+                        hookfunction(conn.Function, newcclosure(function(...)
+                        end))
+                        results.messageOutHooks = results.messageOutHooks + 1
+                    end)
+                end
+            end
+        end)
+    end)
+    
+    -- 4. Disable ScriptContext.Error connections
+    task.spawn(function()
+        pcall(function()
+            for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+                pcall(function()
+                    conn:Disable()
+                    results.errorConnections = results.errorConnections + 1
+                end)
+            end
+            
+            -- Also hook the Connect method to prevent new error listeners
+            pcall(function()
+                hookfunction(ScriptContext.Error.Connect, newcclosure(function(...)
+                    return nil
+                end))
+            end)
+        end)
+    end)
+    
+    -- 5. Hook Player:Kick() to prevent kicks
+    task.spawn(function()
+        pcall(function()
+            local kickNames = {"Kick", "kick"}
+            for _, name in ipairs(kickNames) do
+                local fn = LocalPlayer[name]
+                if type(fn) == "function" then
+                    local oldKick
+                    oldKick = hookfunction(fn, newcclosure(function(self, ...)
+                        if self == LocalPlayer then
+                            return -- Block kick on local player
+                        end
+                        return oldKick(self, ...)
+                    end))
+                    results.kickHooked = true
+                end
+            end
+        end)
+    end)
+    
+    -- Wait for all hooks to complete
+    task.wait(0.5)
+    
+    return results
+end
+
+-- Execute anticheat disabler
+local acResults = DisableRivalsAnticheat()
+print("  ✅ RIVALS AC DISABLED:")
+print("    Pipeline functions hanged: " .. acResults.pipelineFunctions)
+print("    Remote connections hooked: " .. acResults.remoteConnections)
+print("    MessageOut hooks: " .. acResults.messageOutHooks)
+print("    Error connections disabled: " .. acResults.errorConnections)
+print("    Kick hooked: " .. tostring(acResults.kickHooked))
+
+-- ============================================
+-- PHASE 2: RIVALS TARGET FINDER
+-- ============================================
+
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character, Camera}
+    
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    return true
+end
+
+local function GetTargetPart(character, targetPartSetting)
+    if not character then return nil end
+    
+    local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
+    
+    if targetPartSetting == "Random" then
+        local validParts = {}
+        for _, partName in ipairs(parts) do
+            local part = character:FindFirstChild(partName)
+            if part then table.insert(validParts, part) end
+        end
+        if #validParts > 0 then
+            return validParts[math.random(1, #validParts)]
+        end
+    end
+    
+    return character:FindFirstChild(targetPartSetting)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+end
+
+local function GetClosestRivalsTarget()
+    Camera = Workspace.CurrentCamera
+    local closest = nil
+    local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local screenCenter = Camera.ViewportSize / 2
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        -- Team check
+        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team then
+            if player.Team == LocalPlayer.Team then continue end
+        end
+        
+        local character = player.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        
+        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        if not targetPart then continue end
+        
+        -- Visibility check
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if screenDist < closestDist then
+            closestDist = screenDist
+            closest = targetPart
+        end
+    end
+    
+    return closest
+end
+
+-- ============================================
+-- PHASE 3: SILENT AIM VIA __NAMECALL HOOK
+-- Rivals uses Workspace:Raycast() for shooting
+-- ============================================
+
+local CurrentRivalsTarget = nil
+
+-- Update target every frame
+local rivalsTargetConnection = RunService.Heartbeat:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    if Config.Silent.Enabled and Config.Silent.Active then
+        CurrentRivalsTarget = GetClosestRivalsTarget()
+    else
+        CurrentRivalsTarget = nil
+    end
+end)
+
+-- Hook __namecall for Raycast redirection
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if checkcaller() then
+        return oldNamecall(self, ...)
+    end
+    
+    -- Only intercept when silent aim is active and we have a target
+    if Config.Silent.Enabled and Config.Silent.Active and CurrentRivalsTarget and CurrentRivalsTarget.Parent then
+        -- Hit chance check
+        if math.random(1, 100) > Config.Silent.HitChance then
+            return oldNamecall(self, ...)
+        end
+        
+        -- Intercept Workspace:Raycast()
+        if (self == Workspace or self == workspace) then
+            if method == "Raycast" then
+                local origin = args[1]
+                local direction = args[2]
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                    args[2] = (CurrentRivalsTarget.Position - origin).Unit * direction.Magnitude
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+            
+            if method == "FindPartOnRay" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" then
+                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+                    args[1] = Ray.new(ray.Origin, newDir)
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+            
+            if method == "FindPartOnRayWithIgnoreList" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" then
+                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+                    args[1] = Ray.new(ray.Origin, newDir)
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+            
+            if method == "FindPartOnRayWithWhitelist" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" then
+                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+                    args[1] = Ray.new(ray.Origin, newDir)
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+        end
+        
+        -- Intercept RemoteEvent:FireServer (Attack remotes)
+        if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
+            if method == "FireServer" or method == "InvokeServer" then
+                -- Check if any argument contains a position or CFrame we can redirect
+                for i, arg in ipairs(args) do
+                    if typeof(arg) == "CFrame" then
+                        args[i] = CFrame.new(arg.Position, CurrentRivalsTarget.Position)
+                    end
+                end
+                return oldNamecall(self, unpack(args))
+            end
+        end
+    end
+    
+    return oldNamecall(self, ...)
+end))
+
+-- ============================================
+-- CLEANUP ON CHARACTER RESPAWN
+-- ============================================
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentRivalsTarget = nil
+end)
+
+-- ============================================
+-- SIGNAL: Module loaded
+-- ============================================
+getgenv().AX_RivalsLoaded = true
+
+print("  ✅ RIVALS MODULE - Anticheat disabled + Silent Aim active")
+print("  ✅ RIVALS MODULE - __namecall hooked (Raycast + Remotes)")
+print("  ✅ RIVALS MODULE - Kick protection enabled")
