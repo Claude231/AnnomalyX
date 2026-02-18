@@ -1,0 +1,297 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║        ANNOMALY X - Blox Strike Module (BSX)              ║
+    ║        Method: Module require + function replace          ║
+    ║        NO hooks, NO metamethods, NO getgc                 ║
+    ║        Creator: ElSacaLeche                               ║
+    ╚═══════════════════════════════════════════════════════════╝
+    
+    BLOX STRIKE ANTICHEAT ANALYSIS:
+    
+    This game detects:
+    ❌ hookfunction / hookmetamethod / replaceclosure
+    ❌ getgc() scanning
+    ❌ getconnections() + Disable()
+    ❌ ScriptContext.Error manipulation
+    ❌ getrawmetatable + setreadonly
+    ❌ _G / shared key scanning/modification
+    ❌ LocalPlayer.Kick hooking
+    
+    What is SAFE:
+    ✅ require() on game modules
+    ✅ Replacing functions on required module tables
+    ✅ Drawing library (FOV circles, ESP)
+    ✅ RunService connections
+    ✅ UserInputService connections
+    ✅ workspace:Raycast() calls (not hooks, direct calls)
+    ✅ Camera:WorldToViewportPoint() calls
+    
+    METHOD:
+    The game's Bullet class is in ReplicatedStorage.Components.Weapon.Classes.Bullet
+    We require() it and replace BulletClass.create to redirect bullets
+    This is NOT a hook - it's a direct table modification on the module's return table
+    The anticheat doesn't monitor this because require() is a normal Lua operation
+]]
+
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = workspace
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- NO PROTECTION CODE
+-- Blox Strike detects ALL of these:
+-- - hookfunction
+-- - getgc
+-- - getconnections
+-- - ScriptContext manipulation
+-- - Kick hooking
+-- - _G/shared scanning
+-- DO NOT add any protection code here
+-- ============================================
+
+-- ============================================
+-- TARGET FINDER
+-- ============================================
+
+local CurrentTarget = nil
+
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+    
+    local origin = cam.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    return true
+end
+
+local function FindTarget()
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
+    
+    local closest = nil
+    local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team
+            and player.Team == LocalPlayer.Team then continue end
+        
+        local character = player.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        
+        if character:FindFirstChildOfClass("ForceField") then continue end
+        
+        -- Find target part
+        local partName = Config.Silent.TargetPart
+        local targetPart = nil
+        
+        if partName == "Random" then
+            local valid = {}
+            for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
+                local p = character:FindFirstChild(name)
+                if p then table.insert(valid, p) end
+            end
+            if #valid > 0 then targetPart = valid[math.random(1, #valid)] end
+        else
+            targetPart = character:FindFirstChild(partName)
+                or character:FindFirstChild("Head")
+                or character:FindFirstChild("HumanoidRootPart")
+        end
+        
+        if not targetPart then continue end
+        
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        
+        local screenPos, onScreen = cam:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        
+        local dist = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closest = targetPart
+        end
+    end
+    
+    return closest
+end
+
+-- ============================================
+-- SILENT AIM: BULLET CLASS HOOK
+-- require() the Bullet module and replace create()
+-- This is the exact method used by working paid scripts
+-- It's safe because require() is a normal Lua operation
+-- and modifying the returned table is not detected
+-- ============================================
+
+local BulletHooked = false
+
+local function SetupSilentAim()
+    local success, BulletClass = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("Components"):WaitForChild("Weapon"):WaitForChild("Classes"):WaitForChild("Bullet"))
+    end)
+    
+    if success and BulletClass and BulletClass.create then
+        local originalCreate = BulletClass.create
+        
+        BulletClass.create = function(self, ...)
+            local result = originalCreate(self, ...)
+            
+            if CurrentTarget and CurrentTarget.Parent 
+                and Config.Silent.Enabled and Config.Silent.Active then
+                
+                if math.random(1, 100) <= Config.Silent.HitChance then
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        local origin = cam.CFrame.Position
+                        local direction = (CurrentTarget.Position - origin).Unit
+                        
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterDescendantsInstances = {LocalPlayer.Character, cam}
+                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                        
+                        local rayResult = Workspace:Raycast(origin, direction * 1000, rayParams)
+                        
+                        if result then
+                            result.Direction = direction
+                            result.Hits = {}
+                            
+                            if rayResult then
+                                table.insert(result.Hits, {
+                                    Instance = rayResult.Instance,
+                                    Position = rayResult.Position,
+                                    Material = rayResult.Material.Name,
+                                    Normal = rayResult.Normal,
+                                    Exit = false
+                                })
+                                result.Distance = (rayResult.Position - origin).Magnitude
+                            end
+                        end
+                    end
+                end
+            end
+            
+            return result
+        end
+        
+        BulletHooked = true
+    end
+end
+
+-- ============================================
+-- WEAPON MODS: NO SPREAD + NO RECOIL
+-- Same safe method - require() and replace
+-- ============================================
+
+local function SetupNoSpread()
+    pcall(function()
+        local BulletClass = require(ReplicatedStorage.Components.Weapon.Classes.Bullet)
+        if BulletClass then
+            BulletClass.getTrueSpread = function()
+                return 0.005
+            end
+            BulletClass.getBaseSpread = function()
+                return 0.005
+            end
+            BulletClass.updateSpread = function(self)
+                if self.Spread then
+                    self.Spread:setPosition(0)
+                end
+            end
+            BulletClass._updateShotSpread = function(self)
+                if self.Spread then
+                    self.Spread:setPosition(0)
+                end
+            end
+        end
+    end)
+end
+
+local function SetupNoRecoil()
+    pcall(function()
+        local CameraController = require(ReplicatedStorage.Controllers.CameraController)
+        if CameraController then
+            CameraController.weaponKick = function() end
+            CameraController.setWeaponRecoil = function() end
+            CameraController.flinch = function() end
+        end
+    end)
+end
+
+-- ============================================
+-- INITIALIZATION
+-- Wait for game to load, then setup
+-- ============================================
+
+task.spawn(function()
+    task.wait(3) -- Wait for modules to load
+    
+    SetupSilentAim()
+    
+    -- Auto-apply spread/recoil removal when silent aim is active
+    -- User can toggle these separately if desired
+end)
+
+-- ============================================
+-- TARGET UPDATE LOOP
+-- ============================================
+
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    if Config.Silent.Enabled and Config.Silent.Active then
+        CurrentTarget = FindTarget()
+    else
+        CurrentTarget = nil
+    end
+end)
+
+-- ============================================
+-- CLEANUP
+-- ============================================
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentTarget = nil
+    
+    -- Re-setup after respawn if needed
+    if not BulletHooked then
+        task.spawn(function()
+            task.wait(2)
+            SetupSilentAim()
+        end)
+    end
+end)
+
+-- ============================================
+-- SIGNAL
+-- ============================================
+getgenv().AX_BSXLoaded = true
