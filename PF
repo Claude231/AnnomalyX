@@ -1,0 +1,244 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║          ANNOMALY X - Phantom Forces Silent Aim Module    ║
+    ║          Motor6D C0 Hook (__newindex) + Team Detection    ║
+    ║          Creator: ElSacaLeche                             ║
+    ╚═══════════════════════════════════════════════════════════╝
+    
+    Method: Hooks Motor6D.C0 via __newindex to redirect
+    gun barrel CFrame toward target. This is the "silent"
+    method specific to PF because PF uses Motor6D on the
+    gun trigger to determine bullet direction.
+    
+    PF Team System: Ghosts vs Phantoms (workspace.Players)
+    PF Character Structure: workspace.Players.[Team].[PlayerModel]
+]]
+
+-- Wait for Config
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+local cloneref = cloneref or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local hookmetamethod = hookmetamethod
+
+local Players = cloneref(game:GetService("Players"))
+local Workspace = cloneref(game:GetService("Workspace"))
+local RunService = cloneref(game:GetService("RunService"))
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- PF-SPECIFIC VARIABLES
+-- ============================================
+local gunCF = nil      -- The redirected CFrame for the gun
+local motor = nil       -- The Motor6D reference being hooked
+local pfTargetPos = nil -- Current target position
+
+-- ============================================
+-- PF TEAM DETECTION
+-- ============================================
+local function GetEnemyTeamName()
+    local localTeam = LocalPlayer.Team
+    if not localTeam then return nil end
+    if localTeam.Name == "Ghosts" then
+        return "Phantoms"
+    elseif localTeam.Name == "Phantoms" then
+        return "Ghosts"
+    end
+    return nil
+end
+
+local function GetEnemyFolder()
+    local enemyTeam = GetEnemyTeamName()
+    if not enemyTeam then return nil end
+    local playersFolder = Workspace:FindFirstChild("Players")
+    if not playersFolder then return nil end
+    return playersFolder:FindFirstChild(enemyTeam)
+end
+
+-- ============================================
+-- PF VISIBILITY CHECK
+-- ============================================
+local function IsPointVisible(targetModel, maxWalls)
+    if not targetModel or not targetModel.PrimaryPart then return false end
+    local castPoints = {targetModel.PrimaryPart.Position}
+    local ignoreList = {targetModel, LocalPlayer.Character, Camera}
+    local result = Camera:GetPartsObscuringTarget(castPoints, ignoreList)
+    return #result <= (maxWalls or 0)
+end
+
+-- ============================================
+-- PF TARGET PART RESOLVER
+-- ============================================
+local function GetPFTargetPart(enemyModel, targetPartSetting)
+    if not enemyModel then return nil end
+    
+    local parts = {"Head", "Torso", "Right Arm", "Left Arm", "Right Leg", "Left Leg", "HumanoidRootPart"}
+    
+    if targetPartSetting == "Random" then
+        local validParts = {}
+        for _, partName in ipairs(parts) do
+            local part = enemyModel:FindFirstChild(partName)
+            if part then table.insert(validParts, part) end
+        end
+        if #validParts > 0 then
+            return validParts[math.random(1, #validParts)]
+        end
+    end
+    
+    -- Direct match
+    local direct = enemyModel:FindFirstChild(targetPartSetting)
+    if direct then return direct end
+    
+    -- Fallbacks
+    return enemyModel:FindFirstChild("Head")
+        or enemyModel:FindFirstChild("Torso")
+        or enemyModel:FindFirstChild("HumanoidRootPart")
+end
+
+-- ============================================
+-- PF CLOSEST TARGET FINDER
+-- ============================================
+local function GetClosestPFTarget()
+    Camera = Workspace.CurrentCamera
+    local enemyFolder = GetEnemyFolder()
+    if not enemyFolder then return nil end
+    
+    local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local screenCenter = Camera.ViewportSize / 2
+    
+    local closestPos = nil
+    local closestScreenDist = math.huge
+    
+    for _, enemyModel in pairs(enemyFolder:GetChildren()) do
+        -- Get target part
+        local targetPart = GetPFTargetPart(enemyModel, Config.Silent.TargetPart)
+        if not targetPart then continue end
+        
+        local pos = targetPart.Position
+        local screenSpacePos, isOnScreen = Camera:WorldToViewportPoint(pos)
+        if not isOnScreen then continue end
+        
+        local screenOffset = Vector2.new(screenSpacePos.X, screenSpacePos.Y) - screenCenter
+        local screenDist = screenOffset.Magnitude
+        
+        -- FOV check (adjusted for camera FOV like PF does)
+        local adjustedFov = fovRadius / Camera.FieldOfView
+        if screenDist > adjustedFov then continue end
+        
+        -- Visibility check
+        if Config.Silent.VisibleCheck then
+            if not IsPointVisible(enemyModel, 0) then continue end
+        end
+        
+        -- Team check (PF handles teams via folders, but double-check)
+        if Config.Silent.TeamCheck then
+            -- Already filtered by enemy folder, but extra safety
+        end
+        
+        if screenDist < closestScreenDist then
+            closestScreenDist = screenDist
+            closestPos = pos
+        end
+    end
+    
+    return closestPos
+end
+
+-- ============================================
+-- MAIN RENDER LOOP - Find target & compute gunCF
+-- ============================================
+local pfRenderConnection = RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    -- Reset if silent aim is off
+    if not Config.Silent.Enabled or not Config.Silent.Active then
+        gunCF = nil
+        motor = nil
+        pfTargetPos = nil
+        return
+    end
+    
+    -- Hit chance check
+    if math.random(1, 100) > Config.Silent.HitChance then
+        gunCF = nil
+        motor = nil
+        return
+    end
+    
+    -- Find target
+    local targetPos = GetClosestPFTarget()
+    pfTargetPos = targetPos
+    
+    if targetPos then
+        -- Get the Motor6D from the gun
+        -- PF structure: Camera > [GunModel] > Trigger > Motor6D
+        local camChildren = Camera:GetChildren()
+        local triggerMotor = nil
+        
+        for _, child in pairs(camChildren) do
+            if child:IsA("Model") then
+                local trigger = child:FindFirstChild("Trigger")
+                if trigger then
+                    local m6d = trigger:FindFirstChildOfClass("Motor6D")
+                    if m6d then
+                        triggerMotor = m6d
+                        break
+                    end
+                end
+            end
+        end
+        
+        if triggerMotor and triggerMotor.Part0 then
+            motor = triggerMotor
+            local cf = motor.C0
+            local worldPos = motor.Part0.CFrame:ToWorldSpace(cf).Position
+            local lookAtCF = CFrame.new(worldPos, targetPos)
+            gunCF = motor.Part0.CFrame:ToObjectSpace(lookAtCF)
+        else
+            gunCF = nil
+            motor = nil
+        end
+    else
+        gunCF = nil
+        motor = nil
+    end
+end)
+
+-- ============================================
+-- HOOK __newindex to redirect Motor6D.C0
+-- ============================================
+local OldNewIndex
+OldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(...)
+    local Self, Key, Value = ...
+    
+    if Config.Silent.Enabled and Config.Silent.Active and motor and gunCF then
+        if Self == motor and Key == "C0" then
+            return OldNewIndex(Self, Key, gunCF)
+        end
+    end
+    
+    return OldNewIndex(...)
+end))
+
+-- ============================================
+-- CLEANUP ON CHARACTER RESPAWN
+-- ============================================
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    gunCF = nil
+    motor = nil
+    pfTargetPos = nil
+end)
+
+-- ============================================
+-- SIGNAL: Module loaded
+-- ============================================
+getgenv().AX_PFLoaded = true
+
+print("  ✅ PF MODULE - Motor6D __newindex hooked for Silent Aim")
