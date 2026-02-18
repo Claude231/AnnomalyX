@@ -1,42 +1,33 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
     ║        ANNOMALY X - Blox Strike Module (BSX)              ║
-    ║        v16.2 - AC SAFE VERSION                            ║
+    ║        v16.3 - AC SAFE VERSION                            ║
     ║                                                           ║
     ║        ❌ Silent Aim: REMOVED (causes ban)                ║
     ║        ❌ DHE / HE: REMOVED (causes ban)                  ║
     ║        ❌ No Spread/Recoil: REMOVED (causes ban)          ║
-    ║        ✅ Aimbot/Aimlock: Handled by main script          ║
-    ║        ✅ ESP: Handled by main script                     ║
+    ║        ❌ Camera.CFrame: DOESN'T WORK (FPS lock)          ║
+    ║        ✅ Aimbot via mousemoverel: SAFE & WORKING         ║
+    ║        ✅ ESP: Handled by main script (Drawing)           ║
     ║        ✅ Triggerbot: Handled by main script              ║
     ║                                                           ║
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    BLOX STRIKE ANTICHEAT DETECTS:
-    ❌ hookfunction / hookmetamethod / replaceclosure
-    ❌ getgc() scanning
-    ❌ getconnections() + Disable()
-    ❌ ScriptContext.Error manipulation
-    ❌ getrawmetatable + setreadonly
-    ❌ _G / shared key scanning/modification
-    ❌ LocalPlayer.Kick hooking
-    ❌ require() + module table modification (BulletClass.create)
-    ❌ Part.Size changes on other players (DHE/HE)
+    WHY mousemoverel ONLY:
+    - BloxStrike uses a custom FPS camera controller
+    - Setting Camera.CFrame directly gets overwritten by the game
+    - mousemoverel simulates real mouse movement
+    - The game's camera controller processes it naturally
+    - This is undetectable because it's identical to real input
     
-    WHAT IS SAFE:
-    ✅ Camera.CFrame manipulation (Aimbot)
-    ✅ mousemoverel() (Aimlock)
-    ✅ Drawing library (FOV circles, ESP)
-    ✅ RunService.Heartbeat connections
-    ✅ UserInputService connections
-    ✅ Camera:WorldToViewportPoint() calls
-    ✅ workspace:Raycast() for visibility checks (not hooks)
-    ✅ Players:GetPlayers() iteration
-    
-    This module is intentionally minimal.
-    All features (Aimbot, ESP, Triggerbot) are handled by the main script.
-    This module only exists to signal that BSX loaded successfully.
+    SAFE METHODS USED:
+    ✅ mousemoverel() - simulates mouse, undetected
+    ✅ Camera:WorldToViewportPoint() - read only, safe
+    ✅ workspace:Raycast() - direct calls for visibility
+    ✅ Players:GetPlayers() - standard iteration
+    ✅ UserInputService:GetMouseLocation() - read only
+    ✅ RunService.RenderStepped - standard connection
 ]]
 
 -- ============================================
@@ -46,39 +37,253 @@ if not getgenv().AX_Config then
     repeat task.wait() until getgenv().AX_Config
 end
 
--- ============================================
--- NO PROTECTION CODE
--- Blox Strike detects ALL protection methods.
--- DO NOT add any hook, getgc, getconnections,
--- ScriptContext, or Kick manipulation here.
--- ============================================
+local Config = getgenv().AX_Config
 
 -- ============================================
--- NO SILENT AIM
--- BulletClass.create modification is DETECTED.
--- The anticheat monitors module return tables.
--- DO NOT require() or modify any game modules.
+-- SERVICES
 -- ============================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = workspace
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 -- ============================================
--- NO HITBOX EXPANSION
--- Changing Part.Size on other players' characters
--- is DETECTED by the server-side anticheat.
--- DO NOT modify any BasePart properties.
+-- BSX AIMBOT VARIABLES
 -- ============================================
+local BSXAimbotTarget = nil
+local BSXLockedPlayer = nil
+local BSXRandomPart = "Head"
+local BSXLastRandomSwitch = 0
 
 -- ============================================
--- NO SPREAD / NO RECOIL
--- Module function replacement is DETECTED.
--- DO NOT require() CameraController or BulletClass.
+-- TARGET FINDING (BSX Specific)
 -- ============================================
+local function BSXIsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+    
+    local origin = cam.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    return true
+end
+
+local function BSXGetTargetPart(character)
+    if not character then return nil end
+    
+    local partSetting = Config.Aimbot.TargetPart
+    
+    if partSetting == "Random" then
+        local t = tick()
+        if t - BSXLastRandomSwitch >= (Config.Aimbot.RandomInterval or 0.5) then
+            local opts = {}
+            for _, n in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
+                if character:FindFirstChild(n) then
+                    table.insert(opts, n)
+                end
+            end
+            if #opts > 0 then
+                BSXRandomPart = opts[math.random(1, #opts)]
+            end
+            BSXLastRandomSwitch = t
+        end
+        return character:FindFirstChild(BSXRandomPart) 
+            or character:FindFirstChild("Head") 
+            or character:FindFirstChild("HumanoidRootPart")
+    end
+    
+    return character:FindFirstChild(partSetting)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function BSXIsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if Config.Aimbot.TeamCheck and player.Team and LocalPlayer.Team 
+        and player.Team == LocalPlayer.Team then return false end
+    local c = player.Character
+    if not c then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if not h or h.Health <= 0 then return false end
+    if c:FindFirstChildOfClass("ForceField") then return false end
+    return true
+end
+
+local function BSXGetTarget()
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
+    
+    local method = Config.Aimbot.Method
+    
+    if method == "Aimlock" then
+        -- Aimlock: stay locked to same player
+        if BSXLockedPlayer and BSXIsPlayerValid(BSXLockedPlayer) then
+            local tp = BSXGetTargetPart(BSXLockedPlayer.Character)
+            if tp then
+                if Config.Aimbot.VisibleCheck and not BSXIsVisible(tp) then
+                    -- Lost visibility, unlock
+                    BSXLockedPlayer = nil
+                else
+                    local sp, on = cam:WorldToViewportPoint(tp.Position)
+                    if on then return tp end
+                end
+            end
+            BSXLockedPlayer = nil
+        end
+        
+        -- Find new target to lock onto
+        local mousePos = UserInputService:GetMouseLocation()
+        local closestPart, closestDist, closestPlayer = nil, Config.Aimbot.FOVRadius, nil
+        
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not BSXIsPlayerValid(player) then continue end
+            local tp = BSXGetTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not BSXIsVisible(tp) then continue end
+            local sp, on = cam:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closestPart = tp
+                closestPlayer = player
+            end
+        end
+        
+        if closestPlayer then BSXLockedPlayer = closestPlayer end
+        return closestPart
+        
+    else
+        -- Aimbot: always track closest to screen center
+        local vpSize = cam.ViewportSize
+        local center = Vector2.new(vpSize.X / 2, vpSize.Y / 2)
+        local closestPart, closestDist = nil, Config.Aimbot.FOVRadius
+        
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not BSXIsPlayerValid(player) then continue end
+            local tp = BSXGetTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not BSXIsVisible(tp) then continue end
+            local sp, on = cam:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closestPart = tp
+            end
+        end
+        
+        return closestPart
+    end
+end
+
+-- ============================================
+-- BSX AIMBOT LOOP (mousemoverel ONLY)
+-- This replaces the main script's UpdateAimbot for BSX
+-- mousemoverel is the only method that works because
+-- BSX's camera controller overwrites Camera.CFrame
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    -- Only run when aimbot is enabled and active
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        BSXAimbotTarget = nil
+        if not Config.Aimbot.Active then BSXLockedPlayer = nil end
+        return
+    end
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    
+    -- Find target
+    local tp = BSXGetTarget()
+    BSXAimbotTarget = tp
+    if not tp then return end
+    
+    -- Calculate target position with prediction
+    local targetPos = tp.Position
+    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+        local vel = tp.AssemblyLinearVelocity
+        if vel and vel.Magnitude > 0.1 then
+            targetPos = targetPos + vel * Config.Aimbot.Prediction
+        end
+    end
+    
+    -- Convert target world position to screen position
+    local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
+    if not onScreen then return end
+    
+    -- Get current mouse/crosshair position
+    local mousePos = UserInputService:GetMouseLocation()
+    
+    -- Calculate delta (how far mouse needs to move)
+    local deltaX = screenPos.X - mousePos.X
+    local deltaY = screenPos.Y - mousePos.Y
+    
+    -- Distance to target on screen
+    local dist = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    
+    -- If already on target, skip
+    if dist < 1.5 then return end
+    
+    -- Apply smoothness
+    -- Lower smoothness = faster aim
+    -- Higher smoothness = smoother/slower aim
+    local smoothness = math.max(Config.Aimbot.Smoothness or 5, 1)
+    local speed = math.clamp(1 / smoothness, 0.05, 1.0)
+    
+    -- Calculate mouse movement with smoothing
+    local moveX = deltaX * speed
+    local moveY = deltaY * speed
+    
+    -- Clamp to prevent insane jumps (anti-detection)
+    moveX = math.clamp(moveX, -180, 180)
+    moveY = math.clamp(moveY, -180, 180)
+    
+    -- Only move if significant enough
+    if math.abs(moveX) > 0.3 or math.abs(moveY) > 0.3 then
+        mousemoverel(moveX, moveY)
+    end
+end)
+
+-- ============================================
+-- CLEANUP ON RESPAWN
+-- ============================================
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    BSXAimbotTarget = nil
+    BSXLockedPlayer = nil
+end)
+
+-- ============================================
+-- CLEANUP ON PLAYER LEAVE
+-- ============================================
+Players.PlayerRemoving:Connect(function(player)
+    if BSXLockedPlayer == player then
+        BSXLockedPlayer = nil
+    end
+end)
 
 -- ============================================
 -- SIGNAL LOADED
--- The main script handles everything for BSX:
--- - Aimbot (Camera.CFrame / mousemoverel)
--- - ESP (Drawing library)
--- - Triggerbot (mouse1press/release)
--- All of these are client-side only and undetected.
 -- ============================================
 getgenv().AX_BSXLoaded = true
+getgenv().AX_BSX_HandlesAimbot = true
