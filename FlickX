@@ -1,0 +1,167 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║              ANNOMALY X - Flick Silent Aim Module         ║
+    ║              AC Bypass + BulletHandler.Fire Hook          ║
+    ║              Creator: ElSacaLeche                         ║
+    ╚═══════════════════════════════════════════════════════════╝
+]]
+
+-- Espera a que Config esté disponible (inyectado por el script principal)
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+local cloneref = cloneref or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local hookfunction = hookfunction or replaceclosure or detour_function
+
+local Players = cloneref(game:GetService("Players"))
+local Workspace = cloneref(game:GetService("Workspace"))
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- FLICK ANTICHEAT BYPASS (Solvent method)
+-- ============================================
+pcall(function()
+    local Detected, Kill
+
+    setthreadidentity(2)
+
+    for i, v in getgc(true) do
+        if typeof(v) == "table" then
+            local DetectFunc = rawget(v, "Detected")
+            local KillFunc = rawget(v, "Kill")
+
+            if typeof(DetectFunc) == "function" and not Detected then
+                Detected = DetectFunc
+                hookfunction(Detected, function(Action, Info, NoCrash)
+                    return true
+                end)
+            end
+
+            if rawget(v, "Variables") and rawget(v, "Process") and typeof(KillFunc) == "function" and not Kill then
+                Kill = KillFunc
+                hookfunction(Kill, function(Info)
+                end)
+            end
+        end
+    end
+
+    local OldDebugInfo = getrenv().debug.info
+    hookfunction(getrenv().debug.info, newcclosure(function(...)
+        local LevelOrFunc, Info = ...
+        if Detected and LevelOrFunc == Detected then
+            return coroutine.yield(coroutine.running())
+        end
+        return OldDebugInfo(...)
+    end))
+
+    setthreadidentity(7)
+end)
+
+-- ============================================
+-- UTILITY: Get Target Part
+-- ============================================
+local function GetTargetPart(character, targetPartSetting)
+    if not character then return nil end
+    local parts = {"HeadHB", "Head", "HumanoidRootPart", "UpperTorso", "Torso"}
+    if targetPartSetting == "Random" then
+        local validParts = {}
+        for _, partName in ipairs(parts) do
+            local part = character:FindFirstChild(partName)
+            if part then table.insert(validParts, part) end
+        end
+        if #validParts > 0 then return validParts[math.random(1, #validParts)] end
+    end
+    return character:FindFirstChild(targetPartSetting)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild("UpperTorso")
+end
+
+-- ============================================
+-- UTILITY: Visibility Check
+-- ============================================
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character, Camera}
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    return true
+end
+
+-- ============================================
+-- GET CLOSEST TARGET (Screen Center method)
+-- ============================================
+local function GetClosestTargetScreenCenter()
+    Camera = Workspace.CurrentCamera
+    local closest = nil
+    local distance = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local screenCenter = Camera.ViewportSize / 2
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if Config.Silent.TeamCheck and player.Team == LocalPlayer.Team then continue end
+
+        local character = player.Character
+        if not character then continue end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+
+        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        if not targetPart then continue end
+
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+
+        local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if screenDistance < distance then
+            distance = screenDistance
+            closest = targetPart
+        end
+    end
+
+    return closest
+end
+
+-- ============================================
+-- HOOK BulletHandler.Fire
+-- ============================================
+pcall(function()
+    local bullet_handler = require(game:GetService("ReplicatedStorage").ModuleScripts.GunModules.BulletHandler)
+    local old_fire = bullet_handler.Fire
+
+    bullet_handler.Fire = function(data)
+        if Config.Silent.Enabled and Config.Silent.Active then
+            if math.random(1, 100) <= Config.Silent.HitChance then
+                local closest = GetClosestTargetScreenCenter()
+                if closest and closest.Parent then
+                    data.Direction = (closest.Position - data.Origin).Unit
+                end
+            end
+        end
+        return old_fire(data)
+    end
+end)
+
+-- ============================================
+-- SIGNAL: Module loaded
+-- ============================================
+getgenv().AX_FlickLoaded = true
+
+print("  ✅ FLICK MODULE - AC Bypassed + BulletHandler.Fire hooked")
