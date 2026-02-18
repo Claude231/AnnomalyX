@@ -1,38 +1,38 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║           ANNOMALY X - Arsenal Module v5                  ║
-    ║           Real Method - Remote Intercept + GC Scan        ║
+    ║           ANNOMALY X - Arsenal Module v7                  ║
+    ║           Real Method - Based on Arsonia Analysis          ║
     ║           Creator: ElSacaLeche                            ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    RESEARCH RESULTS:
+    HOW ARSENAL ACTUALLY WORKS (from Arsonia source):
     
-    Arsenal's shooting system works like this:
+    HITSCAN WEAPONS:
+    - Arsenal calls workspace:FindPartOnRayWithIgnoreList()
+    - The ray origin is Camera.CFrame.Position (with offset)
+    - The ray direction is Camera.CFrame.LookVector * range
+    - We identify weapon raycasts by checking if origin == camera pos
+    - We redirect the ray to point at our target
     
-    1. Client clicks to shoot
-    2. Client-side weapon module does a local raycast
-    3. Client sends hit data to server via a specific RemoteEvent
-    4. The remote call includes: hit part, hit position, etc.
-    5. Server validates with generous margins
+    PROJECTILE WEAPONS:
+    - Arsenal calls CreateProjectile in ReplicatedStorage.Modules.ClientFunctions
+    - Args: playerName, projectileType, speed, targetPos, originCFrame
+    - We hook this function and redirect targetPos + originCFrame
     
-    WHAT ACTUALLY WORKS (verified from working scripts):
+    REMOTES:
+    - ReplicatedStorage.Events.HitPart - hit registration
+    - ReplicatedStorage.Events.Burn - weapon damage
+    - ReplicatedStorage.Events.CreateProjectile - projectile creation  
+    - ReplicatedStorage.Events.ControlTurn - player rotation
     
-    The real method is finding Arsenal's network module/remote
-    and intercepting the data sent to the server. The client
-    tells the server "I hit this part at this position" and
-    the server trusts it within reasonable bounds.
+    CLIENT SCRIPTS:
+    - PlayerGui.GUI.Client - main client script
+    - PlayerGui.GUI.Client.Functions.Weapons - weapon functions module
+    - ReplicatedStorage.Modules.ClientFunctions - shared functions
+    - ReplicatedStorage.Modules.Spread - spread calculation
     
-    Working scripts find the remote by:
-    1. Scanning getgc() for the Fire/Shoot function
-    2. Scanning ReplicatedStorage for the weapon framework
-    3. Hooking __namecall on RemoteEvent:FireServer
-    
-    Arsenal's main remote is typically found through the
-    weapon framework modules in ReplicatedStorage.
-    
-    The key insight: Arsenal's hit registration is CLIENT-SIDED.
-    The client decides what it hit, the server just validates
-    that the hit is physically possible (distance, angle, etc.)
+    WEAPON DATA:
+    - ReplicatedStorage.Weapons - all weapon objects
 ]]
 
 if not getgenv().AX_Config then
@@ -42,7 +42,6 @@ end
 local Config = getgenv().AX_Config
 
 local cloneref = cloneref or function(o) return o end
-local clonefunction = clonefunction or function(f) return f end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
 local hookmetamethod = hookmetamethod
@@ -52,10 +51,6 @@ local getrawmetatable = getrawmetatable
 local setreadonly = setreadonly or function(t, v)
     if make_writeable and not v then make_writeable(t) end
 end
-local getupvalue = debug.getupvalue or getupvalue
-local getupvalues = debug.getupvalues or getupvalues
-local getconstants = debug.getconstants or getconstants
-local getinfo = debug.getinfo or getinfo
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
@@ -68,7 +63,7 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- AC HANDLING (Light - Arsenal AC is not heavy)
+-- KICK PROTECTION
 -- ============================================
 
 pcall(function()
@@ -87,25 +82,6 @@ pcall(function()
         for _, conn in ipairs(getconnections(SC.Error)) do
             pcall(function() conn:Disable() end)
         end
-    end
-end)
-
--- ============================================
--- MOUSE TRACKING
--- ============================================
-
-local isMouseDown = false
-
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = true
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = false
     end
 end)
 
@@ -159,7 +135,7 @@ local function FindTarget()
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team 
+        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team
             and player.Team == LocalPlayer.Team then continue end
         
         local character = player.Character
@@ -188,181 +164,65 @@ local function FindTarget()
 end
 
 -- ============================================
--- HELPER
+-- HELPER: Extract origin position from a Ray
+-- Arsenal creates rays from camera position
+-- This is how Arsonia identifies weapon raycasts
 -- ============================================
 
+local function GetRayOrigin(ray)
+    if typeof(ray) == "Ray" then
+        return ray.Origin
+    end
+    return nil
+end
+
+local function IsWeaponRaycast(rayOrigin)
+    -- Arsenal weapon raycasts originate from camera position
+    -- with a Y offset of +1.5 + CameraOffset.Y from HRP
+    local cam = Workspace.CurrentCamera
+    if not cam then return false end
+    
+    local character = LocalPlayer.Character
+    if not character then return false end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local camOffset = humanoid and humanoid.CameraOffset.Y or 0
+    
+    -- Arsenal uses: HRP.Position + Vector3.new(0, 1.5 + CameraOffset.Y, 0)
+    -- or Camera.CFrame.Position directly
+    local expectedOrigin1 = cam.CFrame.Position
+    local expectedOrigin2 = hrp.Position + Vector3.new(0, 1.5 + camOffset, 0)
+    
+    local dist1 = (rayOrigin - expectedOrigin1).Magnitude
+    local dist2 = (rayOrigin - expectedOrigin2).Magnitude
+    
+    -- Allow small margin for floating point
+    return dist1 < 2 or dist2 < 2
+end
+
 local function ShouldRedirect()
-    return Config.Silent.Enabled 
-        and Config.Silent.Active 
-        and CurrentTarget 
-        and CurrentTarget.Parent 
+    return Config.Silent.Enabled
+        and Config.Silent.Active
+        and CurrentTarget
+        and CurrentTarget.Parent
         and math.random(1, 100) <= Config.Silent.HitChance
 end
 
 -- ============================================
--- ARSENAL REMOTE FINDER
--- Find the actual remote Arsenal uses for hit reg
--- Multiple search methods for compatibility
--- ============================================
-
-local ArsenalRemote = nil
-local ArsenalNetwork = nil
-
--- Method A: Search ReplicatedStorage for known remote patterns
-local function FindRemoteInStorage()
-    local found = nil
-    
-    -- Arsenal commonly uses these structures
-    local searchPaths = {
-        ReplicatedStorage:FindFirstChild("MainEvent"),
-        ReplicatedStorage:FindFirstChild("Event"),
-        ReplicatedStorage:FindFirstChild("Replicate"),
-        ReplicatedStorage:FindFirstChild("GameEvent"),
-        ReplicatedStorage:FindFirstChild("WeaponEvent"),
-        ReplicatedStorage:FindFirstChild("Network"),
-        ReplicatedStorage:FindFirstChild("Bridge"),
-        ReplicatedStorage:FindFirstChild("Remotes"),
-        ReplicatedStorage:FindFirstChild("Events"),
-    }
-    
-    for _, obj in ipairs(searchPaths) do
-        if obj then
-            if obj:IsA("RemoteEvent") then
-                found = obj
-                break
-            elseif obj:IsA("Folder") or obj:IsA("Model") then
-                for _, child in ipairs(obj:GetChildren()) do
-                    if child:IsA("RemoteEvent") then
-                        found = child
-                        break
-                    end
-                end
-            end
-        end
-        if found then break end
-    end
-    
-    -- Deep search if not found
-    if not found then
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("RemoteEvent") then
-                local name = obj.Name:lower()
-                if name:find("event") or name:find("main") or name:find("network")
-                    or name:find("remote") or name:find("replicate") or name:find("fire")
-                    or name:find("weapon") or name:find("gun") or name:find("shoot")
-                    or name:find("hit") or name:find("damage") then
-                    found = obj
-                    break
-                end
-            end
-        end
-    end
-    
-    return found
-end
-
--- Method B: Use getgc to find the remote reference from game scripts
-local function FindRemoteViaGC()
-    if not getgc then return nil end
-    
-    local found = nil
-    
-    pcall(function()
-        for _, v in ipairs(getgc(true)) do
-            if typeof(v) == "table" then
-                pcall(function()
-                    for key, val in pairs(v) do
-                        if typeof(val) == "Instance" and val:IsA("RemoteEvent") then
-                            if val:IsDescendantOf(ReplicatedStorage) then
-                                local keyStr = tostring(key):lower()
-                                if keyStr:find("event") or keyStr:find("remote") 
-                                    or keyStr:find("network") or keyStr:find("fire")
-                                    or keyStr:find("main") or keyStr:find("replicate") then
-                                    found = val
-                                end
-                            end
-                        end
-                    end
-                end)
-            end
-            if found then break end
-        end
-    end)
-    
-    -- Also search for the network/weapon module table
-    if not found then
-        pcall(function()
-            for _, v in ipairs(getgc(true)) do
-                if typeof(v) == "table" then
-                    pcall(function()
-                        -- Look for tables that have fire/shoot functions and remote references
-                        local hasFireFunc = rawget(v, "Fire") or rawget(v, "fire") 
-                            or rawget(v, "Shoot") or rawget(v, "shoot")
-                            or rawget(v, "Send") or rawget(v, "send")
-                        local hasRemote = rawget(v, "Remote") or rawget(v, "remote")
-                            or rawget(v, "Event") or rawget(v, "event")
-                            or rawget(v, "MainEvent") or rawget(v, "RemoteEvent")
-                        
-                        if hasFireFunc and typeof(hasFireFunc) == "function" then
-                            ArsenalNetwork = v
-                        end
-                        
-                        if hasRemote and typeof(hasRemote) == "Instance" 
-                            and hasRemote:IsA("RemoteEvent") then
-                            found = hasRemote
-                        end
-                    end)
-                end
-                if found then break end
-            end
-        end)
-    end
-    
-    return found
-end
-
--- Method C: Monitor remote traffic to identify the shooting remote
-local remoteFireCounts = {}
-local monitorConnection = nil
-
-local function StartRemoteMonitor()
-    if not hookmetamethod then return end
-    
-    -- We'll track which remotes fire when mouse is clicked
-    -- The one that fires on click is likely the weapon remote
-    monitorConnection = true -- flag
-end
-
--- Execute search
-task.spawn(function()
-    task.wait(3) -- Wait for Arsenal to fully load
-    
-    ArsenalRemote = FindRemoteInStorage()
-    if ArsenalRemote then
-        print("  ✅ Arsenal Remote found (Storage): " .. ArsenalRemote:GetFullName())
-    else
-        ArsenalRemote = FindRemoteViaGC()
-        if ArsenalRemote then
-            print("  ✅ Arsenal Remote found (GC): " .. ArsenalRemote:GetFullName())
-        else
-            print("  ⚠ Arsenal Remote not found - using fallback methods")
-        end
-    end
-end)
-
--- ============================================
--- MAIN HOOK: __namecall
--- This is the core of the silent aim.
--- We intercept ALL remote FireServer calls and
--- raycast calls. When the weapon system sends
--- hit data to the server, we modify it.
+-- METHOD 1: __NAMECALL HOOK
+-- Primary method - intercepts FindPartOnRayWithIgnoreList
+-- This is exactly what Arsonia does
 --
--- Arsenal's FireServer typically sends:
--- remote:FireServer("Damage", hitPart, hitPos, ...)
--- remote:FireServer(hitPart, hitPos, normal, ...)
--- Or variations of these
+-- Arsenal's weapon system calls:
+-- workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+-- where ray origin = camera position or HRP + offset
 --
--- We detect the pattern and replace hit data
+-- We check if the ray origin matches camera/player position
+-- to confirm it's a weapon raycast (not a visibility check
+-- or other game raycast), then redirect to target
 -- ============================================
 
 local oldNamecall
@@ -374,109 +234,145 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         return oldNamecall(self, ...)
     end
     
-    if not ShouldRedirect() then
-        return oldNamecall(self, ...)
-    end
-    
     -- ============================================
-    -- INTERCEPT REMOTE CALLS (Primary method)
-    -- When Arsenal fires a remote with hit data,
-    -- replace the hit part and position
+    -- HITSCAN SILENT AIM
+    -- Intercept FindPartOnRayWithIgnoreList
+    -- This is THE method Arsenal uses for bullet raycasts
     -- ============================================
     
-    if method == "FireServer" and typeof(self) == "Instance" and self:IsA("RemoteEvent") then
-        -- Only intercept when shooting (mouse down)
-        if isMouseDown then
-            local modified = false
-            local newArgs = {unpack(args)}
-            
-            for i, arg in ipairs(newArgs) do
-                -- Replace Instance arguments that are BaseParts (hit parts)
-                -- but NOT the local player's parts
-                if typeof(arg) == "Instance" and arg:IsA("BasePart") then
-                    local isLocalPart = false
-                    if LocalPlayer.Character then
-                        isLocalPart = arg:IsDescendantOf(LocalPlayer.Character)
-                    end
-                    if not isLocalPart then
-                        newArgs[i] = CurrentTarget
-                        modified = true
-                    end
-                end
-                
-                -- Replace Vector3 arguments that look like hit positions
-                -- (not tiny vectors which might be normals/directions)
-                if typeof(arg) == "Vector3" then
-                    local magnitude = arg.Magnitude
-                    if magnitude > 10 then
-                        -- This is likely a world position, replace with target pos
-                        newArgs[i] = CurrentTarget.Position
-                        modified = true
-                    end
-                end
-                
-                -- Replace CFrame arguments
-                if typeof(arg) == "CFrame" then
-                    local magnitude = arg.Position.Magnitude
-                    if magnitude > 10 then
-                        newArgs[i] = CFrame.new(CurrentTarget.Position)
-                        modified = true
-                    end
-                end
-            end
-            
-            if modified then
-                return oldNamecall(self, unpack(newArgs))
-            end
-        end
-    end
-    
-    -- ============================================
-    -- INTERCEPT RAYCAST CALLS
-    -- Redirect any raycasts to point at target
-    -- ============================================
-    
-    if (self == Workspace or self == workspace) and isMouseDown then
-        if method == "Raycast" then
-            local origin = args[1]
-            local direction = args[2]
-            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
-                return oldNamecall(self, unpack(args))
-            end
-        end
-        
-        if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" 
-            or method == "FindPartOnRayWithWhitelist" then
+    if method == "FindPartOnRayWithIgnoreList" then
+        if ShouldRedirect() then
             local ray = args[1]
             if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                args[1] = Ray.new(ray.Origin, newDir)
-                return oldNamecall(self, unpack(args))
+                -- Check if this is a weapon raycast (origin = camera pos)
+                if IsWeaponRaycast(ray.Origin) then
+                    -- Get proper origin (same as Arsenal uses)
+                    local character = LocalPlayer.Character
+                    if character then
+                        local hrp = character:FindFirstChild("HumanoidRootPart")
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        if hrp and humanoid then
+                            local origin = hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0)
+                            local direction = CurrentTarget.Position - origin
+                            args[1] = Ray.new(origin, direction)
+                            return oldNamecall(self, unpack(args))
+                        end
+                    end
+                end
             end
         end
     end
     
     -- ============================================
-    -- INTERCEPT CAMERA RAY METHODS
-    -- Redirect ViewportPointToRay / ScreenPointToRay
+    -- PROJECTILE SILENT AIM
+    -- Intercept CreateProjectile remote
+    -- Arsonia hooks: Events.CreateProjectile FireServer
+    -- Args: "CreateProjectile", playerName, projType, speed, targetPos, originCFrame
+    -- We modify targetPos (arg d/4th) and originCFrame (arg e/5th)
     -- ============================================
     
-    if typeof(self) == "Instance" and self:IsA("Camera") and isMouseDown then
-        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-            local cam = Workspace.CurrentCamera
-            if cam then
-                local targetPos = CurrentTarget.Position
-                local targetScreen, onScreen
-                if method == "ViewportPointToRay" then
-                    targetScreen, onScreen = cam:WorldToViewportPoint(targetPos)
-                else
-                    targetScreen, onScreen = cam:WorldToScreenPoint(targetPos)
+    if method == "FireServer" then
+        if typeof(self) == "Instance" and self:IsA("RemoteEvent") then
+            if ShouldRedirect() then
+                local remoteName = self.Name
+                
+                -- Check if first arg identifies the action
+                if typeof(args[1]) == "string" then
+                    local action = args[1]
+                    
+                    -- CreateProjectile: redirect projectile direction
+                    if action == "CreateProjectile" then
+                        -- args: action, projType(?), speed(?), targetPos, originCFrame
+                        -- Find Vector3 and CFrame args and redirect them
+                        local character = LocalPlayer.Character
+                        if character then
+                            local hrp = character:FindFirstChild("HumanoidRootPart")
+                            local humanoid = character:FindFirstChildOfClass("Humanoid")
+                            if hrp and humanoid then
+                                for i = 2, #args do
+                                    if typeof(args[i]) == "Vector3" then
+                                        -- This is the target position
+                                        args[i] = CurrentTarget.Position
+                                    elseif typeof(args[i]) == "CFrame" then
+                                        -- This is the origin CFrame
+                                        args[i] = CFrame.new(hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0))
+                                    end
+                                end
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
+                    end
+                    
+                    -- ControlTurn: optionally sync server-side rotation
+                    -- args: "ControlTurn", pitch, lookVector
+                    -- This makes your character face the target on server
+                    if action == "ControlTurn" and CurrentTarget and CurrentTarget.Parent then
+                        local character = LocalPlayer.Character
+                        if character then
+                            local head = character:FindFirstChild("Head")
+                            if head then
+                                local angles = Vector3.new(
+                                    CFrame.new(head.Position, CurrentTarget.Position):ToEulerAnglesYXZ()
+                                )
+                                -- Modify pitch (args[2]) to face target
+                                args[2] = angles.X
+                                -- Don't modify lookVector (args[3]) to avoid obvious detection
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
+                    end
                 end
-                if onScreen then
-                    args[1] = targetScreen.X
-                    args[2] = targetScreen.Y
-                    return oldNamecall(self, unpack(args))
+            end
+        end
+    end
+    
+    -- ============================================
+    -- ALSO CATCH: FindPartOnRay, Raycast
+    -- Some Arsenal code paths might use these
+    -- ============================================
+    
+    if self == Workspace or self == workspace then
+        if ShouldRedirect() then
+            if method == "FindPartOnRay" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" and IsWeaponRaycast(ray.Origin) then
+                    local character = LocalPlayer.Character
+                    if character then
+                        local hrp = character:FindFirstChild("HumanoidRootPart")
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        if hrp and humanoid then
+                            local origin = hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0)
+                            args[1] = Ray.new(origin, CurrentTarget.Position - origin)
+                            return oldNamecall(self, unpack(args))
+                        end
+                    end
+                end
+            end
+            
+            if method == "FindPartOnRayWithWhitelist" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" and IsWeaponRaycast(ray.Origin) then
+                    local character = LocalPlayer.Character
+                    if character then
+                        local hrp = character:FindFirstChild("HumanoidRootPart")
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        if hrp and humanoid then
+                            local origin = hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0)
+                            args[1] = Ray.new(origin, CurrentTarget.Position - origin)
+                            return oldNamecall(self, unpack(args))
+                        end
+                    end
+                end
+            end
+            
+            if method == "Raycast" then
+                local origin = args[1]
+                local direction = args[2]
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                    if IsWeaponRaycast(origin) then
+                        args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
+                        return oldNamecall(self, unpack(args))
+                    end
                 end
             end
         end
@@ -486,113 +382,122 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ============================================
--- DIRECT FUNCTION HOOKS (catches cached refs)
+-- METHOD 2: HOOK CreateProjectile FUNCTION
+-- Arsonia hooks this directly for projectile weapons
+-- ReplicatedStorage.Modules.ClientFunctions.CreateProjectile
 -- ============================================
 
--- Hook FindPartOnRayWithIgnoreList directly
-pcall(function()
-    local original = Workspace.FindPartOnRayWithIgnoreList
-    hookfunction(original, newcclosure(function(self, ray, ...)
-        if ShouldRedirect() and isMouseDown and typeof(ray) == "Ray" then
-            local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-            return original(self, Ray.new(ray.Origin, newDir), ...)
-        end
-        return original(self, ray, ...)
-    end))
-end)
+local projectileHooked = false
 
--- Hook FindPartOnRay directly
-pcall(function()
-    local original = Workspace.FindPartOnRay
-    hookfunction(original, newcclosure(function(self, ray, ...)
-        if ShouldRedirect() and isMouseDown and typeof(ray) == "Ray" then
-            local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-            return original(self, Ray.new(ray.Origin, newDir), ...)
-        end
-        return original(self, ray, ...)
-    end))
-end)
-
--- Hook Raycast directly
-pcall(function()
-    local original = Workspace.Raycast
-    hookfunction(original, newcclosure(function(self, origin, direction, ...)
-        if ShouldRedirect() and isMouseDown then
-            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                local newDir = (CurrentTarget.Position - origin).Unit * direction.Magnitude
-                return original(self, origin, newDir, ...)
-            end
-        end
-        return original(self, origin, direction, ...)
-    end))
-end)
-
--- Hook Camera:ViewportPointToRay directly
-pcall(function()
-    local cam = Workspace.CurrentCamera
-    if cam then
-        local original = cam.ViewportPointToRay
-        hookfunction(original, newcclosure(function(self, x, y, ...)
-            if ShouldRedirect() and isMouseDown then
-                local c = Workspace.CurrentCamera
-                if c then
-                    local tScreen, onScreen = c:WorldToViewportPoint(CurrentTarget.Position)
-                    if onScreen then
-                        return original(self, tScreen.X, tScreen.Y, ...)
+task.spawn(function()
+    task.wait(3) -- Wait for game to load
+    
+    pcall(function()
+        local ClientFunctions = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("ClientFunctions"))
+        if ClientFunctions and ClientFunctions.CreateProjectile then
+            local originalCreateProjectile = ClientFunctions.CreateProjectile
+            ClientFunctions.CreateProjectile = function(playerName, projectileType, speed, targetPos, originCFrame, ...)
+                if ShouldRedirect() then
+                    if playerName == LocalPlayer.Name then
+                        local character = LocalPlayer.Character
+                        if character then
+                            local hrp = character:FindFirstChild("HumanoidRootPart")
+                            local humanoid = character:FindFirstChildOfClass("Humanoid")
+                            if hrp and humanoid then
+                                targetPos = CurrentTarget.Position
+                                originCFrame = CFrame.new(hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0))
+                                
+                                -- For Bow/Arrow: fire HitPart directly (Arsonia method)
+                                if projectileType == "Arrow" then
+                                    pcall(function()
+                                        local events = ReplicatedStorage:FindFirstChild("Events")
+                                        if events then
+                                            local hitPart = events:FindFirstChild("HitPart")
+                                            if hitPart then
+                                                -- Direct hit registration for arrows
+                                                local hitPos = CurrentTarget.Position + Vector3.new(math.random(), math.random(), math.random())
+                                                -- Note: We don't have the Hitparter format string
+                                                -- So we just redirect the projectile instead
+                                            end
+                                        end
+                                    end)
+                                end
+                            end
+                        end
                     end
                 end
+                return originalCreateProjectile(playerName, projectileType, speed, targetPos, originCFrame, ...)
             end
-            return original(self, x, y, ...)
-        end))
-    end
-end)
-
--- Hook Camera:ScreenPointToRay directly
-pcall(function()
-    local cam = Workspace.CurrentCamera
-    if cam then
-        local original = cam.ScreenPointToRay
-        hookfunction(original, newcclosure(function(self, x, y, ...)
-            if ShouldRedirect() and isMouseDown then
-                local c = Workspace.CurrentCamera
-                if c then
-                    local tScreen, onScreen = c:WorldToScreenPoint(CurrentTarget.Position)
-                    if onScreen then
-                        return original(self, tScreen.X, tScreen.Y, ...)
-                    end
-                end
-            end
-            return original(self, x, y, ...)
-        end))
-    end
+            projectileHooked = true
+        end
+    end)
 end)
 
 -- ============================================
--- Mouse.__index (Hit + UnitRay only, no Target)
+-- METHOD 3: HOOK SPREAD CALCULATION
+-- Arsonia hooks ReplicatedStorage.Modules.Spread.calcspread
+-- Setting spread to 0 makes bullets go exactly where aimed
+-- This complements silent aim for perfect accuracy
 -- ============================================
 
-pcall(function()
-    local mt = getrawmetatable(Mouse)
-    if mt then
-        local oldIndex = mt.__index
-        setreadonly(mt, false)
-        mt.__index = newcclosure(function(self, key)
-            if self == Mouse and ShouldRedirect() and isMouseDown then
-                if key == "Hit" then
-                    return CFrame.new(CurrentTarget.Position)
-                elseif key == "UnitRay" then
-                    local cam = Workspace.CurrentCamera
-                    if cam then
-                        local origin = cam.CFrame.Position
-                        local dir = (CurrentTarget.Position - origin).Unit
-                        return Ray.new(origin, dir)
-                    end
+local spreadHooked = false
+
+task.spawn(function()
+    task.wait(3)
+    
+    pcall(function()
+        local SpreadModule = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Spread"))
+        if SpreadModule and SpreadModule.calcspread then
+            local originalCalcSpread = SpreadModule.calcspread
+            SpreadModule.calcspread = function(spreadAmount, ...)
+                if Config.Silent.Enabled and Config.Silent.Active and CurrentTarget then
+                    -- Remove spread when silent aim is active
+                    spreadAmount = 0
                 end
+                return originalCalcSpread(spreadAmount, ...)
             end
-            return oldIndex(self, key)
-        end)
-        setreadonly(mt, true)
-    end
+            spreadHooked = true
+        end
+    end)
+end)
+
+-- ============================================
+-- METHOD 4: HOOK FLAME/SPECIAL WEAPONS
+-- Arsonia hooks the flame function for flamethrower-type weapons
+-- getsenv(Client).flamemoment.doflame
+-- ============================================
+
+local flameHooked = false
+
+task.spawn(function()
+    task.wait(5)
+    
+    pcall(function()
+        local clientScript = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("GUI"):WaitForChild("Client")
+        if clientScript then
+            local env = getsenv(clientScript)
+            if env and env.flamemoment and env.flamemoment.doflame then
+                local originalDoFlame = env.flamemoment.doflame
+                env.flamemoment.doflame = function(playerName, direction, ...)
+                    if ShouldRedirect() then
+                        if playerName == LocalPlayer.Name then
+                            local character = LocalPlayer.Character
+                            if character then
+                                local hrp = character:FindFirstChild("HumanoidRootPart")
+                                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                                if hrp and humanoid then
+                                    local origin = hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0)
+                                    direction = CFrame.new(origin, CurrentTarget.Position)
+                                end
+                            end
+                        end
+                    end
+                    return originalDoFlame(playerName, direction, ...)
+                end
+                flameHooked = true
+            end
+        end
+    end)
 end)
 
 -- ============================================
@@ -616,7 +521,39 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     Camera = Workspace.CurrentCamera
     CurrentTarget = nil
-    isMouseDown = false
+    
+    -- Re-hook flame function on respawn
+    task.spawn(function()
+        task.wait(3)
+        pcall(function()
+            local clientScript = LocalPlayer.PlayerGui:FindFirstChild("GUI")
+            if clientScript then
+                clientScript = clientScript:FindFirstChild("Client")
+                if clientScript then
+                    local env = getsenv(clientScript)
+                    if env and env.flamemoment and env.flamemoment.doflame and not flameHooked then
+                        local originalDoFlame = env.flamemoment.doflame
+                        env.flamemoment.doflame = function(playerName, direction, ...)
+                            if ShouldRedirect() then
+                                if playerName == LocalPlayer.Name then
+                                    local character = LocalPlayer.Character
+                                    if character then
+                                        local hrp = character:FindFirstChild("HumanoidRootPart")
+                                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                                        if hrp and humanoid then
+                                            local origin = hrp.Position + Vector3.new(0, 1.5 + humanoid.CameraOffset.Y, 0)
+                                            direction = CFrame.new(origin, CurrentTarget.Position)
+                                        end
+                                    end
+                                end
+                            end
+                            return originalDoFlame(playerName, direction, ...)
+                        end
+                    end
+                end
+            end
+        end)
+    end)
 end)
 
 -- ============================================
@@ -624,9 +561,11 @@ end)
 -- ============================================
 getgenv().AX_ArsenalLoaded = true
 
-print("  ✅ ARSENAL MODULE v5 loaded")
-print("  ✅ Remote intercept: FireServer hook active")
-print("  ✅ Direct hooks: FindPartOnRay, Raycast, Camera rays")
-print("  ✅ __namecall: All methods covered")
-print("  ✅ Mouse.__index: Hit + UnitRay")
-print("  ✅ Full coverage silent aim active")
+print("  ✅ ARSENAL MODULE v7 loaded (Arsonia Method)")
+print("  ✅ __namecall: FindPartOnRayWithIgnoreList hooked")
+print("  ✅ __namecall: CreateProjectile remote hooked")
+print("  ✅ __namecall: ControlTurn sync active")
+print("  ✅ CreateProjectile function: " .. tostring(projectileHooked))
+print("  ✅ Spread removal: " .. tostring(spreadHooked))
+print("  ✅ Flame redirect: " .. tostring(flameHooked))
+print("  ✅ Weapon raycast identification: Camera/HRP origin check")
