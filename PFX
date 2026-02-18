@@ -1,30 +1,44 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - Phantom Forces Silent Aim Module      ║
-    ║        Method: network.send "newbullets" + trajectory     ║
-    ║        + bullethit spoofing for instant registration      ║
+    ║        ANNOMALY X - Phantom Forces Module (Fixed)         ║
+    ║        Silent Aim: Motor6D __newindex hook                ║
+    ║        ESP & Hitbox: PF workspace structure               ║
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    HOW PF SILENT AIM WORKS (Advanced Method):
+    PF CHARACTER STRUCTURE:
+    Workspace
+    └── Players
+        ├── Ghosts
+        │   ├── PlayerModel1
+        │   │   ├── Head
+        │   │   ├── Torso
+        │   │   ├── Right Arm
+        │   │   ├── Left Arm
+        │   │   ├── Right Leg
+        │   │   ├── Left Leg
+        │   │   └── HumanoidRootPart
+        │   └── PlayerModel2 ...
+        └── Phantoms
+            └── ...
     
-    1. PF sends bullets via network.send("newbullets", data)
-    2. We intercept this call and recalculate bullet trajectory
-       to point at the target using PF's own trajectory() function
-    3. We then spoof a "bullethit" call so the server registers
-       the hit instantly
-    4. This is superior to Motor6D because:
-       - Motor6D can be detected by checking C0 consistency
-       - network.send hook works at the packet level
-       - Using PF's own trajectory() function makes it legitimate
-       - bullethit spoofing = instant kill registration
+    PF GUN STRUCTURE (in Camera):
+    Camera
+    └── [GunModel]
+        └── Trigger
+            └── Motor6D (this controls bullet direction)
     
-    ANTI-DETECTION MEASURES:
-    - Uses PF's own internal functions (trajectory, getbodyparts)
-    - Bullet direction calculated with proper physics (gravity, speed)
-    - firepos/camerapos spoofed from actual camera position
-    - Heartbeat-based delay option for undetectable timing
-    - No metamethod hooks (__index, __newindex, __namecall)
+    SILENT AIM METHOD:
+    - PF writes Motor6D.C0 every frame to aim the gun
+    - We hook __newindex and replace C0 with a CFrame
+      that points at the target
+    - This is the proven method that works in PF
+    
+    WHY network.send FAILED:
+    - PF updates frequently and internal variable names change
+    - getgc scanning for "gammo", "basecframe" etc. breaks
+    - Motor6D method is stable because the gun structure
+      doesn't change
 ]]
 
 -- Wait for Config
@@ -34,167 +48,210 @@ end
 
 local Config = getgenv().AX_Config
 
+local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
+local hookmetamethod = hookmetamethod
+local checkcaller = checkcaller or function() return false end
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
+local Players = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local Workspace = cloneref(game:GetService("Workspace"))
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
--- PF INTERNAL REFERENCES (via getgc)
+-- PF INTERNAL VARIABLES
 -- ============================================
-local network = nil
-local trajectory = nil
-local gamelogic = nil
-local getbodyparts = nil
-local cameraModule = nil
-local heartbeatDelta = 0
+local gunCF = nil           -- Redirected CFrame for the gun
+local currentMotor = nil    -- Current Motor6D being tracked
+local pfTarget = nil        -- Current target position
 
--- Scan garbage collector for PF internals
-local function ScanPFInternals()
-    local found = {network = false, trajectory = false, gamelogic = false, getbodyparts = false, camera = false}
-    
-    for _, v in pairs(getgc(true)) do
-        if type(v) == "table" then
-            -- getbodyparts function
-            if rawget(v, "getbodyparts") and not found.getbodyparts then
-                getbodyparts = v.getbodyparts
-                found.getbodyparts = true
+-- PF ESP Objects (separate from main script)
+local PF_ESPObjects = {}
+local PF_LastESPUpdate = 0
+local PF_ESP_UPDATE_INTERVAL = 0.1
+
+-- PF Hitbox tracking
+local PF_ExpandedModels = {}
+local PF_OriginalSizes = {}
+local PF_OriginalTransparencies = {}
+local PF_LastHitboxUpdate = 0
+local PF_HITBOX_UPDATE_INTERVAL = 0.05
+
+-- ============================================
+-- PF TEAM DETECTION
+-- ============================================
+local function GetLocalTeamName()
+    if not LocalPlayer.Team then return nil end
+    return LocalPlayer.Team.Name
+end
+
+local function GetEnemyTeamName()
+    local localTeam = GetLocalTeamName()
+    if not localTeam then return nil end
+    if localTeam == "Ghosts" then return "Phantoms"
+    elseif localTeam == "Phantoms" then return "Ghosts"
+    end
+    return nil
+end
+
+local function GetPlayersFolder()
+    return Workspace:FindFirstChild("Players")
+end
+
+local function GetEnemyFolder()
+    local enemyTeam = GetEnemyTeamName()
+    if not enemyTeam then return nil end
+    local playersFolder = GetPlayersFolder()
+    if not playersFolder then return nil end
+    return playersFolder:FindFirstChild(enemyTeam)
+end
+
+local function GetAllEnemyModels()
+    local models = {}
+    local enemyFolder = GetEnemyFolder()
+    if enemyFolder then
+        for _, model in pairs(enemyFolder:GetChildren()) do
+            if model:IsA("Model") and model:FindFirstChild("Head") then
+                table.insert(models, model)
             end
         end
-        
-        if type(v) == "function" then
-            -- trajectory function
-            local ok, name = pcall(function() return debug.getinfo(v).name end)
-            if ok and name == "trajectory" and not found.trajectory then
-                trajectory = v
-                found.trajectory = true
+    end
+    return models
+end
+
+local function GetAllTeamModels()
+    local models = {}
+    local localTeam = GetLocalTeamName()
+    if not localTeam then return models end
+    local playersFolder = GetPlayersFolder()
+    if not playersFolder then return models end
+    local teamFolder = playersFolder:FindFirstChild(localTeam)
+    if teamFolder then
+        for _, model in pairs(teamFolder:GetChildren()) do
+            if model:IsA("Model") and model:FindFirstChild("Head") then
+                table.insert(models, model)
             end
-            
-            -- Scan upvalues for network, gamelogic, camera
-            local upvalueCount = 0
-            pcall(function()
-                for i2, v2 in pairs(debug.getupvalues(v)) do
-                    upvalueCount = upvalueCount + 1
-                    if type(v2) == "table" then
-                        if rawget(v2, "send") and not found.network then
-                            network = v2
-                            found.network = true
-                        end
-                        if rawget(v2, "gammo") and not found.gamelogic then
-                            gamelogic = v2
-                            found.gamelogic = true
-                        end
-                        if rawget(v2, "basecframe") and not found.camera then
-                            cameraModule = v2
-                            found.camera = true
-                        end
+        end
+    end
+    return models
+end
+
+-- Get ALL player models (both teams) for ESP
+local function GetAllPlayerModels()
+    local models = {}
+    local playersFolder = GetPlayersFolder()
+    if not playersFolder then return models end
+    
+    for _, teamFolder in pairs(playersFolder:GetChildren()) do
+        if teamFolder:IsA("Folder") or teamFolder:IsA("Model") then
+            for _, model in pairs(teamFolder:GetChildren()) do
+                if model:IsA("Model") and model:FindFirstChild("Head") then
+                    table.insert(models, {
+                        model = model,
+                        teamName = teamFolder.Name,
+                        isEnemy = (teamFolder.Name ~= GetLocalTeamName())
+                    })
+                end
+            end
+        end
+    end
+    return models
+end
+
+-- ============================================
+-- PF VISIBILITY CHECK
+-- ============================================
+local function IsPFVisible(targetModel)
+    if not targetModel then return false end
+    local primaryPart = targetModel.PrimaryPart or targetModel:FindFirstChild("HumanoidRootPart") or targetModel:FindFirstChild("Torso")
+    if not primaryPart then return false end
+    
+    local castPoints = {primaryPart.Position}
+    local ignoreList = {targetModel, Camera}
+    
+    -- Also ignore local player's PF model
+    local localTeam = GetLocalTeamName()
+    if localTeam then
+        local playersFolder = GetPlayersFolder()
+        if playersFolder then
+            local myFolder = playersFolder:FindFirstChild(localTeam)
+            if myFolder then
+                for _, model in pairs(myFolder:GetChildren()) do
+                    if model.Name == LocalPlayer.Name then
+                        table.insert(ignoreList, model)
+                        break
                     end
                 end
-            end)
-        end
-        
-        -- Early exit if all found
-        if found.network and found.trajectory and found.gamelogic and found.getbodyparts and found.camera then
-            break
+            end
         end
     end
     
-    return found.network and found.trajectory and found.gamelogic and found.getbodyparts
-end
-
--- Attempt to scan
-local scanSuccess = ScanPFInternals()
-
-if not scanSuccess then
-    warn("[ANNOMALY X] PF Module: Failed to find all internal references")
-    warn("[ANNOMALY X] network:", network ~= nil)
-    warn("[ANNOMALY X] trajectory:", trajectory ~= nil)
-    warn("[ANNOMALY X] gamelogic:", gamelogic ~= nil)
-    warn("[ANNOMALY X] getbodyparts:", getbodyparts ~= nil)
-    warn("[ANNOMALY X] camera:", cameraModule ~= nil)
-    getgenv().AX_PFLoaded = false
-    return
-end
-
--- ============================================
--- HEARTBEAT TRACKER (for undetectable timing)
--- ============================================
-task.spawn(function()
-    while true do
-        heartbeatDelta = RunService.Heartbeat:Wait()
+    if LocalPlayer.Character then
+        table.insert(ignoreList, LocalPlayer.Character)
     end
-end)
+    
+    local result = Camera:GetPartsObscuringTarget(castPoints, ignoreList)
+    return #result == 0
+end
 
 -- ============================================
 -- PF TARGET PART RESOLVER
 -- ============================================
-local function ResolvePFTargetPart(targetPartSetting)
-    -- Map ANNOMALY X config names to PF body part names
+local function GetPFTargetPart(enemyModel, targetPartSetting)
+    if not enemyModel then return nil end
+    
+    local allParts = {"Head", "Torso", "Right Arm", "Left Arm", "Right Leg", "Left Leg", "HumanoidRootPart"}
+    
+    if targetPartSetting == "Random" then
+        local validParts = {}
+        for _, partName in ipairs(allParts) do
+            local part = enemyModel:FindFirstChild(partName)
+            if part then table.insert(validParts, part) end
+        end
+        if #validParts > 0 then
+            return validParts[math.random(1, #validParts)]
+        end
+    end
+    
+    -- Map standard names to PF names
     local partMap = {
         ["Head"] = "Head",
-        ["HumanoidRootPart"] = "Torso",
+        ["HumanoidRootPart"] = "HumanoidRootPart",
         ["Torso"] = "Torso",
         ["UpperTorso"] = "Torso"
     }
     
-    if targetPartSetting == "Random" then
-        local options = {"Head", "Torso", "Left Arm", "Right Arm"}
-        return options[math.random(1, #options)]
-    end
+    local pfPartName = partMap[targetPartSetting] or targetPartSetting
     
-    return partMap[targetPartSetting] or "Head"
+    return enemyModel:FindFirstChild(pfPartName)
+        or enemyModel:FindFirstChild("Head")
+        or enemyModel:FindFirstChild("Torso")
+        or enemyModel:FindFirstChild("HumanoidRootPart")
 end
 
 -- ============================================
--- GET CLOSEST TARGET (PF Method)
--- Uses getbodyparts() for proper PF player detection
--- FOV check from screen center
+-- PF CLOSEST TARGET FINDER (for Silent Aim)
 -- ============================================
 local function GetClosestPFTarget()
     Camera = Workspace.CurrentCamera
-    local closestDist = math.huge
-    local closestBody = nil
-    local closestPlayer = nil
+    if not Camera then return nil end
+    
+    local enemyModels = GetAllEnemyModels()
+    if #enemyModels == 0 then return nil end
     
     local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or math.huge
     local screenCenter = Camera.ViewportSize / 2
     
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
+    local closestPart = nil
+    local closestDist = math.huge
+    
+    for _, enemyModel in ipairs(enemyModels) do
+        local targetPart = GetPFTargetPart(enemyModel, Config.Silent.TargetPart)
+        if not targetPart then continue end
         
-        -- Team check
-        if Config.Silent.TeamCheck then
-            if player.Team and LocalPlayer.Team and player.Team.Name == LocalPlayer.Team.Name then
-                continue
-            end
-        else
-            -- PF always has teams, skip same team
-            if player.Team and LocalPlayer.Team and player.Team.Name == LocalPlayer.Team.Name then
-                continue
-            end
-        end
-        
-        -- Get body parts using PF's internal function
-        local targetBody = nil
-        pcall(function()
-            targetBody = getbodyparts(player)
-        end)
-        
-        if not targetBody then continue end
-        if not rawget(targetBody, "rootpart") then continue end
-        
-        local rootParent = targetBody.rootpart.Parent
-        if not rootParent then continue end
-        
-        local headPart = rootParent:FindFirstChild("Head")
-        if not headPart then continue end
-        
-        -- Screen position check
-        local screenPos, isOnScreen = Camera:WorldToViewportPoint(headPart.Position)
+        local screenPos, isOnScreen = Camera:WorldToViewportPoint(targetPart.Position)
         if not isOnScreen then continue end
         
         local screenOffset = Vector2.new(screenPos.X, screenPos.Y) - screenCenter
@@ -205,104 +262,436 @@ local function GetClosestPFTarget()
         
         -- Visibility check
         if Config.Silent.VisibleCheck then
-            local castPoints = {targetBody.rootpart.Position}
-            local ignoreList = {rootParent, LocalPlayer.Character, Camera}
-            local obscuring = Camera:GetPartsObscuringTarget(castPoints, ignoreList)
-            if #obscuring > 0 then continue end
+            if not IsPFVisible(enemyModel) then continue end
         end
         
         if screenDist < closestDist then
             closestDist = screenDist
-            closestBody = rootParent
-            closestPlayer = player
+            closestPart = targetPart
         end
     end
     
-    return closestBody, closestPlayer
+    return closestPart
 end
 
 -- ============================================
--- HOOK network.send FOR SILENT AIM
--- This is the core - intercepts bullet packets
+-- MOTOR6D FINDER
+-- Finds the gun's Motor6D inside Camera
 -- ============================================
-local originalSend = network.send
-
-network.send = function(self, ...)
-    local args = {...}
+local function FindGunMotor6D()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
     
-    -- Intercept "newbullets" event
-    if args[1] == "newbullets" then
-        -- Check if silent aim is active
-        if Config.Silent.Enabled and Config.Silent.Active then
-            -- Hit chance check
-            if math.random(1, 100) <= Config.Silent.HitChance then
-                local targetBody, targetPlayer = GetClosestPFTarget()
+    for _, child in pairs(Camera:GetChildren()) do
+        if child:IsA("Model") then
+            local trigger = child:FindFirstChild("Trigger")
+            if trigger then
+                local motor = trigger:FindFirstChildOfClass("Motor6D")
+                if motor then
+                    return motor
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- ============================================
+-- SILENT AIM RENDER LOOP
+-- Updates target and computes gunCF every frame
+-- ============================================
+local pfSilentConnection = RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    -- Reset if silent aim is off
+    if not Config.Silent.Enabled or not Config.Silent.Active then
+        gunCF = nil
+        currentMotor = nil
+        pfTarget = nil
+        return
+    end
+    
+    -- Hit chance check
+    if math.random(1, 100) > Config.Silent.HitChance then
+        gunCF = nil
+        currentMotor = nil
+        return
+    end
+    
+    -- Find closest target
+    local targetPart = GetClosestPFTarget()
+    
+    if targetPart then
+        pfTarget = targetPart.Position
+        
+        -- Find the gun's Motor6D
+        local motor = FindGunMotor6D()
+        
+        if motor and motor.Part0 then
+            currentMotor = motor
+            
+            -- Calculate the redirected CFrame
+            local cf = motor.C0
+            local worldPos = motor.Part0.CFrame:ToWorldSpace(cf).Position
+            local lookAtCF = CFrame.new(worldPos, pfTarget)
+            gunCF = motor.Part0.CFrame:ToObjectSpace(lookAtCF)
+        else
+            gunCF = nil
+            currentMotor = nil
+        end
+    else
+        gunCF = nil
+        currentMotor = nil
+        pfTarget = nil
+    end
+end)
+
+-- ============================================
+-- HOOK __newindex TO REDIRECT Motor6D.C0
+-- This is the core silent aim mechanism
+-- ============================================
+local OldNewIndex
+OldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(...)
+    local Self, Key, Value = ...
+    
+    -- Only intercept when we have a valid target and motor
+    if Config.Silent.Enabled and Config.Silent.Active then
+        if currentMotor and gunCF then
+            if Self == currentMotor and Key == "C0" then
+                return OldNewIndex(Self, Key, gunCF)
+            end
+        end
+    end
+    
+    return OldNewIndex(...)
+end))
+
+-- ============================================
+-- PF ESP SYSTEM
+-- Separate from main ESP because PF uses
+-- different character structure
+-- ============================================
+
+local function CreatePFESP(modelName)
+    if PF_ESPObjects[modelName] then return end
+    PF_ESPObjects[modelName] = {
+        Box = Drawing.new("Square"),
+        Name = Drawing.new("Text"),
+        Distance = Drawing.new("Text")
+    }
+    local esp = PF_ESPObjects[modelName]
+    esp.Box.Thickness = 1
+    esp.Box.Filled = false
+    esp.Box.Color = Color3.fromRGB(255, 80, 80)
+    esp.Box.Visible = false
+    
+    esp.Name.Size = 13
+    esp.Name.Center = true
+    esp.Name.Outline = true
+    esp.Name.Color = Color3.fromRGB(255, 255, 255)
+    esp.Name.Visible = false
+    
+    esp.Distance.Size = 12
+    esp.Distance.Center = true
+    esp.Distance.Outline = true
+    esp.Distance.Color = Color3.fromRGB(200, 200, 200)
+    esp.Distance.Visible = false
+end
+
+local function CleanupPFESP()
+    for name, esp in pairs(PF_ESPObjects) do
+        esp.Box:Remove()
+        esp.Name:Remove()
+        esp.Distance:Remove()
+    end
+    PF_ESPObjects = {}
+end
+
+local function UpdatePFESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for _, esp in pairs(PF_ESPObjects) do
+            esp.Box.Visible = false
+            esp.Name.Visible = false
+            esp.Distance.Visible = false
+        end
+        return
+    end
+    
+    local currentTime = tick()
+    if currentTime - PF_LastESPUpdate < PF_ESP_UPDATE_INTERVAL then return end
+    PF_LastESPUpdate = currentTime
+    
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    -- Get all player models
+    local allPlayers = GetAllPlayerModels()
+    
+    -- Track which models are currently active
+    local activeModels = {}
+    
+    for _, data in ipairs(allPlayers) do
+        local model = data.model
+        local modelName = model.Name
+        local isEnemy = data.isEnemy
+        
+        -- Skip allies if team check is on
+        if Config.ESP.TeamCheck and not isEnemy then
+            if PF_ESPObjects[modelName] then
+                PF_ESPObjects[modelName].Box.Visible = false
+                PF_ESPObjects[modelName].Name.Visible = false
+                PF_ESPObjects[modelName].Distance.Visible = false
+            end
+            continue
+        end
+        
+        -- Skip own model
+        if modelName == LocalPlayer.Name then continue end
+        
+        activeModels[modelName] = true
+        
+        -- Create ESP if needed
+        if not PF_ESPObjects[modelName] then
+            CreatePFESP(modelName)
+        end
+        
+        local esp = PF_ESPObjects[modelName]
+        local rootPart = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
+        
+        if rootPart then
+            local dist = (Camera.CFrame.Position - rootPart.Position).Magnitude
+            
+            if dist <= Config.ESP.MaxDistance then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
                 
-                if targetBody and targetPlayer then
-                    -- Resolve which part to hit
-                    local hitPartName = ResolvePFTargetPart(Config.Silent.TargetPart)
-                    local hitPart = targetBody:FindFirstChild(hitPartName)
+                if onScreen then
+                    local boxSize = Vector2.new(2000 / dist, 2500 / dist)
                     
-                    if not hitPart then
-                        hitPart = targetBody:FindFirstChild("Head") or targetBody:FindFirstChild("Torso")
+                    -- Color based on team
+                    esp.Box.Color = isEnemy and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(80, 255, 80)
+                    esp.Box.Size = boxSize
+                    esp.Box.Position = Vector2.new(screenPos.X - boxSize.X / 2, screenPos.Y - boxSize.Y / 2)
+                    esp.Box.Visible = Config.ESP.Boxes
+                    
+                    esp.Name.Text = modelName
+                    esp.Name.Position = Vector2.new(screenPos.X, screenPos.Y - boxSize.Y / 2 - 15)
+                    esp.Name.Color = isEnemy and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(100, 255, 100)
+                    esp.Name.Visible = Config.ESP.Names
+                    
+                    esp.Distance.Text = math.floor(dist) .. "m"
+                    esp.Distance.Position = Vector2.new(screenPos.X, screenPos.Y + boxSize.Y / 2 + 5)
+                    esp.Distance.Visible = Config.ESP.Distance
+                else
+                    esp.Box.Visible = false
+                    esp.Name.Visible = false
+                    esp.Distance.Visible = false
+                end
+            else
+                esp.Box.Visible = false
+                esp.Name.Visible = false
+                esp.Distance.Visible = false
+            end
+        else
+            esp.Box.Visible = false
+            esp.Name.Visible = false
+            esp.Distance.Visible = false
+        end
+    end
+    
+    -- Clean up ESP for models that no longer exist
+    for modelName, esp in pairs(PF_ESPObjects) do
+        if not activeModels[modelName] then
+            esp.Box.Visible = false
+            esp.Name.Visible = false
+            esp.Distance.Visible = false
+        end
+    end
+end
+
+-- ============================================
+-- PF HITBOX SYSTEM
+-- Expands enemy model parts in workspace
+-- ============================================
+
+local function SavePFOriginal(modelName, partName, part)
+    if not PF_OriginalSizes[modelName] then
+        PF_OriginalSizes[modelName] = {}
+        PF_OriginalTransparencies[modelName] = {}
+    end
+    if not PF_OriginalSizes[modelName][partName] then
+        PF_OriginalSizes[modelName][partName] = part.Size
+        PF_OriginalTransparencies[modelName][partName] = part.Transparency
+    end
+end
+
+local function RestorePFHitbox(modelName, model)
+    if not PF_OriginalSizes[modelName] then return end
+    
+    for partName, origSize in pairs(PF_OriginalSizes[modelName]) do
+        local part = model:FindFirstChild(partName)
+        if part then
+            pcall(function()
+                part.Size = origSize
+                part.Transparency = PF_OriginalTransparencies[modelName][partName]
+            end)
+        end
+    end
+    
+    PF_ExpandedModels[modelName] = nil
+end
+
+local function CleanupAllPFHitboxes()
+    local playersFolder = GetPlayersFolder()
+    if not playersFolder then
+        PF_ExpandedModels = {}
+        PF_OriginalSizes = {}
+        PF_OriginalTransparencies = {}
+        return
+    end
+    
+    for modelName in pairs(PF_ExpandedModels) do
+        -- Find the model in either team folder
+        for _, teamFolder in pairs(playersFolder:GetChildren()) do
+            local model = teamFolder:FindFirstChild(modelName)
+            if model then
+                RestorePFHitbox(modelName, model)
+                break
+            end
+        end
+    end
+    
+    PF_ExpandedModels = {}
+    PF_OriginalSizes = {}
+    PF_OriginalTransparencies = {}
+end
+
+local function ExpandPFHitbox(model, partToModify, size)
+    local modelName = model.Name
+    
+    local partsToCheck = {"Head", "Torso", "HumanoidRootPart"}
+    
+    for _, partName in ipairs(partsToCheck) do
+        local part = model:FindFirstChild(partName)
+        if part and part:IsA("BasePart") then
+            SavePFOriginal(modelName, partName, part)
+            
+            local shouldModify = (partName == partToModify)
+            
+            pcall(function()
+                if shouldModify then
+                    part.CanCollide = false
+                    part.Massless = true
+                    part.Size = Vector3.new(size, size, size)
+                    part.Transparency = Config.Hitbox.Transparency
+                else
+                    if PF_OriginalSizes[modelName] and PF_OriginalSizes[modelName][partName] then
+                        part.Size = PF_OriginalSizes[modelName][partName]
+                        part.Transparency = PF_OriginalTransparencies[modelName][partName]
                     end
-                    
-                    if hitPart and cameraModule and gamelogic and gamelogic.currentgun then
-                        local playerPosition = cameraModule.basecframe.Position
-                        
-                        -- Spoof fire position and camera position
-                        args[2]["firepos"] = playerPosition
-                        args[2]["camerapos"] = playerPosition
-                        
-                        -- Recalculate bullet trajectory using PF's own function
-                        local bulletSpeed = gamelogic.currentgun.data.bulletspeed
-                        
-                        for i, bullet in pairs(args[2]["bullets"]) do
-                            bullet[1] = trajectory(
-                                playerPosition,
-                                Vector3.new(0, Workspace.Gravity, 0),
-                                hitPart.Position,
-                                bulletSpeed
-                            )
-                        end
-                        
-                        -- Send the modified bullet packet
-                        originalSend(self, unpack(args))
-                        
-                        -- Wait for bullet travel time (anti-detection)
-                        local distance = (hitPart.Position - playerPosition).Magnitude
-                        local travelTime = distance / bulletSpeed
-                        
-                        local totalWaited = 0
-                        repeat
-                            totalWaited = totalWaited + heartbeatDelta
-                            RunService.Heartbeat:Wait()
-                        until totalWaited >= travelTime
-                        
-                        -- Send bullethit for instant registration
-                        for i, bullet in pairs(args[2]["bullets"]) do
-                            if bullet[2] then
-                                local bullethitArgs = {
-                                    "bullethit",
-                                    targetPlayer,
-                                    hitPart.Position,
-                                    hitPart,
-                                    bullet[2]
-                                }
-                                originalSend(self, unpack(bullethitArgs))
-                            end
-                        end
-                        
-                        return -- Don't call original again
+                end
+            end)
+        end
+    end
+    
+    PF_ExpandedModels[modelName] = true
+end
+
+local function UpdatePFHitboxes()
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
+        CleanupAllPFHitboxes()
+        return
+    end
+    
+    local currentTime = tick()
+    if currentTime - PF_LastHitboxUpdate < PF_HITBOX_UPDATE_INTERVAL then return end
+    PF_LastHitboxUpdate = currentTime
+    
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    local enemyModels = GetAllEnemyModels()
+    local hitboxMethod = Config.Hitbox.Method
+    local shouldBeExpanded = {}
+    
+    for _, model in ipairs(enemyModels) do
+        local modelName = model.Name
+        if modelName == LocalPlayer.Name then continue end
+        
+        -- Determine target part
+        local partToModify = Config.Hitbox.TargetPart
+        if partToModify == "Random" then
+            partToModify = math.random(1, 2) == 1 and "Head" or "Torso"
+        elseif partToModify == "HumanoidRootPart" then
+            partToModify = "Torso" -- PF uses Torso instead
+        end
+        
+        if hitboxMethod == "HE (Static)" then
+            shouldBeExpanded[modelName] = {
+                model = model,
+                partToModify = partToModify,
+                size = Config.Hitbox.MaxSize
+            }
+        else -- DHE (Dynamic)
+            local checkPart = model:FindFirstChild(partToModify) or model:FindFirstChild("Head") or model:FindFirstChild("Torso")
+            if not checkPart then continue end
+            
+            local mousePos = game:GetService("UserInputService"):GetMouseLocation()
+            local fovRadius = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+            
+            local screenPos, onScreen = Camera:WorldToViewportPoint(checkPart.Position)
+            if not onScreen then continue end
+            
+            local screenDistance = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+            if screenDistance > fovRadius then continue end
+            
+            local proximityFactor = 1 - (screenDistance / fovRadius)
+            local dynamicSize = 1 + (Config.Hitbox.MaxSize - 1) * proximityFactor
+            
+            shouldBeExpanded[modelName] = {
+                model = model,
+                partToModify = partToModify,
+                size = dynamicSize
+            }
+        end
+    end
+    
+    -- Restore models that should no longer be expanded
+    for modelName in pairs(PF_ExpandedModels) do
+        if not shouldBeExpanded[modelName] then
+            local playersFolder = GetPlayersFolder()
+            if playersFolder then
+                for _, teamFolder in pairs(playersFolder:GetChildren()) do
+                    local model = teamFolder:FindFirstChild(modelName)
+                    if model then
+                        RestorePFHitbox(modelName, model)
+                        break
                     end
                 end
             end
         end
     end
     
-    -- Pass through all other network calls
-    return originalSend(self, unpack(args))
+    -- Expand models that should be expanded
+    for modelName, data in pairs(shouldBeExpanded) do
+        ExpandPFHitbox(data.model, data.partToModify, data.size)
+    end
 end
+
+-- ============================================
+-- PF MAIN UPDATE LOOP
+-- Runs ESP and Hitbox updates for PF
+-- ============================================
+local pfUpdateConnection = RunService.Heartbeat:Connect(function()
+    UpdatePFESP()
+    UpdatePFHitboxes()
+end)
+
+-- ============================================
+-- DISABLE MAIN SCRIPT ESP & HITBOX FOR PF
+-- Signal to main script that PF handles these
+-- ============================================
+getgenv().AX_PF_HandlesESP = true
+getgenv().AX_PF_HandlesHitbox = true
 
 -- ============================================
 -- CLEANUP ON CHARACTER RESPAWN
@@ -310,6 +699,10 @@ end
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
+    gunCF = nil
+    currentMotor = nil
+    pfTarget = nil
+    CleanupAllPFHitboxes()
 end)
 
 -- ============================================
@@ -317,6 +710,7 @@ end)
 -- ============================================
 getgenv().AX_PFLoaded = true
 
-print("  ✅ PF MODULE - network.send hooked (newbullets + bullethit)")
-print("  ✅ PF MODULE - trajectory() + getbodyparts() acquired")
-print("  ✅ PF MODULE - Bullet travel time delay active")
+print("  ✅ PF MODULE - Motor6D __newindex hooked")
+print("  ✅ PF MODULE - Custom ESP system active")
+print("  ✅ PF MODULE - Custom Hitbox system active")
+print("  ✅ PF MODULE - Team detection: " .. (GetLocalTeamName() or "waiting..."))
