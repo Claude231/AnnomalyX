@@ -1,6 +1,7 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v16.7
-    SIMPLIFIED - Based on working BSX scripts analysis
+    ANNOMALY X - Blox Strike Module (BSX) v16.8
+    BASED ON THE VERSION THAT WORKED
+    Only fixed: Aimbot precision + TeamCheck
     Creator: ElSacaLeche
 ]]
 
@@ -13,499 +14,239 @@ local Config = getgenv().AX_Config
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Workspace = workspace
+local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
-local mousemoverel = mousemoverel or function() end
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
--- ============================================
--- DEBUG: Find character structure
--- This runs once to understand BSX characters
--- ============================================
-local function DebugCharacter(player)
-    local char = player.Character
-    if not char then return end
-    local parts = {}
-    for _, child in ipairs(char:GetChildren()) do
-        table.insert(parts, child.Name .. " [" .. child.ClassName .. "]")
-    end
-    warn("[AX BSX DEBUG] " .. player.Name .. " character parts: " .. table.concat(parts, ", "))
-    
-    -- Check team info
-    local teamInfo = "Team: "
-    pcall(function() teamInfo = teamInfo .. tostring(player.Team) end)
-    pcall(function() teamInfo = teamInfo .. " | TeamColor: " .. tostring(player.TeamColor) end)
-    pcall(function() teamInfo = teamInfo .. " | Attr Team: " .. tostring(player:GetAttribute("Team")) end)
-    warn("[AX BSX DEBUG] " .. player.Name .. " " .. teamInfo)
-end
-
--- Run debug on first available player
-task.spawn(function()
-    task.wait(5)
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            DebugCharacter(p)
-            break
-        end
-    end
-    -- Also debug local player
-    if LocalPlayer.Character then
-        DebugCharacter(LocalPlayer)
-    end
+-- GuiInset for precision fix
+local GuiInset = Vector2.new(0, 36)
+pcall(function()
+    GuiInset = GuiService:GetGuiInset()
 end)
 
 -- ============================================
--- VARIABLES
+-- VARIABLES (same as working version)
 -- ============================================
-local LockedPlayer = nil
-local RandomPart = "Head"
-local LastRandomSwitch = 0
-local ESPCache = {}
-local LastESP = 0
+local AimbotLockedPlayer = nil
+local AimbotRandomPart = "Head"
+local AimbotLastRandomSwitch = 0
 
 -- ============================================
--- TEAM CHECK
--- Simple and working
+-- TEAM CHECK - SIMPLE
 -- ============================================
-local function SameTeam(a, b)
-    if not a or not b then return false end
-    
-    -- Try standard team
-    local s1, r1 = pcall(function()
-        return a.Team ~= nil and b.Team ~= nil and a.Team == b.Team
+local function IsSameTeam(p1, p2)
+    if not p1 or not p2 then return false end
+
+    local ok1, r1 = pcall(function()
+        return p1.Team and p2.Team and p1.Team == p2.Team
     end)
-    if s1 and r1 then return true end
-    
-    -- Try team color
-    local s2, r2 = pcall(function()
-        return a.TeamColor ~= nil and b.TeamColor ~= nil and a.TeamColor == b.TeamColor
+    if ok1 and r1 then return true end
+
+    local ok2, r2 = pcall(function()
+        return p1.TeamColor and p2.TeamColor
+            and tostring(p1.TeamColor) ~= "White"
+            and p1.TeamColor == p2.TeamColor
     end)
-    if s2 and r2 then return true end
-    
+    if ok2 and r2 then return true end
+
     return false
 end
 
 -- ============================================
--- FIND CHARACTER PARTS
--- Try every possible part name
+-- FUNCTIONS (exact same as working version)
 -- ============================================
-local function GetRoot(char)
-    if not char then return nil end
-    for _, name in ipairs({"HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso"}) do
-        local p = char:FindFirstChild(name)
-        if p and p:IsA("BasePart") then return p end
-    end
-    -- Fallback: any basepart
-    for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("BasePart") then return child end
-    end
-    return nil
-end
-
-local function GetHead(char)
-    if not char then return nil end
-    for _, name in ipairs({"Head", "HeadHB"}) do
-        local p = char:FindFirstChild(name)
-        if p and p:IsA("BasePart") then return p end
-    end
-    return GetRoot(char)
-end
-
-local function GetHum(char)
-    if not char then return nil end
-    return char:FindFirstChildOfClass("Humanoid")
-end
-
-local function GetAimPart(char)
-    if not char then return nil end
-    local s = Config.Aimbot.TargetPart
-    
-    if s == "Random" then
+local function GetAimbotTargetPart(character)
+    if not character then return nil end
+    if Config.Aimbot.TargetPart == "Random" then
         local t = tick()
-        if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+        if t - AimbotLastRandomSwitch >= (Config.Aimbot.RandomInterval or 0.5) then
             local opts = {}
-            for _, n in ipairs({"Head", "HumanoidRootPart", "Torso", "UpperTorso"}) do
-                if char:FindFirstChild(n) then table.insert(opts, n) end
+            for _, n in ipairs({"Head","HumanoidRootPart","UpperTorso","Torso"}) do
+                if character:FindFirstChild(n) then table.insert(opts, n) end
             end
-            if #opts > 0 then RandomPart = opts[math.random(#opts)] end
-            LastRandomSwitch = t
+            if #opts > 0 then AimbotRandomPart = opts[math.random(1, #opts)] end
+            AimbotLastRandomSwitch = t
         end
-        return char:FindFirstChild(RandomPart) or GetHead(char)
+        return character:FindFirstChild(AimbotRandomPart)
+            or character:FindFirstChild("Head")
+            or character:FindFirstChild("HumanoidRootPart")
     end
-    
-    if s == "Head" then return GetHead(char) end
-    return char:FindFirstChild(s) or GetRoot(char) or GetHead(char)
+    return character:FindFirstChild(Config.Aimbot.TargetPart)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
 end
 
--- ============================================
--- VISIBILITY
--- ============================================
-local function CanSee(part)
-    if not part then return false end
-    local myChar = LocalPlayer.Character
-    if not myChar then return true end
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
     local cam = Workspace.CurrentCamera
     if not cam then return true end
-    
-    local ignore = {myChar, cam}
-    for _, n in ipairs({"Ignore", "Debris", "Effects", "Bullets", "Projectiles"}) do
-        local f = Workspace:FindFirstChild(n)
-        if f then table.insert(ignore, f) end
-    end
-    
-    local rp = RaycastParams.new()
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    rp.FilterDescendantsInstances = ignore
-    
-    local o = cam.CFrame.Position
-    local d = part.Position - o
-    local dist = d.Magnitude
-    if dist < 3 then return true end
-    
-    local res = Workspace:Raycast(o, d.Unit * (dist - 0.5), rp)
-    if not res then return true end
-    if res.Instance and res.Instance:IsDescendantOf(part.Parent) then return true end
-    return false
-end
 
--- ============================================
--- PLAYER CHECK
--- ============================================
-local function ValidPlayer(player, checkTeam)
-    if not player or player == LocalPlayer then return false end
-    if not player.Parent then return false end
-    
-    if checkTeam and SameTeam(LocalPlayer, player) then return false end
-    
-    local char = player.Character
-    if not char then return false end
-    
-    local hum = GetHum(char)
-    if not hum or hum.Health <= 0 then return false end
-    
-    local root = GetRoot(char)
-    if not root then return false end
-    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+
+    local origin = cam.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
+
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
     return true
 end
 
--- ============================================
--- AIMBOT: FIND TARGET
--- ============================================
-local function FindAimTarget()
+local function IsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if Config.Aimbot.TeamCheck and IsSameTeam(LocalPlayer, player) then return false end
+    local c = player.Character
+    if not c then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetAimbotTarget()
     local cam = Workspace.CurrentCamera
-    if not cam then return nil, nil end
-    
+    if not cam then return nil end
     local method = Config.Aimbot.Method
-    
-    -- Aimlock: keep locked
-    if method == "Aimlock" and LockedPlayer then
-        if ValidPlayer(LockedPlayer, Config.Aimbot.TeamCheck) then
-            local tp = GetAimPart(LockedPlayer.Character)
-            if tp then
-                if Config.Aimbot.VisibleCheck and not CanSee(tp) then
-                    LockedPlayer = nil
-                else
-                    local sp, on = cam:WorldToViewportPoint(tp.Position)
-                    if on then return tp, LockedPlayer end
-                end
+
+    if method == "Aimlock" then
+        if AimbotLockedPlayer and IsPlayerValid(AimbotLockedPlayer) then
+            local tp = GetAimbotTargetPart(AimbotLockedPlayer.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
+                local sp, on = cam:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+            AimbotLockedPlayer = nil
+        end
+
+        local mousePos = UserInputService:GetMouseLocation()
+        local closestPart, closestDist, closestPlayer = nil, Config.Aimbot.FOVRadius, nil
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = cam:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closestPart = tp
+                closestPlayer = player
             end
         end
-        LockedPlayer = nil
-    end
-    
-    -- Find closest
-    local mouse = UserInputService:GetMouseLocation()
-    local vp = cam.ViewportSize
-    local center = Vector2.new(vp.X / 2, vp.Y / 2)
-    
-    -- Use center for Aimbot, mouse for Aimlock
-    local refPoint = (method == "Aimbot") and center or mouse
-    
-    local bestPart, bestDist, bestPlayer = nil, Config.Aimbot.FOVRadius or 150, nil
-    
-    for _, p in ipairs(Players:GetPlayers()) do
-        if not ValidPlayer(p, Config.Aimbot.TeamCheck) then continue end
-        
-        local tp = GetAimPart(p.Character)
-        if not tp then continue end
-        
-        if Config.Aimbot.VisibleCheck and not CanSee(tp) then continue end
-        
-        local sp, on = cam:WorldToViewportPoint(tp.Position)
-        if not on then continue end
-        
-        local d = (refPoint - Vector2.new(sp.X, sp.Y)).Magnitude
-        if d < bestDist then
-            bestPart = tp
-            bestDist = d
-            bestPlayer = p
-        end
-    end
-    
-    if method == "Aimlock" and bestPlayer then
-        LockedPlayer = bestPlayer
-    end
-    
-    return bestPart, bestPlayer
-end
+        if closestPlayer then AimbotLockedPlayer = closestPlayer end
+        return closestPart
 
--- ============================================
--- ESP: CREATE
--- ============================================
-local function MakeESP(player)
-    if ESPCache[player] then return end
-    
-    local e = {}
-    
-    e.Box = Drawing.new("Square")
-    e.Box.Thickness = 1
-    e.Box.Filled = false
-    e.Box.Visible = false
-    e.Box.Color = Color3.fromRGB(255, 255, 255)
-    
-    e.Outline = Drawing.new("Square")
-    e.Outline.Thickness = 3
-    e.Outline.Filled = false
-    e.Outline.Visible = false
-    e.Outline.Color = Color3.fromRGB(0, 0, 0)
-    e.Outline.Transparency = 0.5
-    
-    e.Name = Drawing.new("Text")
-    e.Name.Size = 13
-    e.Name.Center = true
-    e.Name.Outline = true
-    e.Name.Visible = false
-    e.Name.Color = Color3.fromRGB(255, 255, 255)
-    
-    e.Dist = Drawing.new("Text")
-    e.Dist.Size = 12
-    e.Dist.Center = true
-    e.Dist.Outline = true
-    e.Dist.Visible = false
-    e.Dist.Color = Color3.fromRGB(200, 200, 200)
-    
-    e.HpBg = Drawing.new("Square")
-    e.HpBg.Filled = true
-    e.HpBg.Visible = false
-    e.HpBg.Color = Color3.fromRGB(0, 0, 0)
-    e.HpBg.Transparency = 0.5
-    
-    e.HpBar = Drawing.new("Square")
-    e.HpBar.Filled = true
-    e.HpBar.Visible = false
-    e.HpBar.Color = Color3.fromRGB(0, 255, 0)
-    
-    ESPCache[player] = e
-end
-
-local function KillESP(player)
-    local e = ESPCache[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d:Remove() end) end
-    ESPCache[player] = nil
-end
-
-local function HideESP(player)
-    local e = ESPCache[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
-end
-
--- ============================================
--- ESP: UPDATE
--- ============================================
-local function DoESP()
-    if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(ESPCache) do HideESP(p) end
-        return
-    end
-    
-    local now = tick()
-    if now - LastESP < 0.08 then return end
-    LastESP = now
-    
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
-    
-    for player, esp in pairs(ESPCache) do
-        local ok = false
-        
-        if player and player.Parent and player ~= LocalPlayer then
-            if Config.ESP.TeamCheck and SameTeam(LocalPlayer, player) then
-                HideESP(player)
-                continue
-            end
-            
-            local char = player.Character
-            if char then
-                local hum = GetHum(char)
-                local root = GetRoot(char)
-                
-                if hum and root and hum.Health > 0 then
-                    local dist = (cam.CFrame.Position - root.Position).Magnitude
-                    
-                    if dist <= (Config.ESP.MaxDistance or 1000) and dist > 1 then
-                        local sp, on = cam:WorldToViewportPoint(root.Position)
-                        
-                        if on and sp.Z > 0 then
-                            ok = true
-                            
-                            -- Box size
-                            local bw = math.clamp(2000 / dist, 10, 300)
-                            local bh = math.clamp(2600 / dist, 12, 400)
-                            
-                            -- Try better sizing with head
-                            local head = GetHead(char)
-                            if head and head ~= root then
-                                local hsp = cam:WorldToViewportPoint(head.Position)
-                                local dy = math.abs(hsp.Y - sp.Y)
-                                if dy > 3 then
-                                    bh = dy * 2.4
-                                    bw = bh * 0.55
-                                end
-                            end
-                            
-                            local bx = sp.X - bw / 2
-                            local by = sp.Y - bh / 2
-                            
-                            -- Color: red enemy, green ally
-                            local ally = SameTeam(LocalPlayer, player)
-                            local col = ally and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 50, 50)
-                            
-                            esp.Outline.Size = Vector2.new(bw + 2, bh + 2)
-                            esp.Outline.Position = Vector2.new(bx - 1, by - 1)
-                            esp.Outline.Visible = Config.ESP.Boxes
-                            
-                            esp.Box.Size = Vector2.new(bw, bh)
-                            esp.Box.Position = Vector2.new(bx, by)
-                            esp.Box.Color = col
-                            esp.Box.Visible = Config.ESP.Boxes
-                            
-                            esp.Name.Text = player.DisplayName or player.Name
-                            esp.Name.Position = Vector2.new(sp.X, by - 15)
-                            esp.Name.Visible = Config.ESP.Names
-                            
-                            esp.Dist.Text = math.floor(dist) .. "m"
-                            esp.Dist.Position = Vector2.new(sp.X, by + bh + 2)
-                            esp.Dist.Visible = Config.ESP.Distance
-                            
-                            -- Health bar
-                            local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-                            local barW = 3
-                            local barX = bx - barW - 2
-                            
-                            esp.HpBg.Size = Vector2.new(barW, bh)
-                            esp.HpBg.Position = Vector2.new(barX, by)
-                            esp.HpBg.Visible = Config.ESP.Boxes
-                            
-                            local fh = math.max(bh * hp, 1)
-                            esp.HpBar.Size = Vector2.new(barW - 1, fh)
-                            esp.HpBar.Position = Vector2.new(barX + 0.5, by + bh - fh)
-                            esp.HpBar.Visible = Config.ESP.Boxes
-                            
-                            if hp > 0.6 then esp.HpBar.Color = Color3.fromRGB(0, 255, 0)
-                            elseif hp > 0.3 then esp.HpBar.Color = Color3.fromRGB(255, 255, 0)
-                            else esp.HpBar.Color = Color3.fromRGB(255, 0, 0) end
-                        end
-                    end
-                end
+    else
+        local vpSize = cam.ViewportSize
+        local center = Vector2.new(vpSize.X / 2, vpSize.Y / 2)
+        local closestPart, closestDist = nil, Config.Aimbot.FOVRadius
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = cam:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closestPart = tp
             end
         end
-        
-        if not ok then HideESP(player) end
+        return closestPart
     end
 end
 
 -- ============================================
--- MAIN LOOP
+-- AIMBOT LOOP (same mousemoverel as working version)
+-- ONLY CHANGE: GuiInset offset for precision
 -- ============================================
 RunService.RenderStepped:Connect(function()
-    -- AIMBOT
-    if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local target = FindAimTarget()
-        
-        if target then
-            local cam = Workspace.CurrentCamera
-            if cam then
-                local pos = target.Position
-                
-                -- Prediction
-                pcall(function()
-                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-                        local vel = target.AssemblyLinearVelocity
-                        if vel and vel.Magnitude > 0.1 then
-                            pos = pos + vel * Config.Aimbot.Prediction
-                        end
-                    end
-                end)
-                
-                local sp, on = cam:WorldToViewportPoint(pos)
-                
-                if on then
-                    local mouse = UserInputService:GetMouseLocation()
-                    
-                    -- FIX: WorldToViewportPoint no incluye GuiInset
-                    -- GetMouseLocation SI incluye GuiInset
-                    -- Sumamos GuiInset a la screen pos para igualar
-                    local dx = (sp.X) - mouse.X
-                    local dy = (sp.Y + GuiInset.Y) - mouse.Y
-                    local d = math.sqrt(dx * dx + dy * dy)
-                    
-                    if d > 1 then
-                        local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-                        local spd = 1 / sm
-                        
-                        local mx = dx * spd
-                        local my = dy * spd
-                        
-                        if d < 3 then mx = dx my = dy end
-                        
-                        mx = math.clamp(mx, -200, 200)
-                        my = math.clamp(my, -200, 200)
-                        
-                        if math.abs(mx) > 0.2 or math.abs(my) > 0.2 then
-                            mousemoverel(mx, my)
-                        end
-                    end
-                end
-            end
-        end
-    else
-        if not Config.Aimbot.Active then LockedPlayer = nil end
+    Camera = Workspace.CurrentCamera
+
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        if not Config.Aimbot.Active then AimbotLockedPlayer = nil end
+        return
     end
-    
-    -- ESP
-    DoESP()
+
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+
+    local tp = GetAimbotTarget()
+    if not tp then return end
+
+    local targetPos = tp.Position
+    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+        pcall(function()
+            local vel = tp.AssemblyLinearVelocity
+            if vel and vel.Magnitude > 0.1 then
+                targetPos = targetPos + vel * Config.Aimbot.Prediction
+            end
+        end)
+    end
+
+    local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
+    if not onScreen then return end
+
+    local mousePos = UserInputService:GetMouseLocation()
+
+    -- PRECISION FIX:
+    -- GetMouseLocation() includes GuiInset (adds ~36px Y)
+    -- WorldToViewportPoint() does NOT include GuiInset
+    -- So we add GuiInset.Y to screenPos to match mouse space
+    local deltaX = screenPos.X - mousePos.X
+    local deltaY = (screenPos.Y + GuiInset.Y) - mousePos.Y
+
+    local dist = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+
+    if dist < 1 then return end
+
+    local smoothness = math.max(Config.Aimbot.Smoothness or 5, 1)
+    local speed = 1 / smoothness
+
+    local moveX = deltaX * speed
+    local moveY = deltaY * speed
+
+    -- Snap when very close to avoid jitter
+    if dist < 3 then
+        moveX = deltaX
+        moveY = deltaY
+    end
+
+    moveX = math.clamp(moveX, -200, 200)
+    moveY = math.clamp(moveY, -200, 200)
+
+    if math.abs(moveX) > 0.3 or math.abs(moveY) > 0.3 then
+        mousemoverel(moveX, moveY)
+    end
 end)
 
 -- ============================================
--- INIT
+-- CLEANUP
 -- ============================================
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then MakeESP(p) end
-end
-
-Players.PlayerAdded:Connect(MakeESP)
-
-Players.PlayerRemoving:Connect(function(p)
-    if LockedPlayer == p then LockedPlayer = nil end
-    KillESP(p)
-end)
-
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    LockedPlayer = nil
-    pcall(function()
-        GuiInset = game:GetService("GuiService"):GetGuiInset()
-    end)
+    Camera = Workspace.CurrentCamera
+    AimbotLockedPlayer = nil
+    pcall(function() GuiInset = GuiService:GetGuiInset() end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    if AimbotLockedPlayer == player then AimbotLockedPlayer = nil end
 end)
 
 -- ============================================
 -- SIGNAL
+-- Tell main script BSX handles aimbot
+-- Do NOT set AX_PF_HandlesESP so main script ESP works
 -- ============================================
 getgenv().AX_BSXLoaded = true
 getgenv().AX_BSX_HandlesAimbot = true
-getgenv().AX_PF_HandlesESP = true
-
-warn("[ANNOMALY X] BSX Module v16.7 loaded - Aimbot + ESP")
