@@ -1,29 +1,38 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║           ANNOMALY X - Arsenal Module                     ║
-    ║           Mouse.__index + Workspace raycast hook          ║
+    ║           ANNOMALY X - Arsenal Module v3                  ║
+    ║           Remote Intercept + Camera Hook Method           ║
     ║           Creator: ElSacaLeche                            ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    ARSENAL ANALYSIS:
+    ARSENAL SILENT AIM - HOW IT ACTUALLY WORKS:
     
-    Arsenal's weapon system:
-    1. Reads Mouse.Hit for aim direction
-    2. Uses workspace:FindPartOnRay() for bullet raycasts
-    3. Sends hit data via RemoteEvents
+    Arsenal's weapon system does NOT use Mouse.Hit for hit detection.
+    Arsenal works like this:
     
-    Arsenal's anticheat:
-    - Checks fire rate (don't shoot faster than allowed)
-    - Checks damage values (don't modify damage)
-    - Does NOT heavily check aim consistency
-    - No BACS-level metamethod detection
+    1. Player clicks to shoot
+    2. Game reads Camera.CFrame.LookVector for aim direction
+    3. Internal weapon module creates a ray from camera
+    4. Sends hit data via RemoteEvent to server
     
-    METHOD:
-    1. Hook Mouse.__index for Hit/Target/UnitRay
-    2. Hook game.__namecall for FindPartOnRay (safe in Arsenal)
-    3. Both redirect to target enemy
+    METHODS USED BY PAID SCRIPTS:
     
-    Arsenal PlaceId: 286090429
+    Method 1: Hook Camera.CFrame via __index on workspace.CurrentCamera
+              When the weapon module reads Camera.CFrame, return a CFrame
+              that looks at the target. This redirects the bullet.
+    
+    Method 2: Hook the remote that sends hit data
+              Intercept FireServer calls and replace the hit position/part
+    
+    Method 3: Hook workspace.Raycast and FindPartOnRay
+              Arsenal's internal raycast gets redirected to target
+    
+    We use ALL THREE for maximum compatibility:
+    - Camera CFrame redirect (primary - this is what paid scripts use)
+    - Raycast hooks (secondary)  
+    - Remote intercept (tertiary)
+    
+    IMPORTANT: Arsenal does NOT have BACS. Safe to use hookmetamethod.
 ]]
 
 if not getgenv().AX_Config then
@@ -39,7 +48,9 @@ local hookmetamethod = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
 local checkcaller = checkcaller or function() return false end
 local getrawmetatable = getrawmetatable
-local setreadonly = setreadonly or function() end
+local setreadonly = setreadonly or function(t, v) 
+    if make_writeable and not v then make_writeable(t) end 
+end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
@@ -52,11 +63,8 @@ local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
 -- ARSENAL AC HANDLING
--- Arsenal's AC is lighter than CA/Rivals
--- Safe to use hookmetamethod here
 -- ============================================
 
--- Kick protection
 pcall(function()
     local oldKick = LocalPlayer.Kick
     if typeof(oldKick) == "function" then
@@ -67,7 +75,6 @@ pcall(function()
     end
 end)
 
--- Error suppression
 pcall(function()
     local SC = cloneref(game:GetService("ScriptContext"))
     if getconnections then
@@ -82,15 +89,18 @@ end)
 -- ============================================
 
 local CurrentTarget = nil
+local CurrentTargetPosition = nil
 
 local function IsVisible(targetPart)
     if not targetPart then return false end
     local character = LocalPlayer.Character
     if not character then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character, Camera}
-    local origin = Camera.CFrame.Position
+    params.FilterDescendantsInstances = {character, cam}
+    local origin = cam.CFrame.Position
     local direction = targetPart.Position - origin
     local result = Workspace:Raycast(origin, direction, params)
     if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
@@ -116,12 +126,12 @@ local function GetTargetPart(character, setting)
 end
 
 local function FindTarget()
-    Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
     
     local closest = nil
     local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local screenCenter = Camera.ViewportSize / 2
+    local mousePos = UserInputService:GetMouseLocation()
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -139,10 +149,10 @@ local function FindTarget()
         
         if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
         
-        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
         if not onScreen then continue end
         
-        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if dist < closestDist then
             closestDist = dist
             closest = part
@@ -153,122 +163,257 @@ local function FindTarget()
 end
 
 -- ============================================
--- LAYER 1: MOUSE __INDEX HOOK
--- Redirects Mouse.Hit, Mouse.Target, Mouse.UnitRay
+-- METHOD 1: CAMERA CFRAME HOOK (PRIMARY)
+-- This is the main method used by paid Arsenal scripts.
+-- 
+-- Arsenal's weapon modules read Camera.CFrame to get
+-- the aim direction. By hooking __index on the Camera's
+-- metatable (via game's __index), when Arsenal reads
+-- Camera.CFrame or Camera.CFrame.LookVector during a
+-- shot, we return a CFrame looking at target.
+--
+-- We only redirect when:
+-- 1. Silent is active
+-- 2. Mouse button is held (shooting)
+-- 3. Target exists
 -- ============================================
 
-local mouseHooked = false
+local isMouseDown = false
+local cameraHooked = false
 
+-- Track mouse state for knowing when player is shooting
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isMouseDown = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isMouseDown = false
+    end
+end)
+
+-- Hook game's __index to intercept Camera.CFrame reads
 pcall(function()
-    local mt = getrawmetatable(Mouse)
-    if mt then
-        local oldIndex = mt.__index
-        setreadonly(mt, false)
-        
-        mt.__index = newcclosure(function(self, key)
-            if self == Mouse and CurrentTarget and CurrentTarget.Parent then
-                if Config.Silent.Enabled and Config.Silent.Active then
-                    if math.random(1, 100) <= Config.Silent.HitChance then
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+        -- Only intercept Camera CFrame reads
+        if not checkcaller() and CurrentTarget and CurrentTarget.Parent then
+            if Config.Silent.Enabled and Config.Silent.Active then
+                if math.random(1, 100) <= Config.Silent.HitChance then
+                    -- Camera.CFrame redirect
+                    if self == Workspace.CurrentCamera then
+                        if key == "CFrame" then
+                            local cam = Workspace.CurrentCamera
+                            local realCF = oldIndex(self, key)
+                            -- Only redirect when shooting
+                            if isMouseDown then
+                                return CFrame.lookAt(realCF.Position, CurrentTarget.Position)
+                            end
+                            return realCF
+                        elseif key == "ViewportSize" then
+                            return oldIndex(self, key)
+                        end
+                    end
+                    
+                    -- Mouse property redirects (backup)
+                    if self == Mouse then
                         if key == "Hit" then
                             return CFrame.new(CurrentTarget.Position)
                         elseif key == "Target" then
                             return CurrentTarget
-                        elseif key == "X" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTarget.Position)
-                            return pos.X
-                        elseif key == "Y" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTarget.Position)
-                            return pos.Y
                         elseif key == "UnitRay" then
-                            local origin = Camera.CFrame.Position
-                            local dir = (CurrentTarget.Position - origin).Unit
-                            return Ray.new(origin, dir)
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local origin = cam.CFrame.Position
+                                local dir = (CurrentTarget.Position - origin).Unit
+                                return Ray.new(origin, dir)
+                            end
+                        elseif key == "X" then
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local pos = cam:WorldToScreenPoint(CurrentTarget.Position)
+                                return pos.X
+                            end
+                        elseif key == "Y" then
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local pos = cam:WorldToScreenPoint(CurrentTarget.Position)
+                                return pos.Y
+                            end
                         end
                     end
                 end
             end
-            return oldIndex(self, key)
-        end)
-        
-        setreadonly(mt, true)
-        mouseHooked = true
-    end
+        end
+        return oldIndex(self, key)
+    end))
+    cameraHooked = true
 end)
 
 -- ============================================
--- LAYER 2: __NAMECALL HOOK FOR RAYCASTS
--- Arsenal uses FindPartOnRay - safe to hook here
--- Arsenal does NOT have BACS-level detection
+-- METHOD 2: NAMECALL HOOK FOR RAYCASTS
+-- Arsenal uses workspace:FindPartOnRay() internally
+-- Hook these to redirect bullet trajectory
 -- ============================================
 
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-    
-    if checkcaller() then
-        return oldNamecall(self, ...)
-    end
-    
-    if not Config.Silent.Enabled or not Config.Silent.Active then
-        return oldNamecall(self, ...)
-    end
-    
-    if not CurrentTarget or not CurrentTarget.Parent then
-        return oldNamecall(self, ...)
-    end
-    
-    if math.random(1, 100) > Config.Silent.HitChance then
-        return oldNamecall(self, ...)
-    end
-    
-    if self == Workspace or self == workspace then
-        if method == "Raycast" then
-            local origin = args[1]
-            local direction = args[2]
-            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
-                return oldNamecall(self, unpack(args))
+local namecallHooked = false
+
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        
+        if checkcaller() then
+            return oldNamecall(self, ...)
+        end
+        
+        if not Config.Silent.Enabled or not Config.Silent.Active then
+            return oldNamecall(self, ...)
+        end
+        
+        if not CurrentTarget or not CurrentTarget.Parent then
+            return oldNamecall(self, ...)
+        end
+        
+        if math.random(1, 100) > Config.Silent.HitChance then
+            return oldNamecall(self, ...)
+        end
+        
+        -- Workspace raycast methods
+        if self == Workspace or self == workspace then
+            if method == "Raycast" then
+                local origin = args[1]
+                local direction = args[2]
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                    args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+            
+            if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" 
+                or method == "FindPartOnRayWithWhitelist" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" then
+                    local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+                    args[1] = Ray.new(ray.Origin, newDir)
+                    return oldNamecall(self, unpack(args))
+                end
             end
         end
         
-        if method == "FindPartOnRay" then
-            local ray = args[1]
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                args[1] = Ray.new(ray.Origin, newDir)
-                return oldNamecall(self, unpack(args))
+        -- Remote intercept - modify hit data sent to server
+        if typeof(self) == "Instance" then
+            if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
+                if method == "FireServer" or method == "InvokeServer" then
+                    -- Look through args for Vector3/CFrame that could be hit position
+                    for i, arg in ipairs(args) do
+                        if typeof(arg) == "Vector3" then
+                            -- Check if this looks like a position (near a player)
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local camPos = cam.CFrame.Position
+                                local dist = (arg - camPos).Magnitude
+                                -- If it's a reasonable shooting distance
+                                if dist > 5 and dist < 2000 then
+                                    args[i] = CurrentTarget.Position
+                                end
+                            end
+                        elseif typeof(arg) == "CFrame" then
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local dist = (arg.Position - cam.CFrame.Position).Magnitude
+                                if dist > 5 and dist < 2000 then
+                                    args[i] = CFrame.new(CurrentTarget.Position)
+                                end
+                            end
+                        end
+                    end
+                    return oldNamecall(self, unpack(args))
+                end
             end
         end
         
-        if method == "FindPartOnRayWithIgnoreList" then
-            local ray = args[1]
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                args[1] = Ray.new(ray.Origin, newDir)
-                return oldNamecall(self, unpack(args))
-            end
-        end
-        
-        if method == "FindPartOnRayWithWhitelist" then
-            local ray = args[1]
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                args[1] = Ray.new(ray.Origin, newDir)
-                return oldNamecall(self, unpack(args))
-            end
-        end
-    end
+        return oldNamecall(self, ...)
+    end))
+    namecallHooked = true
+end)
+
+-- ============================================
+-- METHOD 3: REMOTE SPY - Find Arsenal's specific remotes
+-- Arsenal sends weapon fire data through specific remotes
+-- ============================================
+
+local arsenalRemoteHooked = false
+
+task.spawn(function()
+    task.wait(2) -- Wait for game to load
     
-    return oldNamecall(self, ...)
-end))
+    pcall(function()
+        -- Arsenal commonly uses remotes in ReplicatedStorage
+        local RS = cloneref(game:GetService("ReplicatedStorage"))
+        
+        -- Look for weapon-related remotes
+        local function hookRemote(remote)
+            if not remote:IsA("RemoteEvent") and not remote:IsA("RemoteFunction") then return end
+            
+            local remoteName = remote.Name:lower()
+            -- Arsenal weapon remotes often have these names
+            local weaponKeywords = {"fire", "shoot", "hit", "damage", "weapon", "gun", "bullet"}
+            
+            local isWeaponRemote = false
+            for _, keyword in ipairs(weaponKeywords) do
+                if remoteName:find(keyword) then
+                    isWeaponRemote = true
+                    break
+                end
+            end
+            
+            if isWeaponRemote and remote:IsA("RemoteEvent") then
+                local oldFire = remote.FireServer
+                hookfunction(oldFire, newcclosure(function(self, ...)
+                    if Config.Silent.Enabled and Config.Silent.Active and CurrentTarget and CurrentTarget.Parent then
+                        if math.random(1, 100) <= Config.Silent.HitChance then
+                            local args = {...}
+                            for i, arg in ipairs(args) do
+                                if typeof(arg) == "Vector3" then
+                                    args[i] = CurrentTarget.Position
+                                elseif typeof(arg) == "CFrame" then
+                                    args[i] = CFrame.new(CurrentTarget.Position)
+                                elseif typeof(arg) == "Instance" and arg:IsA("BasePart") then
+                                    args[i] = CurrentTarget
+                                end
+                            end
+                            return oldFire(self, unpack(args))
+                        end
+                    end
+                    return oldFire(self, ...)
+                end))
+                arsenalRemoteHooked = true
+            end
+        end
+        
+        -- Hook existing remotes
+        for _, child in ipairs(RS:GetDescendants()) do
+            pcall(function() hookRemote(child) end)
+        end
+        
+        -- Hook new remotes
+        RS.DescendantAdded:Connect(function(child)
+            task.wait(0.1)
+            pcall(function() hookRemote(child) end)
+        end)
+    end)
+end)
 
 -- ============================================
 -- TARGET UPDATE
 -- ============================================
 
 RunService.Heartbeat:Connect(function()
-    Camera = Workspace.CurrentCamera
     if Config.Silent.Enabled and Config.Silent.Active then
         CurrentTarget = FindTarget()
     else
@@ -282,8 +427,8 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
-    Camera = Workspace.CurrentCamera
     CurrentTarget = nil
+    isMouseDown = false
 end)
 
 -- ============================================
@@ -291,7 +436,8 @@ end)
 -- ============================================
 getgenv().AX_ArsenalLoaded = true
 
-print("  ✅ ARSENAL MODULE loaded")
-print("  ✅ Mouse.__index: " .. tostring(mouseHooked))
-print("  ✅ __namecall: Raycast + FindPartOnRay")
-print("  ✅ Dual-layer silent aim active")
+print("  ✅ ARSENAL MODULE v3 loaded")
+print("  ✅ Camera CFrame hook: " .. tostring(cameraHooked))
+print("  ✅ Namecall hook: " .. tostring(namecallHooked))
+print("  ✅ Remote spy: scanning...")
+print("  ✅ Triple-layer silent aim active")
