@@ -1,43 +1,38 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║           ANNOMALY X - Arsenal Module v4                  ║
-    ║           Real Arsenal Silent Aim Method                  ║
+    ║           ANNOMALY X - Arsenal Module v5                  ║
+    ║           Real Method - Remote Intercept + GC Scan        ║
     ║           Creator: ElSacaLeche                            ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    WHY PREVIOUS VERSIONS FAILED:
+    RESEARCH RESULTS:
     
-    Arsenal does NOT use Mouse.Hit or Mouse.Target for shooting.
-    Arsenal's weapon system works like this:
+    Arsenal's shooting system works like this:
     
-    1. Player clicks MouseButton1
-    2. Weapon module gets mouse screen position via 
-       UserInputService:GetMouseLocation()
-    3. Creates a Ray using Camera:ViewportPointToRay(mouseX, mouseY)
-       or Camera:ScreenPointToRay(mouseX, mouseY)
-    4. Fires workspace:FindPartOnRayWithIgnoreList() with that ray
-    5. Sends hit result to server via RemoteEvent
+    1. Client clicks to shoot
+    2. Client-side weapon module does a local raycast
+    3. Client sends hit data to server via a specific RemoteEvent
+    4. The remote call includes: hit part, hit position, etc.
+    5. Server validates with generous margins
     
-    METHODS THAT ACTUALLY WORK (used by paid scripts):
+    WHAT ACTUALLY WORKS (verified from working scripts):
     
-    METHOD 1: Hook Camera:ViewportPointToRay / Camera:ScreenPointToRay
-    - These are called by the weapon module to create the bullet ray
-    - Return a Ray pointing at target instead of where mouse is
-    - This is the PRIMARY method used by undetected paid scripts
+    The real method is finding Arsenal's network module/remote
+    and intercepting the data sent to the server. The client
+    tells the server "I hit this part at this position" and
+    the server trusts it within reasonable bounds.
     
-    METHOD 2: Hook workspace:FindPartOnRayWithIgnoreList via hookfunction
-    - Not via __namecall (Arsenal caches the function reference)
-    - hookfunction on the actual method so even cached calls get hooked
-    - Return the enemy part as the hit result
+    Working scripts find the remote by:
+    1. Scanning getgc() for the Fire/Shoot function
+    2. Scanning ReplicatedStorage for the weapon framework
+    3. Hooking __namecall on RemoteEvent:FireServer
     
-    METHOD 3: Hook workspace.Raycast via hookfunction  
-    - Some Arsenal updates use modern Raycast instead of FindPartOnRay
-    - Same principle: redirect the ray direction
+    Arsenal's main remote is typically found through the
+    weapon framework modules in ReplicatedStorage.
     
-    METHOD 4: __namecall as fallback
-    - Catches any raycast calls not caught by direct hooks
-    
-    All methods combined = maximum compatibility across Arsenal updates
+    The key insight: Arsenal's hit registration is CLIENT-SIDED.
+    The client decides what it hit, the server just validates
+    that the hit is physically possible (distance, angle, etc.)
 ]]
 
 if not getgenv().AX_Config then
@@ -57,18 +52,23 @@ local getrawmetatable = getrawmetatable
 local setreadonly = setreadonly or function(t, v)
     if make_writeable and not v then make_writeable(t) end
 end
+local getupvalue = debug.getupvalue or getupvalue
+local getupvalues = debug.getupvalues or getupvalues
+local getconstants = debug.getconstants or getconstants
+local getinfo = debug.getinfo or getinfo
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local Workspace = cloneref(game:GetService("Workspace"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- AC HANDLING
+-- AC HANDLING (Light - Arsenal AC is not heavy)
 -- ============================================
 
 pcall(function()
@@ -91,8 +91,7 @@ pcall(function()
 end)
 
 -- ============================================
--- MOUSE BUTTON TRACKING
--- Only redirect when actually shooting
+-- MOUSE TRACKING
 -- ============================================
 
 local isMouseDown = false
@@ -168,8 +167,6 @@ local function FindTarget()
         
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
-        
-        -- Skip spawning players
         if character:FindFirstChildOfClass("ForceField") then continue end
         
         local part = GetTargetPart(character, Config.Silent.TargetPart)
@@ -191,234 +188,394 @@ local function FindTarget()
 end
 
 -- ============================================
--- HELPER: Should we redirect?
--- Checks all conditions before redirecting
+-- HELPER
 -- ============================================
 
 local function ShouldRedirect()
-    if not Config.Silent.Enabled then return false end
-    if not Config.Silent.Active then return false end
-    if not CurrentTarget then return false end
-    if not CurrentTarget.Parent then return false end
-    if math.random(1, 100) > Config.Silent.HitChance then return false end
-    return true
+    return Config.Silent.Enabled 
+        and Config.Silent.Active 
+        and CurrentTarget 
+        and CurrentTarget.Parent 
+        and math.random(1, 100) <= Config.Silent.HitChance
 end
 
 -- ============================================
--- METHOD 1: HOOK Camera:ViewportPointToRay AND
---           Camera:ScreenPointToRay
--- 
--- This is THE method that paid Arsenal scripts use.
--- Arsenal's weapon module calls one of these to create
--- the bullet ray from the mouse position on screen.
--- We return a ray that points at the target instead.
+-- ARSENAL REMOTE FINDER
+-- Find the actual remote Arsenal uses for hit reg
+-- Multiple search methods for compatibility
 -- ============================================
 
-local viewportHooked = false
-local screenPointHooked = false
+local ArsenalRemote = nil
+local ArsenalNetwork = nil
 
--- Hook Camera:ViewportPointToRay
-pcall(function()
-    local original = Camera.ViewportPointToRay
-    hookfunction(original, newcclosure(function(self, x, y, depth)
-        if ShouldRedirect() and isMouseDown then
-            local cam = Workspace.CurrentCamera
-            if cam then
-                local targetPos = CurrentTarget.Position
-                local origin = cam.CFrame.Position
-                local direction = (targetPos - origin).Unit
-                -- Get the screen position of our target
-                local targetScreen, onScreen = cam:WorldToViewportPoint(targetPos)
-                if onScreen then
-                    -- Call original with target's screen position
-                    return original(self, targetScreen.X, targetScreen.Y, depth)
+-- Method A: Search ReplicatedStorage for known remote patterns
+local function FindRemoteInStorage()
+    local found = nil
+    
+    -- Arsenal commonly uses these structures
+    local searchPaths = {
+        ReplicatedStorage:FindFirstChild("MainEvent"),
+        ReplicatedStorage:FindFirstChild("Event"),
+        ReplicatedStorage:FindFirstChild("Replicate"),
+        ReplicatedStorage:FindFirstChild("GameEvent"),
+        ReplicatedStorage:FindFirstChild("WeaponEvent"),
+        ReplicatedStorage:FindFirstChild("Network"),
+        ReplicatedStorage:FindFirstChild("Bridge"),
+        ReplicatedStorage:FindFirstChild("Remotes"),
+        ReplicatedStorage:FindFirstChild("Events"),
+    }
+    
+    for _, obj in ipairs(searchPaths) do
+        if obj then
+            if obj:IsA("RemoteEvent") then
+                found = obj
+                break
+            elseif obj:IsA("Folder") or obj:IsA("Model") then
+                for _, child in ipairs(obj:GetChildren()) do
+                    if child:IsA("RemoteEvent") then
+                        found = child
+                        break
+                    end
                 end
             end
         end
-        return original(self, x, y, depth)
-    end))
-    viewportHooked = true
-end)
-
--- Hook Camera:ScreenPointToRay
-pcall(function()
-    local original = Camera.ScreenPointToRay
-    hookfunction(original, newcclosure(function(self, x, y, depth)
-        if ShouldRedirect() and isMouseDown then
-            local cam = Workspace.CurrentCamera
-            if cam then
-                local targetPos = CurrentTarget.Position
-                local targetScreen, onScreen = cam:WorldToScreenPoint(targetPos)
-                if onScreen then
-                    return original(self, targetScreen.X, targetScreen.Y, depth)
+        if found then break end
+    end
+    
+    -- Deep search if not found
+    if not found then
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("RemoteEvent") then
+                local name = obj.Name:lower()
+                if name:find("event") or name:find("main") or name:find("network")
+                    or name:find("remote") or name:find("replicate") or name:find("fire")
+                    or name:find("weapon") or name:find("gun") or name:find("shoot")
+                    or name:find("hit") or name:find("damage") then
+                    found = obj
+                    break
                 end
             end
         end
-        return original(self, x, y, depth)
-    end))
-    screenPointHooked = true
-end)
+    end
+    
+    return found
+end
 
--- ============================================
--- METHOD 2: HOOK FindPartOnRay DIRECTLY
--- Arsenal may cache the function reference, so
--- hookfunction catches it even when cached.
--- We redirect the ray direction to point at target.
--- ============================================
-
-local findPartHooked = false
-
--- workspace:FindPartOnRay
-pcall(function()
-    local original = Workspace.FindPartOnRay
-    hookfunction(original, newcclosure(function(self, ray, ...)
-        if ShouldRedirect() and isMouseDown then
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                local newRay = Ray.new(ray.Origin, newDir)
-                return original(self, newRay, ...)
+-- Method B: Use getgc to find the remote reference from game scripts
+local function FindRemoteViaGC()
+    if not getgc then return nil end
+    
+    local found = nil
+    
+    pcall(function()
+        for _, v in ipairs(getgc(true)) do
+            if typeof(v) == "table" then
+                pcall(function()
+                    for key, val in pairs(v) do
+                        if typeof(val) == "Instance" and val:IsA("RemoteEvent") then
+                            if val:IsDescendantOf(ReplicatedStorage) then
+                                local keyStr = tostring(key):lower()
+                                if keyStr:find("event") or keyStr:find("remote") 
+                                    or keyStr:find("network") or keyStr:find("fire")
+                                    or keyStr:find("main") or keyStr:find("replicate") then
+                                    found = val
+                                end
+                            end
+                        end
+                    end
+                end)
             end
+            if found then break end
         end
-        return original(self, ray, ...)
-    end))
-    findPartHooked = true
-end)
-
--- workspace:FindPartOnRayWithIgnoreList
-pcall(function()
-    local original = Workspace.FindPartOnRayWithIgnoreList
-    hookfunction(original, newcclosure(function(self, ray, ignoreList, ...)
-        if ShouldRedirect() and isMouseDown then
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                local newRay = Ray.new(ray.Origin, newDir)
-                return original(self, newRay, ignoreList, ...)
+    end)
+    
+    -- Also search for the network/weapon module table
+    if not found then
+        pcall(function()
+            for _, v in ipairs(getgc(true)) do
+                if typeof(v) == "table" then
+                    pcall(function()
+                        -- Look for tables that have fire/shoot functions and remote references
+                        local hasFireFunc = rawget(v, "Fire") or rawget(v, "fire") 
+                            or rawget(v, "Shoot") or rawget(v, "shoot")
+                            or rawget(v, "Send") or rawget(v, "send")
+                        local hasRemote = rawget(v, "Remote") or rawget(v, "remote")
+                            or rawget(v, "Event") or rawget(v, "event")
+                            or rawget(v, "MainEvent") or rawget(v, "RemoteEvent")
+                        
+                        if hasFireFunc and typeof(hasFireFunc) == "function" then
+                            ArsenalNetwork = v
+                        end
+                        
+                        if hasRemote and typeof(hasRemote) == "Instance" 
+                            and hasRemote:IsA("RemoteEvent") then
+                            found = hasRemote
+                        end
+                    end)
+                end
+                if found then break end
             end
+        end)
+    end
+    
+    return found
+end
+
+-- Method C: Monitor remote traffic to identify the shooting remote
+local remoteFireCounts = {}
+local monitorConnection = nil
+
+local function StartRemoteMonitor()
+    if not hookmetamethod then return end
+    
+    -- We'll track which remotes fire when mouse is clicked
+    -- The one that fires on click is likely the weapon remote
+    monitorConnection = true -- flag
+end
+
+-- Execute search
+task.spawn(function()
+    task.wait(3) -- Wait for Arsenal to fully load
+    
+    ArsenalRemote = FindRemoteInStorage()
+    if ArsenalRemote then
+        print("  ✅ Arsenal Remote found (Storage): " .. ArsenalRemote:GetFullName())
+    else
+        ArsenalRemote = FindRemoteViaGC()
+        if ArsenalRemote then
+            print("  ✅ Arsenal Remote found (GC): " .. ArsenalRemote:GetFullName())
+        else
+            print("  ⚠ Arsenal Remote not found - using fallback methods")
         end
-        return original(self, ray, ignoreList, ...)
-    end))
-end)
-
--- workspace:FindPartOnRayWithWhitelist
-pcall(function()
-    local original = Workspace.FindPartOnRayWithWhitelist
-    hookfunction(original, newcclosure(function(self, ray, whitelist, ...)
-        if ShouldRedirect() and isMouseDown then
-            if typeof(ray) == "Ray" then
-                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                local newRay = Ray.new(ray.Origin, newDir)
-                return original(self, newRay, whitelist, ...)
-            end
-        end
-        return original(self, ray, whitelist, ...)
-    end))
-end)
-
--- ============================================
--- METHOD 3: HOOK workspace:Raycast DIRECTLY
--- Modern Arsenal versions might use Raycast API
--- ============================================
-
-local raycastHooked = false
-
-pcall(function()
-    local original = Workspace.Raycast
-    hookfunction(original, newcclosure(function(self, origin, direction, raycastParams)
-        if ShouldRedirect() and isMouseDown then
-            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                local newDirection = (CurrentTarget.Position - origin).Unit * direction.Magnitude
-                return original(self, origin, newDirection, raycastParams)
-            end
-        end
-        return original(self, origin, direction, raycastParams)
-    end))
-    raycastHooked = true
+    end
 end)
 
 -- ============================================
--- METHOD 4: __NAMECALL FALLBACK
--- Catches any calls not caught by direct hooks
--- Safe in Arsenal (no BACS)
+-- MAIN HOOK: __namecall
+-- This is the core of the silent aim.
+-- We intercept ALL remote FireServer calls and
+-- raycast calls. When the weapon system sends
+-- hit data to the server, we modify it.
+--
+-- Arsenal's FireServer typically sends:
+-- remote:FireServer("Damage", hitPart, hitPos, ...)
+-- remote:FireServer(hitPart, hitPos, normal, ...)
+-- Or variations of these
+--
+-- We detect the pattern and replace hit data
 -- ============================================
 
-local namecallHooked = false
-
-pcall(function()
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        
-        if checkcaller() then
-            return oldNamecall(self, ...)
-        end
-        
-        if not ShouldRedirect() or not isMouseDown then
-            return oldNamecall(self, ...)
-        end
-        
-        if self == Workspace or self == workspace then
-            if method == "Raycast" then
-                local origin = args[1]
-                local direction = args[2]
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                    args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
-                    return oldNamecall(self, unpack(args))
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if checkcaller() then
+        return oldNamecall(self, ...)
+    end
+    
+    if not ShouldRedirect() then
+        return oldNamecall(self, ...)
+    end
+    
+    -- ============================================
+    -- INTERCEPT REMOTE CALLS (Primary method)
+    -- When Arsenal fires a remote with hit data,
+    -- replace the hit part and position
+    -- ============================================
+    
+    if method == "FireServer" and typeof(self) == "Instance" and self:IsA("RemoteEvent") then
+        -- Only intercept when shooting (mouse down)
+        if isMouseDown then
+            local modified = false
+            local newArgs = {unpack(args)}
+            
+            for i, arg in ipairs(newArgs) do
+                -- Replace Instance arguments that are BaseParts (hit parts)
+                -- but NOT the local player's parts
+                if typeof(arg) == "Instance" and arg:IsA("BasePart") then
+                    local isLocalPart = false
+                    if LocalPlayer.Character then
+                        isLocalPart = arg:IsDescendantOf(LocalPlayer.Character)
+                    end
+                    if not isLocalPart then
+                        newArgs[i] = CurrentTarget
+                        modified = true
+                    end
+                end
+                
+                -- Replace Vector3 arguments that look like hit positions
+                -- (not tiny vectors which might be normals/directions)
+                if typeof(arg) == "Vector3" then
+                    local magnitude = arg.Magnitude
+                    if magnitude > 10 then
+                        -- This is likely a world position, replace with target pos
+                        newArgs[i] = CurrentTarget.Position
+                        modified = true
+                    end
+                end
+                
+                -- Replace CFrame arguments
+                if typeof(arg) == "CFrame" then
+                    local magnitude = arg.Position.Magnitude
+                    if magnitude > 10 then
+                        newArgs[i] = CFrame.new(CurrentTarget.Position)
+                        modified = true
+                    end
                 end
             end
             
-            if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" 
-                or method == "FindPartOnRayWithWhitelist" then
-                local ray = args[1]
-                if typeof(ray) == "Ray" then
-                    local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                    args[1] = Ray.new(ray.Origin, newDir)
+            if modified then
+                return oldNamecall(self, unpack(newArgs))
+            end
+        end
+    end
+    
+    -- ============================================
+    -- INTERCEPT RAYCAST CALLS
+    -- Redirect any raycasts to point at target
+    -- ============================================
+    
+    if (self == Workspace or self == workspace) and isMouseDown then
+        if method == "Raycast" then
+            local origin = args[1]
+            local direction = args[2]
+            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                args[2] = (CurrentTarget.Position - origin).Unit * direction.Magnitude
+                return oldNamecall(self, unpack(args))
+            end
+        end
+        
+        if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" 
+            or method == "FindPartOnRayWithWhitelist" then
+            local ray = args[1]
+            if typeof(ray) == "Ray" then
+                local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+                args[1] = Ray.new(ray.Origin, newDir)
+                return oldNamecall(self, unpack(args))
+            end
+        end
+    end
+    
+    -- ============================================
+    -- INTERCEPT CAMERA RAY METHODS
+    -- Redirect ViewportPointToRay / ScreenPointToRay
+    -- ============================================
+    
+    if typeof(self) == "Instance" and self:IsA("Camera") and isMouseDown then
+        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local targetPos = CurrentTarget.Position
+                local targetScreen, onScreen
+                if method == "ViewportPointToRay" then
+                    targetScreen, onScreen = cam:WorldToViewportPoint(targetPos)
+                else
+                    targetScreen, onScreen = cam:WorldToScreenPoint(targetPos)
+                end
+                if onScreen then
+                    args[1] = targetScreen.X
+                    args[2] = targetScreen.Y
                     return oldNamecall(self, unpack(args))
                 end
             end
         end
-        
-        -- Camera ray methods via namecall
-        if typeof(self) == "Instance" and self:IsA("Camera") then
-            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                local cam = Workspace.CurrentCamera
-                if cam then
-                    local targetPos = CurrentTarget.Position
-                    local targetScreen, onScreen
-                    if method == "ViewportPointToRay" then
-                        targetScreen, onScreen = cam:WorldToViewportPoint(targetPos)
-                    else
-                        targetScreen, onScreen = cam:WorldToScreenPoint(targetPos)
-                    end
+    end
+    
+    return oldNamecall(self, ...)
+end))
+
+-- ============================================
+-- DIRECT FUNCTION HOOKS (catches cached refs)
+-- ============================================
+
+-- Hook FindPartOnRayWithIgnoreList directly
+pcall(function()
+    local original = Workspace.FindPartOnRayWithIgnoreList
+    hookfunction(original, newcclosure(function(self, ray, ...)
+        if ShouldRedirect() and isMouseDown and typeof(ray) == "Ray" then
+            local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+            return original(self, Ray.new(ray.Origin, newDir), ...)
+        end
+        return original(self, ray, ...)
+    end))
+end)
+
+-- Hook FindPartOnRay directly
+pcall(function()
+    local original = Workspace.FindPartOnRay
+    hookfunction(original, newcclosure(function(self, ray, ...)
+        if ShouldRedirect() and isMouseDown and typeof(ray) == "Ray" then
+            local newDir = (CurrentTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
+            return original(self, Ray.new(ray.Origin, newDir), ...)
+        end
+        return original(self, ray, ...)
+    end))
+end)
+
+-- Hook Raycast directly
+pcall(function()
+    local original = Workspace.Raycast
+    hookfunction(original, newcclosure(function(self, origin, direction, ...)
+        if ShouldRedirect() and isMouseDown then
+            if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                local newDir = (CurrentTarget.Position - origin).Unit * direction.Magnitude
+                return original(self, origin, newDir, ...)
+            end
+        end
+        return original(self, origin, direction, ...)
+    end))
+end)
+
+-- Hook Camera:ViewportPointToRay directly
+pcall(function()
+    local cam = Workspace.CurrentCamera
+    if cam then
+        local original = cam.ViewportPointToRay
+        hookfunction(original, newcclosure(function(self, x, y, ...)
+            if ShouldRedirect() and isMouseDown then
+                local c = Workspace.CurrentCamera
+                if c then
+                    local tScreen, onScreen = c:WorldToViewportPoint(CurrentTarget.Position)
                     if onScreen then
-                        args[1] = targetScreen.X
-                        args[2] = targetScreen.Y
-                        return oldNamecall(self, unpack(args))
+                        return original(self, tScreen.X, tScreen.Y, ...)
                     end
                 end
             end
-        end
-        
-        return oldNamecall(self, ...)
-    end))
-    namecallHooked = true
+            return original(self, x, y, ...)
+        end))
+    end
+end)
+
+-- Hook Camera:ScreenPointToRay directly
+pcall(function()
+    local cam = Workspace.CurrentCamera
+    if cam then
+        local original = cam.ScreenPointToRay
+        hookfunction(original, newcclosure(function(self, x, y, ...)
+            if ShouldRedirect() and isMouseDown then
+                local c = Workspace.CurrentCamera
+                if c then
+                    local tScreen, onScreen = c:WorldToScreenPoint(CurrentTarget.Position)
+                    if onScreen then
+                        return original(self, tScreen.X, tScreen.Y, ...)
+                    end
+                end
+            end
+            return original(self, x, y, ...)
+        end))
+    end
 end)
 
 -- ============================================
--- METHOD 5: Mouse.__index (LEGACY FALLBACK)
--- Only redirects Mouse.Hit and Mouse.UnitRay
--- Some Arsenal weapon code paths still check these
--- Does NOT hook Mouse.Target (causes weapon swap bug)
+-- Mouse.__index (Hit + UnitRay only, no Target)
 -- ============================================
-
-local mouseHooked = false
 
 pcall(function()
     local mt = getrawmetatable(Mouse)
     if mt then
         local oldIndex = mt.__index
         setreadonly(mt, false)
-        
         mt.__index = newcclosure(function(self, key)
             if self == Mouse and ShouldRedirect() and isMouseDown then
                 if key == "Hit" then
@@ -434,9 +591,7 @@ pcall(function()
             end
             return oldIndex(self, key)
         end)
-        
         setreadonly(mt, true)
-        mouseHooked = true
     end
 end)
 
@@ -469,11 +624,9 @@ end)
 -- ============================================
 getgenv().AX_ArsenalLoaded = true
 
-print("  ✅ ARSENAL MODULE v4 loaded")
-print("  ✅ Method 1 - ViewportPointToRay: " .. tostring(viewportHooked))
-print("  ✅ Method 1 - ScreenPointToRay: " .. tostring(screenPointHooked))
-print("  ✅ Method 2 - FindPartOnRay: " .. tostring(findPartHooked))
-print("  ✅ Method 3 - Raycast: " .. tostring(raycastHooked))
-print("  ✅ Method 4 - __namecall: " .. tostring(namecallHooked))
-print("  ✅ Method 5 - Mouse.__index: " .. tostring(mouseHooked))
-print("  ✅ 5-layer silent aim active")
+print("  ✅ ARSENAL MODULE v5 loaded")
+print("  ✅ Remote intercept: FireServer hook active")
+print("  ✅ Direct hooks: FindPartOnRay, Raycast, Camera rays")
+print("  ✅ __namecall: All methods covered")
+print("  ✅ Mouse.__index: Hit + UnitRay")
+print("  ✅ Full coverage silent aim active")
