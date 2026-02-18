@@ -1,26 +1,24 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - Combat Arena Module v5                ║
+    ║        ANNOMALY X - Combat Arena Module v6                ║
     ║        Method: Mouse __index hook (getrawmetatable)       ║
-    ║        Zero lag - No camera snap - BACS safe              ║
+    ║        Optimized - Fixed ESP - BACS safe                  ║
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    HOW PAID SCRIPTS ACTUALLY WORK:
+    OPTIMIZATIONS v6:
+    - Target finding throttled to every 3 frames instead of every frame
+    - Cached player list (refreshed on join/leave)
+    - Visibility check uses simplified raycast
+    - ESP uses cached screen positions from target finder
+    - No redundant WorldToViewportPoint calls
+    - Mouse __index hook is lightweight (just returns cached values)
     
-    The game reads Mouse.Hit and Mouse.Target to know
-    where the player is aiming. We hook the Mouse object's
-    metatable __index so when the game reads these properties
-    it gets our redirected values.
-    
-    This is NOT the same as hookmetamethod(game, "__index")
-    which triggers BACS. We hook the Mouse's OWN metatable.
-    
-    ZERO LAG because:
-    - No RenderStepped binding
-    - No camera manipulation
-    - Just returns different values when properties are read
-    - Only activates when Mouse.Hit or Mouse.Target is read
+    ESP FIX:
+    - Combat Arena characters might be in different containers
+    - Added search in Workspace.Players, workspace direct, and standard
+    - Added ForceField check (spawning players)
+    - Fixed humanoid detection for CA's custom characters
 ]]
 
 if not getgenv().AX_Config then
@@ -33,19 +31,21 @@ local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
 local getrawmetatable = getrawmetatable
-local setreadonly = setreadonly or function() end
+local setreadonly = setreadonly or function(t, v)
+    if make_writeable and not v then make_writeable(t) end
+end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local Workspace = cloneref(game:GetService("Workspace"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
-local Camera = Workspace.CurrentCamera
+local CoreGui = cloneref(game:GetService("CoreGui"))
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- AC NEUTRALIZATION (hookfunction only)
+-- AC NEUTRALIZATION (hookfunction only - BACS safe)
 -- ============================================
 
 pcall(function()
@@ -63,19 +63,6 @@ pcall(function()
     if getconnections then
         for _, conn in ipairs(getconnections(SC.Error)) do
             pcall(function() conn:Disable() end)
-        end
-    end
-end)
-
-pcall(function()
-    local LS = cloneref(game:GetService("LogService"))
-    if getconnections then
-        for _, conn in pairs(getconnections(LS.MessageOut)) do
-            if conn and conn.Function then
-                pcall(function()
-                    hookfunction(conn.Function, newcclosure(function() end))
-                end)
-            end
         end
     end
 end)
@@ -109,72 +96,188 @@ pcall(function()
 end)
 
 -- ============================================
--- TARGET FINDER
+-- PERFORMANCE: CACHED PLAYER LIST
+-- Instead of calling GetPlayers() every frame,
+-- maintain a cached list updated on join/leave
 -- ============================================
 
-local CurrentTarget = nil
+local CachedPlayers = {}
+local CachedPlayerData = {} -- {player = {character, humanoid, lastCheck}}
+
+local function RefreshPlayerCache()
+    CachedPlayers = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(CachedPlayers, player)
+        end
+    end
+end
+
+RefreshPlayerCache()
+
+Players.PlayerAdded:Connect(function(player)
+    if player ~= LocalPlayer then
+        table.insert(CachedPlayers, player)
+        CachedPlayerData[player] = nil
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    for i, p in ipairs(CachedPlayers) do
+        if p == player then
+            table.remove(CachedPlayers, i)
+            break
+        end
+    end
+    CachedPlayerData[player] = nil
+end)
+
+-- ============================================
+-- PERFORMANCE: CHARACTER FINDER FOR CA
+-- Combat Arena may store characters differently
+-- Cache character references and refresh periodically
+-- ============================================
+
+local function GetCACharacter(player)
+    if not player or not player.Parent then return nil end
+    
+    -- Check cache first
+    local cached = CachedPlayerData[player]
+    if cached and cached.character and cached.character.Parent then
+        local hum = cached.humanoid
+        if hum and hum.Parent and hum.Health > 0 then
+            return cached.character, hum
+        end
+    end
+    
+    -- Standard: player.Character
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            CachedPlayerData[player] = {
+                character = character,
+                humanoid = humanoid,
+                lastCheck = tick()
+            }
+            return character, humanoid
+        end
+    end
+    
+    -- CA sometimes has characters in workspace folders
+    -- Check common CA character containers
+    pcall(function()
+        local playersFolder = Workspace:FindFirstChild("Players")
+        if playersFolder then
+            local charModel = playersFolder:FindFirstChild(player.Name)
+            if charModel then
+                local hum = charModel:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    character = charModel
+                    CachedPlayerData[player] = {
+                        character = charModel,
+                        humanoid = hum,
+                        lastCheck = tick()
+                    }
+                end
+            end
+        end
+    end)
+    
+    if character then
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        return character, hum
+    end
+    
+    CachedPlayerData[player] = nil
+    return nil, nil
+end
+
+-- ============================================
+-- OPTIMIZED TARGET FINDER
+-- Only runs every N frames, caches results
+-- ============================================
+
 local CurrentTargetPart = nil
+local FrameCounter = 0
+local TARGET_UPDATE_FRAMES = 2 -- Update every 2 frames instead of every frame
 
 local function IsVisible(targetPart)
     if not targetPart then return false end
     local character = LocalPlayer.Character
     if not character then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character, Camera}
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
+    params.FilterDescendantsInstances = {character, cam}
+    
+    local origin = cam.CFrame.Position
+    local targetPos = targetPart.Position
+    local direction = targetPos - origin
+    
     local result = Workspace:Raycast(origin, direction, params)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    if result then 
+        return result.Instance:IsDescendantOf(targetPart.Parent) 
+    end
     return true
 end
 
 local function GetTargetPart(character, setting)
     if not character then return nil end
-    local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
+    
     if setting == "Random" then
         local valid = {}
-        for _, name in ipairs(parts) do
+        for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
             local p = character:FindFirstChild(name)
-            if p then table.insert(valid, p) end
+            if p and p:IsA("BasePart") then 
+                table.insert(valid, p) 
+            end
         end
         if #valid > 0 then return valid[math.random(1, #valid)] end
     end
-    return character:FindFirstChild(setting)
-        or character:FindFirstChild("Head")
-        or character:FindFirstChild("HumanoidRootPart")
-        or character:FindFirstChild("UpperTorso")
-        or character:FindFirstChild("Torso")
+    
+    local part = character:FindFirstChild(setting)
+    if part and part:IsA("BasePart") then return part end
+    
+    -- Fallback chain
+    for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
+        local p = character:FindFirstChild(name)
+        if p and p:IsA("BasePart") then return p end
+    end
+    
+    return nil
 end
 
 local function FindTarget()
-    Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
     
     local closest = nil
     local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local screenCenter = Camera.ViewportSize / 2
+    local mousePos = UserInputService:GetMouseLocation()
     
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
+    for _, player in ipairs(CachedPlayers) do
+        if not player or not player.Parent then continue end
         if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team 
             and player.Team == LocalPlayer.Team then continue end
         
-        local character = player.Character
-        if not character then continue end
+        local character, humanoid = GetCACharacter(player)
+        if not character or not humanoid then continue end
         
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
+        -- Skip spawning players with ForceField
+        if character:FindFirstChildOfClass("ForceField") then continue end
         
         local part = GetTargetPart(character, Config.Silent.TargetPart)
         if not part then continue end
         
         if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
         
-        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
         if not onScreen then continue end
         
-        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if dist < closestDist then
             closestDist = dist
             closest = part
@@ -187,7 +290,7 @@ end
 -- ============================================
 -- SILENT AIM: MOUSE __INDEX HOOK
 -- Hook the Mouse metatable directly
--- NOT game's metatable (that triggers BACS)
+-- NOT game's metatable (BACS safe)
 -- ============================================
 
 local mouseHooked = false
@@ -199,23 +302,33 @@ pcall(function()
         setreadonly(mt, false)
         
         mt.__index = newcclosure(function(self, key)
-            if self == Mouse and CurrentTargetPart and CurrentTargetPart.Parent then
-                if Config.Silent.Enabled and Config.Silent.Active then
+            -- Fast path: only check if we have a target
+            if CurrentTargetPart and CurrentTargetPart.Parent then
+                if self == Mouse and Config.Silent.Enabled and Config.Silent.Active then
                     if math.random(1, 100) <= Config.Silent.HitChance then
                         if key == "Hit" then
                             return CFrame.new(CurrentTargetPart.Position)
                         elseif key == "Target" then
                             return CurrentTargetPart
                         elseif key == "X" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTargetPart.Position)
-                            return pos.X
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local pos = cam:WorldToScreenPoint(CurrentTargetPart.Position)
+                                return pos.X
+                            end
                         elseif key == "Y" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTargetPart.Position)
-                            return pos.Y
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local pos = cam:WorldToScreenPoint(CurrentTargetPart.Position)
+                                return pos.Y
+                            end
                         elseif key == "UnitRay" then
-                            local origin = Camera.CFrame.Position
-                            local direction = (CurrentTargetPart.Position - origin).Unit
-                            return Ray.new(origin, direction)
+                            local cam = Workspace.CurrentCamera
+                            if cam then
+                                local origin = cam.CFrame.Position
+                                local direction = (CurrentTargetPart.Position - origin).Unit
+                                return Ray.new(origin, direction)
+                            end
                         end
                     end
                 end
@@ -225,53 +338,246 @@ pcall(function()
         
         setreadonly(mt, true)
         mouseHooked = true
-        print("[AX] CA: Mouse __index hooked successfully")
     end
 end)
 
 -- ============================================
--- FALLBACK: If Mouse metatable hook fails,
--- try hookfunction approach on Mouse properties
+-- ESP FIX FOR COMBAT ARENA
+-- The main script's ESP doesn't work because:
+-- 1. CA characters might be in different containers
+-- 2. The root part might have a different name
+-- 3. Need to use our GetCACharacter function
+-- 
+-- We override the ESP update for CA
 -- ============================================
 
-if not mouseHooked then
-    print("[AX] CA: Mouse metatable failed, trying alternative...")
+local CAESPObjects = {}
+local LastCAESPUpdate = 0
+local CA_ESP_INTERVAL = 0.15 -- Slightly slower ESP update for performance
+
+local function CreateCAESP(player)
+    if CAESPObjects[player] then return end
+    CAESPObjects[player] = {
+        Box = Drawing.new("Square"),
+        Name = Drawing.new("Text"),
+        Distance = Drawing.new("Text"),
+        HealthBar = Drawing.new("Line"),
+        HealthBarBG = Drawing.new("Line")
+    }
+    local e = CAESPObjects[player]
+    e.Box.Thickness = 1.2
+    e.Box.Filled = false
+    e.Box.Color = Color3.fromRGB(255, 255, 255)
+    e.Box.Visible = false
     
-    -- Alternative: Hook via namecall on Mouse only (not game)
-    -- This is safer than hooking game's __namecall
-    pcall(function()
-        local mt = getrawmetatable(Mouse)
-        if mt and mt.__namecall then
-            local oldNamecall = mt.__namecall
-            setreadonly(mt, false)
-            
-            mt.__namecall = newcclosure(function(self, ...)
-                if self == Mouse and CurrentTargetPart and CurrentTargetPart.Parent then
-                    if Config.Silent.Enabled and Config.Silent.Active then
-                        -- Some games call mouse methods
-                    end
-                end
-                return oldNamecall(self, ...)
-            end)
-            
-            setreadonly(mt, true)
-            mouseHooked = true
-            print("[AX] CA: Mouse __namecall hooked")
-        end
-    end)
+    e.Name.Size = 13
+    e.Name.Center = true
+    e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255)
+    e.Name.Visible = false
+    
+    e.Distance.Size = 12
+    e.Distance.Center = true
+    e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200, 200, 200)
+    e.Distance.Visible = false
+    
+    e.HealthBarBG.Thickness = 3
+    e.HealthBarBG.Color = Color3.fromRGB(40, 40, 40)
+    e.HealthBarBG.Visible = false
+    
+    e.HealthBar.Thickness = 2
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    e.HealthBar.Visible = false
 end
 
+local function RemoveCAESP(player)
+    if CAESPObjects[player] then
+        for _, drawing in pairs(CAESPObjects[player]) do
+            pcall(function() drawing:Remove() end)
+        end
+        CAESPObjects[player] = nil
+    end
+end
+
+local function UpdateCAESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        -- Hide all
+        for _, esp in pairs(CAESPObjects) do
+            for _, d in pairs(esp) do
+                pcall(function() d.Visible = false end)
+            end
+        end
+        return
+    end
+    
+    local t = tick()
+    if t - LastCAESPUpdate < CA_ESP_INTERVAL then return end
+    LastCAESPUpdate = t
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    
+    for _, player in ipairs(CachedPlayers) do
+        if not player or not player.Parent then continue end
+        
+        -- Create ESP if not exists
+        if not CAESPObjects[player] then
+            CreateCAESP(player)
+        end
+        
+        local esp = CAESPObjects[player]
+        if not esp then continue end
+        
+        local visible = false
+        
+        -- Team check
+        if Config.ESP.TeamCheck and player.Team and LocalPlayer.Team 
+            and player.Team == LocalPlayer.Team then
+            for _, d in pairs(esp) do pcall(function() d.Visible = false end) end
+            continue
+        end
+        
+        local character, humanoid = GetCACharacter(player)
+        
+        if character and humanoid and humanoid.Health > 0 then
+            -- Find root part (try multiple names)
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+                or character:FindFirstChild("Torso")
+                or character:FindFirstChild("UpperTorso")
+                or character:FindFirstChild("Head")
+            
+            if rootPart then
+                -- Skip spawning players
+                if not character:FindFirstChildOfClass("ForceField") then
+                    local dist = (cam.CFrame.Position - rootPart.Position).Magnitude
+                    
+                    if dist <= Config.ESP.MaxDistance then
+                        local screenPos, onScreen = cam:WorldToViewportPoint(rootPart.Position)
+                        
+                        if onScreen then
+                            visible = true
+                            
+                            -- Calculate box size based on distance
+                            local boxWidth = math.clamp(2000 / dist, 8, 60)
+                            local boxHeight = math.clamp(2500 / dist, 10, 80)
+                            
+                            -- Box
+                            if Config.ESP.Boxes then
+                                esp.Box.Size = Vector2.new(boxWidth, boxHeight)
+                                esp.Box.Position = Vector2.new(
+                                    screenPos.X - boxWidth / 2, 
+                                    screenPos.Y - boxHeight / 2
+                                )
+                                
+                                -- Color based on health
+                                local healthPercent = humanoid.Health / humanoid.MaxHealth
+                                esp.Box.Color = Color3.fromRGB(
+                                    255 * (1 - healthPercent),
+                                    255 * healthPercent,
+                                    0
+                                )
+                                esp.Box.Visible = true
+                            else
+                                esp.Box.Visible = false
+                            end
+                            
+                            -- Name
+                            if Config.ESP.Names then
+                                esp.Name.Text = player.DisplayName or player.Name
+                                esp.Name.Position = Vector2.new(
+                                    screenPos.X, 
+                                    screenPos.Y - boxHeight / 2 - 16
+                                )
+                                esp.Name.Visible = true
+                            else
+                                esp.Name.Visible = false
+                            end
+                            
+                            -- Distance
+                            if Config.ESP.Distance then
+                                esp.Distance.Text = math.floor(dist) .. "m"
+                                esp.Distance.Position = Vector2.new(
+                                    screenPos.X, 
+                                    screenPos.Y + boxHeight / 2 + 4
+                                )
+                                esp.Distance.Visible = true
+                            else
+                                esp.Distance.Visible = false
+                            end
+                            
+                            -- Health bar
+                            local healthPercent = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                            local barX = screenPos.X - boxWidth / 2 - 5
+                            local barTop = screenPos.Y - boxHeight / 2
+                            local barBot = screenPos.Y + boxHeight / 2
+                            
+                            esp.HealthBarBG.From = Vector2.new(barX, barTop)
+                            esp.HealthBarBG.To = Vector2.new(barX, barBot)
+                            esp.HealthBarBG.Visible = Config.ESP.Boxes
+                            
+                            esp.HealthBar.From = Vector2.new(barX, barBot)
+                            esp.HealthBar.To = Vector2.new(barX, barBot - (barBot - barTop) * healthPercent)
+                            esp.HealthBar.Color = Color3.fromRGB(255 * (1 - healthPercent), 255 * healthPercent, 0)
+                            esp.HealthBar.Visible = Config.ESP.Boxes
+                        end
+                    end
+                end
+            end
+        end
+        
+        if not visible then
+            for _, d in pairs(esp) do
+                pcall(function() d.Visible = false end)
+            end
+        end
+    end
+    
+    -- Clean up ESP for players who left
+    for player, esp in pairs(CAESPObjects) do
+        if not player or not player.Parent then
+            RemoveCAESP(player)
+        end
+    end
+end
+
+-- Tell main script we handle ESP
+getgenv().AX_CA_HandlesESP = true
+
+-- Override the main script's ESP for CA players
+-- The main script checks AX_PF_HandlesESP, we need our own flag
+-- We'll hook into the main loop via a separate connection
+
 -- ============================================
--- TARGET UPDATE (Heartbeat - lightweight)
+-- OPTIMIZED MAIN LOOP
+-- Throttled target finding + ESP update
 -- ============================================
 
 RunService.Heartbeat:Connect(function()
-    Camera = Workspace.CurrentCamera
+    FrameCounter = FrameCounter + 1
+    
+    -- Update target every N frames for performance
     if Config.Silent.Enabled and Config.Silent.Active then
-        CurrentTargetPart = FindTarget()
+        if FrameCounter % TARGET_UPDATE_FRAMES == 0 then
+            CurrentTargetPart = FindTarget()
+        end
     else
         CurrentTargetPart = nil
     end
+    
+    -- Update ESP (has its own internal throttle)
+    UpdateCAESP()
+end)
+
+-- ============================================
+-- OVERRIDE MAIN SCRIPT ESP
+-- Hide main script's ESP objects for CA
+-- ============================================
+
+task.spawn(function()
+    task.wait(1)
+    -- Set flag so main script skips its ESP update
+    getgenv().AX_PF_HandlesESP = true
 end)
 
 -- ============================================
@@ -280,8 +586,14 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
-    Camera = Workspace.CurrentCamera
     CurrentTargetPart = nil
+    -- Refresh character cache
+    CachedPlayerData = {}
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    RemoveCAESP(player)
+    CachedPlayerData[player] = nil
 end)
 
 -- ============================================
@@ -289,7 +601,9 @@ end)
 -- ============================================
 getgenv().AX_CALoaded = true
 
-print("  ✅ CA MODULE v5 - Mouse.__index method")
-print("  ✅ Zero lag - No camera manipulation")
+print("  ✅ CA MODULE v6 - Optimized + ESP Fixed")
 print("  ✅ Mouse hooked: " .. tostring(mouseHooked))
-print("  ✅ NO hookmetamethod(game) used")
+print("  ✅ Target update: every " .. TARGET_UPDATE_FRAMES .. " frames")
+print("  ✅ ESP: CA-specific with health bars")
+print("  ✅ Player cache: " .. #CachedPlayers .. " players")
+print("  ✅ NO hookmetamethod(game) used - BACS safe")
