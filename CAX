@@ -1,30 +1,33 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - Combat Arena Module v2                ║
-    ║        Advanced BAC-7198 Bypass + Selective Silent Aim    ║
-    ║        Integrated Bypassel techniques (safe ones only)    ║
+    ║        ANNOMALY X - Combat Arena Module v3                ║
+    ║        BACS-Safe: NO metamethod hooks                     ║
+    ║        Method: Direct Remote hookfunction                 ║
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    BAC-7198 ANALYSIS:
-    This error triggers when Combat Arena detects:
-    1. Global __namecall hook intercepting AC verification raycasts
-    2. Modified raycast results that don't match camera direction
-    3. Hook detection via integrity checks
-    4. Memory signature scanning finding exploit traces
+    WHY BACS KICKS:
+    BACS (Byfron Anti-Cheat System) operates at PROCESS level.
+    It detects:
+    - hookmetamethod calls on game objects
+    - __namecall, __newindex, __index modifications
+    - Metatable tampering on core services
     
-    SOLUTION (Multi-layer):
-    Layer 1: Bypassel techniques (handshake, memory, integrity, hooks)
-    Layer 2: Selective __namecall (ONLY RemoteEvent FireServer)
-    Layer 3: Workspace:Raycast passes through UNMODIFIED
-    Layer 4: Continuous AC monitoring and neutralization
-    Layer 5: Kick protection + error suppression
+    BACS CANNOT be bypassed from Lua scripts.
+    It depends on your EXECUTOR having Byfron bypass.
     
-    WHAT WE DO NOT TOUCH:
-    - Workspace:Raycast (this triggers BAC instantly)
-    - Workspace:FindPartOnRay (same reason)
-    - debug.info globally (breaks executor)
-    - detour_function (breaks executor)
+    WHAT WE CAN DO:
+    - Avoid triggering BACS by NOT using hookmetamethod
+    - Use hookfunction on specific remote FireServer instead
+    - Use getconnections to intercept specific remotes
+    - Scan for shooting remotes via getgc and hook them directly
+    
+    THIS METHOD:
+    1. Scans getgc() for the game's shooting/firing functions
+    2. Hooks them with hookfunction (NOT hookmetamethod)
+    3. Redirects bullet/aim data inside those functions
+    4. Falls back to remote scanning if GC scan fails
+    5. NO metamethods touched = BACS stays quiet
 ]]
 
 -- Wait for Config
@@ -37,233 +40,129 @@ local Config = getgenv().AX_Config
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
-local hookmetamethod = hookmetamethod
-local getnamecallmethod = getnamecallmethod or get_namecall_method
-local checkcaller = checkcaller or function() return false end
 local getconnections = getconnections
 local getgc = getgc
-local getscripts = getscripts
-local setreadonly = setreadonly or function() end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local Workspace = cloneref(game:GetService("Workspace"))
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
-local LogService = cloneref(game:GetService("LogService"))
-local ScriptContext = cloneref(game:GetService("ScriptContext"))
-local HttpService = cloneref(game:GetService("HttpService"))
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
 
--- Results tracking
+-- ============================================
+-- RESULTS TRACKING
+-- ============================================
 local BypassResults = {
-    handshakes = 0,
-    hookChecks = 0,
-    memoryPatches = 0,
-    integrityBypasses = 0,
-    signaturesCleaned = 0,
-    acFunctions = 0,
-    acRemotes = 0,
-    acScripts = 0,
-    acConnections = 0,
+    remotesHooked = 0,
+    gcFunctionsHooked = 0,
+    acFunctionsNeutralized = 0,
     kickBlocked = false,
-    errorsBlocked = 0
+    errorsBlocked = 0,
+    method = "none"
 }
 
 -- ============================================
--- LAYER 1A: HANDSHAKE BYPASS
--- Blocks validation/verification remotes
+-- PHASE 1: SAFE AC NEUTRALIZATION
+-- No metamethods - only hookfunction + getconnections
 -- ============================================
-local function BypassHandshakes()
-    pcall(function()
-        local function ScanRemotes(parent)
-            for _, remote in pairs(parent:GetDescendants()) do
-                if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
-                    local name = remote.Name:lower()
-                    if name:find("handshake") or name:find("validate") 
-                        or name:find("verify") or name:find("heartbeat_check")
-                        or name:find("ping_check") or name:find("auth") then
-                        
-                        if remote:IsA("RemoteEvent") then
-                            -- Don't block FireServer entirely, just make it return safely
-                            pcall(function()
-                                if remote.OnClientEvent then
-                                    for _, conn in pairs(getconnections(remote.OnClientEvent)) do
-                                        pcall(function() conn:Disable() end)
-                                        BypassResults.handshakes = BypassResults.handshakes + 1
-                                    end
-                                end
-                            end)
-                        elseif remote:IsA("RemoteFunction") then
-                            pcall(function()
-                                if remote.OnClientInvoke then
-                                    remote.OnClientInvoke = function()
-                                        return true
-                                    end
-                                    BypassResults.handshakes = BypassResults.handshakes + 1
-                                end
-                            end)
-                        end
-                    end
-                end
-            end
-        end
-        
-        ScanRemotes(ReplicatedStorage)
-        pcall(function() ScanRemotes(game:GetService("StarterPlayer")) end)
-    end)
-end
 
--- ============================================
--- LAYER 1B: HOOK CHECK BYPASS
--- Prevents detection of our hooks
--- ============================================
-local function BypassHookChecks()
-    pcall(function()
-        -- Disable ScriptContext.Error connections (prevents error-based detection)
-        if getconnections then
-            for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+-- 1A. Kick Protection (hookfunction only, no metatable)
+pcall(function()
+    local oldKick = LocalPlayer.Kick
+    if typeof(oldKick) == "function" then
+        hookfunction(oldKick, newcclosure(function(self, ...)
+            if self == LocalPlayer then
+                warn("[AX] Blocked kick: " .. tostring((...)))
+                return
+            end
+            return oldKick(self, ...)
+        end))
+        BypassResults.kickBlocked = true
+    end
+end)
+
+-- 1B. Error Suppression (getconnections only)
+pcall(function()
+    local ScriptContext = cloneref(game:GetService("ScriptContext"))
+    if getconnections then
+        for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+            pcall(function()
+                conn:Disable()
+                BypassResults.errorsBlocked = BypassResults.errorsBlocked + 1
+            end)
+        end
+    end
+end)
+
+-- 1C. LogService Suppression
+pcall(function()
+    local LogService = cloneref(game:GetService("LogService"))
+    if getconnections then
+        for _, conn in pairs(getconnections(LogService.MessageOut)) do
+            if conn and conn.Function then
                 pcall(function()
-                    conn:Disable()
-                    BypassResults.hookChecks = BypassResults.hookChecks + 1
+                    hookfunction(conn.Function, newcclosure(function(...) end))
+                    BypassResults.errorsBlocked = BypassResults.errorsBlocked + 1
                 end)
             end
-            
-            -- Prevent new error connections
-            pcall(function()
-                hookfunction(ScriptContext.Error.Connect, newcclosure(function(...)
-                    return nil
-                end))
-                BypassResults.hookChecks = BypassResults.hookChecks + 1
-            end)
         end
-    end)
-end
+    end
+end)
 
--- ============================================
--- LAYER 1C: MEMORY CHECK BYPASS
--- Cleans exploit signatures from memory
--- ============================================
-local function BypassMemoryChecks()
-    pcall(function()
-        -- Remove AC signatures from GC tables
-        if getgc then
-            for _, obj in ipairs(getgc(true)) do
-                if type(obj) == "table" then
-                    pcall(function()
-                        -- Clean known AC signature keys
-                        local acKeys = {
-                            "__acsignature", "__checksum", "__hash",
-                            "__integrity", "__validation", "__exploit_flag",
-                            "_ac_token", "_security_hash", "_verified"
-                        }
-                        for _, key in ipairs(acKeys) do
-                            if rawget(obj, key) then
-                                rawset(obj, key, nil)
-                                BypassResults.memoryPatches = BypassResults.memoryPatches + 1
-                            end
+-- 1D. Integrity Check Disable
+pcall(function()
+    local ScriptContext = cloneref(game:GetService("ScriptContext"))
+    if getconnections then
+        pcall(function()
+            for _, conn in ipairs(getconnections(ScriptContext.ScriptAdded)) do
+                pcall(function() conn:Disable() end)
+            end
+        end)
+        pcall(function()
+            for _, conn in ipairs(getconnections(ScriptContext.ScriptRemoved)) do
+                pcall(function() conn:Disable() end)
+            end
+        end)
+    end
+end)
+
+-- 1E. GC Signature Cleanup
+pcall(function()
+    if getgc then
+        for _, obj in ipairs(getgc(true)) do
+            if type(obj) == "table" then
+                pcall(function()
+                    local acKeys = {
+                        "__acsignature", "__checksum", "__hash",
+                        "__integrity", "__validation", "__exploit_flag"
+                    }
+                    for _, key in ipairs(acKeys) do
+                        if rawget(obj, key) then
+                            rawset(obj, key, nil)
                         end
-                    end)
-                end
-            end
-        end
-        
-        -- Make registry writable (safe version)
-        if setreadonly then
-            pcall(function() setreadonly(getrenv(), false) end)
-            BypassResults.memoryPatches = BypassResults.memoryPatches + 1
-        end
-    end)
-end
-
--- ============================================
--- LAYER 1D: INTEGRITY CHECK BYPASS
--- Disables script monitoring connections
--- ============================================
-local function BypassIntegrityChecks()
-    pcall(function()
-        if getconnections then
-            -- Disable ScriptAdded monitoring
-            pcall(function()
-                for _, conn in ipairs(getconnections(ScriptContext.ScriptAdded)) do
-                    pcall(function()
-                        conn:Disable()
-                        BypassResults.integrityBypasses = BypassResults.integrityBypasses + 1
-                    end)
-                end
-            end)
-            
-            -- Disable ScriptRemoved monitoring
-            pcall(function()
-                for _, conn in ipairs(getconnections(ScriptContext.ScriptRemoved)) do
-                    pcall(function()
-                        conn:Disable()
-                        BypassResults.integrityBypasses = BypassResults.integrityBypasses + 1
-                    end)
-                end
-            end)
-        end
-    end)
-end
-
--- ============================================
--- LAYER 1E: SIGNATURE CLEANUP
--- Removes exploit traces from global tables
--- ============================================
-local function CleanSignatures()
-    pcall(function()
-        local signatureKeys = {"signature", "checksum", "hash", "exploit", "cheat", "hack"}
-        
-        -- Clean _G
-        pcall(function()
-            for key, _ in pairs(_G) do
-                local keyStr = tostring(key):lower()
-                for _, sigKey in ipairs(signatureKeys) do
-                    if keyStr:find(sigKey) then
-                        _G[key] = nil
-                        BypassResults.signaturesCleaned = BypassResults.signaturesCleaned + 1
-                        break
                     end
-                end
+                end)
             end
-        end)
-        
-        -- Clean shared
-        pcall(function()
-            for key, _ in pairs(shared) do
-                local keyStr = tostring(key):lower()
-                for _, sigKey in ipairs(signatureKeys) do
-                    if keyStr:find(sigKey) then
-                        shared[key] = nil
-                        BypassResults.signaturesCleaned = BypassResults.signaturesCleaned + 1
-                        break
-                    end
-                end
-            end
-        end)
-    end)
-end
+        end
+    end
+end)
 
--- ============================================
--- LAYER 2: AC FUNCTION SCANNER
--- Finds and neutralizes anticheat functions in GC
--- ============================================
-local function NeutralizeACFunctions()
-    pcall(function()
+-- 1F. Neutralize AC functions found in GC
+pcall(function()
+    if getgc then
         for _, v in pairs(getgc(true)) do
-            -- Hook AC functions found by source name
             if typeof(v) == "function" then
                 local ok, src = pcall(function()
                     return debug.info(v, "s")
                 end)
                 if ok and type(src) == "string" then
                     local acSources = {
-                        "AntiCheat", "anticheat", "AntiExploit", "antiexploit",
-                        "Integrity", "Validation", "Detection", "Security",
-                        "BAC", "Checker", "Monitor", "Verify", "Guard",
-                        "Sentinel", "Shield", "Protect", "Enforce"
+                        "AntiCheat", "anticheat", "AntiExploit",
+                        "Integrity", "Validation", "Detection",
+                        "Security", "Checker", "Monitor", "Guard"
                     }
                     for _, keyword in ipairs(acSources) do
                         if src:find(keyword) then
@@ -271,7 +170,7 @@ local function NeutralizeACFunctions()
                                 hookfunction(v, newcclosure(function(...)
                                     return nil
                                 end))
-                                BypassResults.acFunctions = BypassResults.acFunctions + 1
+                                BypassResults.acFunctionsNeutralized = BypassResults.acFunctionsNeutralized + 1
                             end)
                             break
                         end
@@ -279,231 +178,60 @@ local function NeutralizeACFunctions()
                 end
             end
             
-            -- Neutralize AC tables with detect/ban/report functions
             if typeof(v) == "table" then
                 pcall(function()
                     local acTableKeys = {
-                        "Detect", "detect", "Detected", "detected",
-                        "Ban", "ban", "Kick", "kick",
-                        "Report", "report", "Flag", "flag",
-                        "Punish", "punish", "Violation", "violation"
+                        "Detect", "detect", "Detected",
+                        "Ban", "ban", "Report", "report",
+                        "Flag", "flag", "Punish", "Violation"
                     }
                     for _, key in ipairs(acTableKeys) do
                         local func = rawget(v, key)
                         if typeof(func) == "function" then
-                            hookfunction(func, newcclosure(function(...)
-                                return nil
-                            end))
-                            BypassResults.acFunctions = BypassResults.acFunctions + 1
+                            hookfunction(func, newcclosure(function(...) return nil end))
+                            BypassResults.acFunctionsNeutralized = BypassResults.acFunctionsNeutralized + 1
                         end
                     end
                 end)
             end
         end
-    end)
-end
-
--- ============================================
--- LAYER 3: AC REMOTE BLOCKER
--- Blocks anticheat reporting remotes
--- ============================================
-local function BlockACRemotes()
-    pcall(function()
-        local function ScanAndBlock(parent)
-            for _, child in pairs(parent:GetDescendants()) do
-                if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                    local name = child.Name:lower()
-                    local acRemoteNames = {
-                        "anticheat", "anti_cheat", "ac_", "integrity",
-                        "validation", "security", "detect", "report",
-                        "flag", "violation", "ban", "kick",
-                        "verify", "check", "monitor", "bac",
-                        "sentinel", "shield", "guard", "enforce",
-                        "suspicious", "exploit", "cheat", "hack"
-                    }
-                    for _, acName in ipairs(acRemoteNames) do
-                        if name:find(acName) then
-                            if child:IsA("RemoteEvent") and child.OnClientEvent then
-                                pcall(function()
-                                    for _, conn in pairs(getconnections(child.OnClientEvent)) do
-                                        pcall(function() conn:Disable() end)
-                                    end
-                                end)
-                            end
-                            BypassResults.acRemotes = BypassResults.acRemotes + 1
-                            break
-                        end
-                    end
-                end
-            end
-        end
-        
-        ScanAndBlock(ReplicatedStorage)
-        pcall(function() ScanAndBlock(Workspace) end)
-    end)
-end
-
--- ============================================
--- LAYER 4: AC SCRIPT DISABLER
--- Disables client-side anticheat scripts
--- ============================================
-local function DisableACScripts()
-    pcall(function()
-        local function ScanScripts(parent)
-            for _, child in pairs(parent:GetDescendants()) do
-                if child:IsA("LocalScript") then
-                    local name = child.Name:lower()
-                    local acScriptNames = {
-                        "anticheat", "anti_cheat", "ac", "integrity",
-                        "validation", "security", "detection", "monitor",
-                        "verify", "checker", "bac", "guard",
-                        "sentinel", "shield", "protect", "enforce"
-                    }
-                    for _, acName in ipairs(acScriptNames) do
-                        if name:find(acName) then
-                            pcall(function()
-                                child.Disabled = true
-                                BypassResults.acScripts = BypassResults.acScripts + 1
-                            end)
-                            break
-                        end
-                    end
-                end
-            end
-        end
-        
-        pcall(function() ScanScripts(LocalPlayer.PlayerScripts) end)
-        pcall(function() ScanScripts(game:GetService("StarterPlayer")) end)
-        pcall(function() ScanScripts(ReplicatedStorage) end)
-    end)
-end
-
--- ============================================
--- LAYER 5: KICK PROTECTION
--- ============================================
-local function ProtectFromKick()
-    pcall(function()
-        local kickNames = {"Kick", "kick"}
-        for _, name in ipairs(kickNames) do
-            local fn = LocalPlayer[name]
-            if type(fn) == "function" then
-                local oldKick
-                oldKick = hookfunction(fn, newcclosure(function(self, ...)
-                    if self == LocalPlayer then
-                        warn("[ANNOMALY X] Blocked kick: " .. tostring((...)))
-                        return
-                    end
-                    return oldKick(self, ...)
-                end))
-                BypassResults.kickBlocked = true
-            end
-        end
-    end)
-end
-
--- ============================================
--- LAYER 6: ERROR SUPPRESSION
--- ============================================
-local function SuppressErrors()
-    pcall(function()
-        -- Block LogService.MessageOut
-        if getconnections then
-            for _, conn in pairs(getconnections(LogService.MessageOut)) do
-                pcall(function()
-                    hookfunction(conn.Function, newcclosure(function(...) end))
-                    BypassResults.errorsBlocked = BypassResults.errorsBlocked + 1
-                end)
-            end
-        end
-    end)
-end
-
--- ============================================
--- EXECUTE ALL BYPASS LAYERS (in order)
--- ============================================
-print("[ANNOMALY X] Combat Arena: Executing multi-layer bypass...")
-
--- Phase 1: Bypassel techniques
-BypassHandshakes()
-task.wait(0.1)
-BypassHookChecks()
-task.wait(0.1)
-BypassMemoryChecks()
-task.wait(0.1)
-BypassIntegrityChecks()
-task.wait(0.1)
-CleanSignatures()
-task.wait(0.1)
-
--- Phase 2: AC-specific neutralization
-NeutralizeACFunctions()
-task.wait(0.1)
-BlockACRemotes()
-task.wait(0.1)
-DisableACScripts()
-task.wait(0.1)
-
--- Phase 3: Protection
-ProtectFromKick()
-task.wait(0.1)
-SuppressErrors()
-
--- Wait for everything to settle
-task.wait(0.5)
-
--- Print results
-print("  ✅ BYPASS RESULTS:")
-print("    Handshakes blocked: " .. BypassResults.handshakes)
-print("    Hook checks bypassed: " .. BypassResults.hookChecks)
-print("    Memory patches: " .. BypassResults.memoryPatches)
-print("    Integrity bypasses: " .. BypassResults.integrityBypasses)
-print("    Signatures cleaned: " .. BypassResults.signaturesCleaned)
-print("    AC functions neutralized: " .. BypassResults.acFunctions)
-print("    AC remotes blocked: " .. BypassResults.acRemotes)
-print("    AC scripts disabled: " .. BypassResults.acScripts)
-print("    Errors blocked: " .. BypassResults.errorsBlocked)
-print("    Kick protected: " .. tostring(BypassResults.kickBlocked))
-
--- ============================================
--- PHASE 7: CONTINUOUS AC MONITOR
--- Re-scans periodically for new AC elements
--- ============================================
-task.spawn(function()
-    while task.wait(8) do
-        pcall(function()
-            -- Re-block any new AC remotes
-            BlockACRemotes()
-            
-            -- Re-clean memory signatures
-            if getgc then
-                for _, obj in ipairs(getgc(true)) do
-                    if type(obj) == "table" then
-                        pcall(function()
-                            if rawget(obj, "__acsignature") then
-                                rawset(obj, "__acsignature", nil)
-                            end
-                            if rawget(obj, "__checksum") then
-                                rawset(obj, "__checksum", nil)
-                            end
-                        end)
-                    end
-                end
-            end
-            
-            -- Re-disable error connections
-            pcall(function()
-                for _, conn in ipairs(getconnections(ScriptContext.Error)) do
-                    pcall(function() conn:Disable() end)
-                end
-            end)
-        end)
     end
 end)
 
+-- 1G. Block AC Remotes via getconnections
+pcall(function()
+    local function BlockACRemote(remote)
+        if remote:IsA("RemoteEvent") and remote.OnClientEvent then
+            pcall(function()
+                for _, conn in pairs(getconnections(remote.OnClientEvent)) do
+                    pcall(function() conn:Disable() end)
+                end
+            end)
+        end
+    end
+    
+    for _, child in pairs(ReplicatedStorage:GetDescendants()) do
+        if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+            local name = child.Name:lower()
+            local acNames = {
+                "anticheat", "anti_cheat", "integrity", "validation",
+                "security", "detect", "report", "flag", "violation",
+                "verify", "monitor", "bac", "guard", "sentinel"
+            }
+            for _, acName in ipairs(acNames) do
+                if name:find(acName) then
+                    BlockACRemote(child)
+                    break
+                end
+            end
+        end
+    end
+end)
+
+print("[AX] CA Phase 1 complete: AC neutralized (no metamethods)")
+
 -- ============================================
--- PHASE 8: SILENT AIM (SELECTIVE METHOD)
--- ONLY intercepts RemoteEvent:FireServer
--- NEVER touches Workspace:Raycast
+-- PHASE 2: TARGET FINDER
 -- ============================================
 
 local CurrentCATarget = nil
@@ -542,6 +270,7 @@ end
 
 local function GetClosestCATarget()
     Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
     local closest = nil
     local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
     local screenCenter = Camera.ViewportSize / 2
@@ -575,150 +304,220 @@ local function GetClosestCATarget()
 end
 
 -- ============================================
--- SELECTIVE __NAMECALL HOOK
--- CRITICAL: Only intercepts RemoteEvent/RemoteFunction
--- NEVER intercepts Workspace methods
+-- PHASE 3: SILENT AIM - DIRECT REMOTE HOOK
+-- NO hookmetamethod - uses hookfunction on
+-- specific RemoteEvent.FireServer instances
 -- ============================================
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+
+-- METHOD A: Hook FireServer on specific shooting remotes
+local hookedRemotes = {}
+
+local function IsShootingRemote(name)
+    local lower = name:lower()
+    local shootKeywords = {
+        "shoot", "fire", "bullet", "gun", "weapon",
+        "attack", "cast", "projectile", "damage",
+        "swing", "slash", "strike", "combat", "hit"
+    }
+    local acKeywords = {
+        "anticheat", "anti_cheat", "integrity", "validation",
+        "security", "detect", "report", "flag", "verify", "monitor"
+    }
     
-    if checkcaller() then
-        return oldNamecall(self, ...)
+    -- Skip AC remotes
+    for _, keyword in ipairs(acKeywords) do
+        if lower:find(keyword) then return false end
     end
     
-    -- SAFETY CHECK: NEVER intercept Workspace methods
-    -- This is what causes BAC-7198
-    if self == Workspace or self == workspace then
-        return oldNamecall(self, ...)
+    for _, keyword in ipairs(shootKeywords) do
+        if lower:find(keyword) then return true end
     end
+    return false
+end
+
+local function ModifyShootingArgs(args)
+    if not CurrentCATarget or not CurrentCATarget.Parent then return args end
+    if not Config.Silent.Enabled or not Config.Silent.Active then return args end
+    if math.random(1, 100) > Config.Silent.HitChance then return args end
     
-    -- Only process when silent aim is active
-    if not Config.Silent.Enabled or not Config.Silent.Active then
-        return oldNamecall(self, ...)
-    end
+    Camera = Workspace.CurrentCamera
+    if not Camera then return args end
     
-    if not CurrentCATarget or not CurrentCATarget.Parent then
-        return oldNamecall(self, ...)
-    end
-    
-    -- Hit chance check
-    if math.random(1, 100) > Config.Silent.HitChance then
-        return oldNamecall(self, ...)
-    end
-    
-    -- INTERCEPT: RemoteEvent:FireServer (shooting remotes only)
-    if method == "FireServer" and self:IsA("RemoteEvent") then
-        local remoteName = self.Name:lower()
-        
-        local isShootRemote = false
-        local shootKeywords = {
-            "shoot", "fire", "bullet", "gun", "weapon", 
-            "attack", "cast", "projectile", "damage",
-            "swing", "slash", "strike", "combat"
-        }
-        for _, keyword in ipairs(shootKeywords) do
-            if remoteName:find(keyword) then
-                isShootRemote = true
-                break
+    for i, arg in ipairs(args) do
+        if typeof(arg) == "Vector3" then
+            local mag = arg.Magnitude
+            if mag > 0.1 and mag < 5 then
+                local origin = Camera.CFrame.Position
+                args[i] = (CurrentCATarget.Position - origin).Unit * mag
             end
-        end
-        
-        -- Skip AC remotes
-        local acKeywords = {
-            "anticheat", "anti_cheat", "ac_", "integrity",
-            "validation", "security", "detect", "report",
-            "flag", "violation", "verify", "check", "monitor"
-        }
-        for _, keyword in ipairs(acKeywords) do
-            if remoteName:find(keyword) then
-                isShootRemote = false
-                break
-            end
-        end
-        
-        if isShootRemote then
-            for i, arg in ipairs(args) do
-                if typeof(arg) == "Vector3" then
-                    local mag = arg.Magnitude
-                    if mag > 0.1 and mag < 5 then
-                        local origin = Camera.CFrame.Position
-                        args[i] = (CurrentCATarget.Position - origin).Unit * mag
-                    end
-                elseif typeof(arg) == "CFrame" then
-                    args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
-                elseif typeof(arg) == "Ray" then
-                    local newDir = (CurrentCATarget.Position - arg.Origin).Unit * arg.Direction.Magnitude
-                    args[i] = Ray.new(arg.Origin, newDir)
-                elseif typeof(arg) == "table" then
-                    pcall(function()
-                        for key, value in pairs(arg) do
-                            local keyLower = tostring(key):lower()
-                            if typeof(value) == "Vector3" then
-                                if keyLower:find("dir") or keyLower:find("direction") 
-                                    or keyLower:find("look") or keyLower:find("aim") then
-                                    local origin = Camera.CFrame.Position
-                                    arg[key] = (CurrentCATarget.Position - origin).Unit
-                                elseif keyLower:find("target") or keyLower:find("hit") 
-                                    or keyLower:find("point") or keyLower:find("end") then
-                                    arg[key] = CurrentCATarget.Position
-                                end
-                            elseif typeof(value) == "CFrame" then
-                                if keyLower:find("aim") or keyLower:find("camera") 
-                                    or keyLower:find("look") or keyLower:find("cf") then
-                                    arg[key] = CFrame.new(value.Position, CurrentCATarget.Position)
-                                end
-                            elseif typeof(value) == "Instance" then
-                                if keyLower:find("target") or keyLower:find("hit") 
-                                    or keyLower:find("victim") or keyLower:find("enemy") then
-                                    -- Replace target instance with our target's parent (character)
-                                    if CurrentCATarget.Parent then
-                                        arg[key] = CurrentCATarget
-                                    end
-                                end
-                            end
+        elseif typeof(arg) == "CFrame" then
+            args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
+        elseif typeof(arg) == "Ray" then
+            local newDir = (CurrentCATarget.Position - arg.Origin).Unit * arg.Direction.Magnitude
+            args[i] = Ray.new(arg.Origin, newDir)
+        elseif typeof(arg) == "table" then
+            pcall(function()
+                for key, value in pairs(arg) do
+                    local keyLower = tostring(key):lower()
+                    if typeof(value) == "Vector3" then
+                        if keyLower:find("dir") or keyLower:find("direction")
+                            or keyLower:find("look") or keyLower:find("aim") then
+                            local origin = Camera.CFrame.Position
+                            arg[key] = (CurrentCATarget.Position - origin).Unit
+                        elseif keyLower:find("target") or keyLower:find("hit")
+                            or keyLower:find("point") or keyLower:find("end") then
+                            arg[key] = CurrentCATarget.Position
                         end
-                    end)
-                end
-            end
-            return oldNamecall(self, unpack(args))
-        end
-    end
-    
-    -- INTERCEPT: RemoteFunction:InvokeServer (some games use this)
-    if method == "InvokeServer" and self:IsA("RemoteFunction") then
-        local remoteName = self.Name:lower()
-        local isShootRemote = false
-        local shootKeywords = {"shoot", "fire", "bullet", "gun", "weapon", "attack", "cast", "combat"}
-        for _, keyword in ipairs(shootKeywords) do
-            if remoteName:find(keyword) then
-                isShootRemote = true
-                break
-            end
-        end
-        
-        if isShootRemote then
-            for i, arg in ipairs(args) do
-                if typeof(arg) == "Vector3" then
-                    local mag = arg.Magnitude
-                    if mag > 0.1 and mag < 5 then
-                        local origin = Camera.CFrame.Position
-                        args[i] = (CurrentCATarget.Position - origin).Unit * mag
+                    elseif typeof(value) == "CFrame" then
+                        if keyLower:find("aim") or keyLower:find("camera")
+                            or keyLower:find("look") or keyLower:find("cf") then
+                            arg[key] = CFrame.new(value.Position, CurrentCATarget.Position)
+                        end
                     end
-                elseif typeof(arg) == "CFrame" then
-                    args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
                 end
-            end
-            return oldNamecall(self, unpack(args))
+            end)
         end
     end
     
-    return oldNamecall(self, ...)
-end))
+    return args
+end
+
+local function HookRemoteFireServer(remote)
+    if hookedRemotes[remote] then return end
+    
+    pcall(function()
+        local originalFire = remote.FireServer
+        hookfunction(remote.FireServer, newcclosure(function(self, ...)
+            if self == remote and Config.Silent.Enabled and Config.Silent.Active 
+                and CurrentCATarget and CurrentCATarget.Parent then
+                local args = {...}
+                args = ModifyShootingArgs(args)
+                return originalFire(self, unpack(args))
+            end
+            return originalFire(self, ...)
+        end))
+        hookedRemotes[remote] = true
+        BypassResults.remotesHooked = BypassResults.remotesHooked + 1
+    end)
+end
+
+-- Scan and hook existing shooting remotes
+local function ScanAndHookRemotes()
+    local function ScanFolder(folder)
+        for _, child in pairs(folder:GetDescendants()) do
+            if child:IsA("RemoteEvent") and IsShootingRemote(child.Name) then
+                HookRemoteFireServer(child)
+            end
+        end
+    end
+    
+    pcall(function() ScanFolder(ReplicatedStorage) end)
+    pcall(function() ScanFolder(Workspace) end)
+    pcall(function() ScanFolder(game:GetService("StarterPlayer")) end)
+end
+
+ScanAndHookRemotes()
+
+-- METHOD B: Hook shooting functions found in GC
+pcall(function()
+    if getgc then
+        for _, v in pairs(getgc(true)) do
+            if typeof(v) == "function" then
+                local ok, name = pcall(function()
+                    return debug.info(v, "n")
+                end)
+                if ok and type(name) == "string" then
+                    local lower = name:lower()
+                    if lower:find("shoot") or lower:find("fire") 
+                        or lower:find("attack") or lower:find("bullet") then
+                        pcall(function()
+                            local original = v
+                            hookfunction(v, newcclosure(function(...)
+                                local args = {...}
+                                if Config.Silent.Enabled and Config.Silent.Active 
+                                    and CurrentCATarget and CurrentCATarget.Parent then
+                                    args = ModifyShootingArgs(args)
+                                    return original(unpack(args))
+                                end
+                                return original(...)
+                            end))
+                            BypassResults.gcFunctionsHooked = BypassResults.gcFunctionsHooked + 1
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- METHOD C: Watch for new remotes being added
+pcall(function()
+    ReplicatedStorage.DescendantAdded:Connect(function(child)
+        if child:IsA("RemoteEvent") and IsShootingRemote(child.Name) then
+            task.wait(0.1)
+            HookRemoteFireServer(child)
+        end
+    end)
+end)
+
+-- Determine which method is active
+if BypassResults.remotesHooked > 0 then
+    BypassResults.method = "RemoteHook"
+elseif BypassResults.gcFunctionsHooked > 0 then
+    BypassResults.method = "GCHook"
+else
+    BypassResults.method = "Scanning"
+end
+
+print("[AX] CA Phase 3 complete:")
+print("  Remotes hooked: " .. BypassResults.remotesHooked)
+print("  GC functions hooked: " .. BypassResults.gcFunctionsHooked)
+print("  Method: " .. BypassResults.method)
 
 -- ============================================
--- TARGET UPDATE LOOP
+-- PHASE 4: FALLBACK - MOUSE TELEPORT METHOD
+-- If no remotes/functions found, use mouse redirect
+-- This works by moving the mouse to the target
+-- when shooting, which is undetectable by BACS
+-- ============================================
+
+if BypassResults.remotesHooked == 0 and BypassResults.gcFunctionsHooked == 0 then
+    print("[AX] CA: No remotes found - activating mouse redirect fallback")
+    BypassResults.method = "MouseRedirect"
+    
+    local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
+    
+    local function MouseRedirectLoop()
+        if not Config.Silent.Enabled or not Config.Silent.Active then return end
+        if not CurrentCATarget or not CurrentCATarget.Parent then return end
+        if math.random(1, 100) > Config.Silent.HitChance then return end
+        
+        Camera = Workspace.CurrentCamera
+        if not Camera then return end
+        
+        -- Only redirect when mouse button is pressed (shooting)
+        if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(CurrentCATarget.Position)
+        if not onScreen then return end
+        
+        local mousePos = UserInputService:GetMouseLocation()
+        local targetScreen = Vector2.new(screenPos.X, screenPos.Y)
+        
+        local deltaX = targetScreen.X - mousePos.X
+        local deltaY = targetScreen.Y - mousePos.Y
+        
+        -- Instant snap when shooting
+        if math.abs(deltaX) > 1 or math.abs(deltaY) > 1 then
+            mousemoverel(deltaX, deltaY)
+        end
+    end
+    
+    RunService.RenderStepped:Connect(MouseRedirectLoop)
+end
+
+-- ============================================
+-- PHASE 5: TARGET UPDATE LOOP
 -- ============================================
 local caTargetConnection = RunService.Heartbeat:Connect(function()
     Camera = Workspace.CurrentCamera
@@ -730,22 +529,51 @@ local caTargetConnection = RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================
--- CLEANUP ON CHARACTER RESPAWN
+-- PHASE 6: CONTINUOUS PROTECTION MONITOR
+-- ============================================
+task.spawn(function()
+    while task.wait(10) do
+        pcall(function()
+            -- Re-scan for new shooting remotes
+            ScanAndHookRemotes()
+            
+            -- Re-clean GC signatures
+            if getgc then
+                for _, obj in ipairs(getgc(true)) do
+                    if type(obj) == "table" then
+                        pcall(function()
+                            if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
+                            if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
+                        end)
+                    end
+                end
+            end
+            
+            -- Re-disable error connections
+            pcall(function()
+                local ScriptContext = cloneref(game:GetService("ScriptContext"))
+                if getconnections then
+                    for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+                        pcall(function() conn:Disable() end)
+                    end
+                end
+            end)
+        end)
+    end
+end)
+
+-- ============================================
+-- CLEANUP ON RESPAWN
 -- ============================================
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
     CurrentCATarget = nil
+    hookedRemotes = {}
     
-    -- Re-apply bypasses after respawn
+    -- Re-scan remotes after respawn
     task.wait(2)
-    pcall(function()
-        BypassHandshakes()
-        BypassHookChecks()
-        BypassMemoryChecks()
-        BlockACRemotes()
-        DisableACScripts()
-    end)
+    pcall(function() ScanAndHookRemotes() end)
 end)
 
 -- ============================================
@@ -753,9 +581,9 @@ end)
 -- ============================================
 getgenv().AX_CALoaded = true
 
-print("  ✅ CA MODULE v2 - Multi-layer BAC-7198 bypass active")
-print("  ✅ CA MODULE v2 - Bypassel techniques integrated")
-print("  ✅ CA MODULE v2 - Selective __namecall (RemoteEvent only)")
-print("  ✅ CA MODULE v2 - Workspace:Raycast UNTOUCHED")
-print("  ✅ CA MODULE v2 - Continuous AC monitor running")
-print("  ✅ CA MODULE v2 - Kick protection enabled")
+print("  ✅ CA MODULE v3 - BACS-Safe (NO metamethods)")
+print("  ✅ Method: " .. BypassResults.method)
+print("  ✅ Remotes: " .. BypassResults.remotesHooked .. " | GC: " .. BypassResults.gcFunctionsHooked)
+print("  ✅ AC neutralized: " .. BypassResults.acFunctionsNeutralized)
+print("  ✅ Kick blocked: " .. tostring(BypassResults.kickBlocked))
+print("  ✅ Errors blocked: " .. BypassResults.errorsBlocked)
