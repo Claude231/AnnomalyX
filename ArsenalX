@@ -1,28 +1,9 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
     ║           ANNOMALY X - Arsenal Module v9                  ║
-    ║           DHE as primary method                           ║
+    ║           Silent Aim disabled - Use DHE instead           ║
     ║           Creator: ElSacaLeche                            ║
     ╚═══════════════════════════════════════════════════════════╝
-    
-    CONCLUSION AFTER EXTENSIVE TESTING:
-    
-    Arsenal has patched traditional silent aim methods:
-    - Raycast redirect via __namecall
-    - Mouse.__index hooks  
-    - Camera CFrame hooks
-    - Remote argument modification
-    
-    WHAT WORKS:
-    - DHE (Dynamic Hitbox Expander) - Already in main script
-    - Aimbot/Aimlock (camera movement) - Already in main script
-    - ESP - Handled by main script
-    
-    This module provides:
-    - Arsenal-specific optimizations for DHE
-    - HeadHB expansion (Arsenal's real head hitbox)
-    - Proper team detection for Arsenal
-    - Notification to user about using DHE instead
 ]]
 
 if not getgenv().AX_Config then
@@ -37,7 +18,6 @@ local hookfunction = hookfunction or replaceclosure or detour_function
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
-local Workspace = cloneref(game:GetService("Workspace"))
 local StarterGui = cloneref(game:GetService("StarterGui"))
 
 local LocalPlayer = Players.LocalPlayer
@@ -66,164 +46,39 @@ pcall(function()
 end)
 
 -- ============================================
--- ARSENAL-SPECIFIC HITBOX ENHANCEMENT
--- Arsenal has special parts: HeadHB, Hitbox
--- The main script's DHE only targets Head/HumanoidRootPart
--- This module also expands HeadHB and Hitbox for Arsenal
+-- DISABLE SILENT AIM FOR ARSENAL
+-- Force it off and notify user
 -- ============================================
 
-local ArsenalExpandedParts = {}
-local ArsenalOriginalSizes = {}
-
-local function ExpandArsenalHitboxes()
-    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
-        -- Restore all
-        for player, parts in pairs(ArsenalOriginalSizes) do
-            pcall(function()
-                if player and player.Parent and player.Character then
-                    for partName, originalSize in pairs(parts) do
-                        local part = player.Character:FindFirstChild(partName)
-                        if part then
-                            part.Size = originalSize
-                            part.Transparency = 0
-                            part.CanCollide = false
-                        end
-                    end
-                end
-            end)
-        end
-        ArsenalExpandedParts = {}
-        ArsenalOriginalSizes = {}
-        return
-    end
-    
-    local maxSize = Config.Hitbox.MaxSize
-    local transparency = Config.Hitbox.Transparency
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        
-        -- Team check
-        if Config.Hitbox.TeamCheck then
-            if player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
-                continue
-            end
-        end
-        
-        local character = player.Character
-        if not character then continue end
-        
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
-        if character:FindFirstChildOfClass("ForceField") then continue end
-        
-        -- Arsenal-specific parts to expand
-        local arsenalParts = {"HeadHB", "Hitbox"}
-        
-        for _, partName in ipairs(arsenalParts) do
-            local part = character:FindFirstChild(partName)
-            if part and part:IsA("BasePart") then
-                -- Save original
-                if not ArsenalOriginalSizes[player] then
-                    ArsenalOriginalSizes[player] = {}
-                end
-                if not ArsenalOriginalSizes[player][partName] then
-                    ArsenalOriginalSizes[player][partName] = part.Size
-                end
-                
-                -- Expand
-                pcall(function()
-                    part.Size = Vector3.new(maxSize, maxSize, maxSize)
-                    part.Transparency = transparency
-                    part.CanCollide = false
-                    part.Massless = true
-                end)
-                
-                ArsenalExpandedParts[player] = true
-            end
-        end
-    end
-    
-    -- Cleanup players who left or died
-    for player in pairs(ArsenalExpandedParts) do
-        if not player or not player.Parent then
-            ArsenalOriginalSizes[player] = nil
-            ArsenalExpandedParts[player] = nil
-        end
-    end
-end
-
--- ============================================
--- NOTIFY USER
--- ============================================
+Config.Silent.Enabled = false
+Config.Silent.Active = false
 
 task.spawn(function()
-    task.wait(5)
+    task.wait(4)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "⚡ ANNOMALY X - Arsenal",
-            Text = "Silent Aim not available. Use DHE (Hitbox tab, H key) + Aimbot (Q key) for best results!",
+            Text = "Silent Aim is not available for Arsenal. Use DHE (H key) + Aimbot (Q key) instead!",
             Duration = 10
         })
     end)
 end)
 
--- Silent aim notification when user tries to enable it
+-- Block user from enabling Silent Aim
 task.spawn(function()
-    local lastNotify = 0
-    while task.wait(2) do
-        if Config.Silent.Enabled and Config.Silent.Active then
-            local now = tick()
-            if now - lastNotify > 20 then
-                lastNotify = now
-                pcall(function()
-                    StarterGui:SetCore("SendNotification", {
-                        Title = "⚠ Arsenal",
-                        Text = "Silent Aim patched in Arsenal. Use DHE (H key) instead - it works as silent aim!",
-                        Duration = 5
-                    })
-                end)
-            end
+    while task.wait(1) do
+        if Config.Silent.Enabled or Config.Silent.Active then
+            Config.Silent.Enabled = false
+            Config.Silent.Active = false
+            pcall(function()
+                StarterGui:SetCore("SendNotification", {
+                    Title = "⚠ Arsenal",
+                    Text = "Silent Aim not available. Use DHE (H key) for hitbox expansion!",
+                    Duration = 5
+                })
+            end)
         end
     end
-end)
-
--- ============================================
--- MAIN LOOP
--- Expand Arsenal-specific hitboxes alongside
--- the main script's DHE system
--- ============================================
-
-RunService.Heartbeat:Connect(function()
-    ExpandArsenalHitboxes()
-end)
-
--- ============================================
--- CLEANUP
--- ============================================
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    -- Restore all on respawn
-    for player, parts in pairs(ArsenalOriginalSizes) do
-        pcall(function()
-            if player and player.Parent and player.Character then
-                for partName, originalSize in pairs(parts) do
-                    local part = player.Character:FindFirstChild(partName)
-                    if part then
-                        part.Size = originalSize
-                    end
-                end
-            end
-        end)
-    end
-    ArsenalExpandedParts = {}
-    ArsenalOriginalSizes = {}
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-    ArsenalOriginalSizes[player] = nil
-    ArsenalExpandedParts[player] = nil
 end)
 
 -- ============================================
@@ -232,7 +87,5 @@ end)
 getgenv().AX_ArsenalLoaded = true
 
 print("  ✅ ARSENAL MODULE v9 loaded")
-print("  ⚠ Silent Aim: Not available (patched by Arsenal)")
-print("  ✅ DHE Enhancement: HeadHB + Hitbox expansion active")
-print("  ✅ Use DHE (H key) + Aimbot (Q key) for aim assist")
-print("  ✅ DHE acts as silent aim by expanding enemy hitboxes")
+print("  ⚠ Silent Aim: Disabled for Arsenal")
+print("  ✅ Use DHE (H key) + Aimbot (Q key)")
