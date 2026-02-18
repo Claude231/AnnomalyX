@@ -1,33 +1,28 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║           ANNOMALY X - Arsenal Module v8                  ║
-    ║           Verified Methods from Working Scripts           ║
+    ║           ANNOMALY X - Arsenal Module v9                  ║
+    ║           DHE as primary method                           ║
     ║           Creator: ElSacaLeche                            ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    VERIFIED FROM WORKING SCRIPTS:
+    CONCLUSION AFTER EXTENSIVE TESTING:
     
-    Method used: Raycast + FindPartOnRayWithWhitelist redirect
+    Arsenal has patched traditional silent aim methods:
+    - Raycast redirect via __namecall
+    - Mouse.__index hooks  
+    - Camera CFrame hooks
+    - Remote argument modification
     
-    From the last script's documentation:
-    - Arsenal calls workspace:Raycast() for hitscan
-    - Arsenal calls workspace:FindPartOnRayWithWhitelist() for hit detection
-    - Both are called on workspace (Self == game.Workspace)
-    - We redirect Direction to point at nearest enemy part
-    - NO need to check if origin is camera position
-    - Just redirect ALL workspace raycasts when silent aim is active
+    WHAT WORKS:
+    - DHE (Dynamic Hitbox Expander) - Already in main script
+    - Aimbot/Aimlock (camera movement) - Already in main script
+    - ESP - Handled by main script
     
-    From the remote intercept script:
-    - Arsenal remotes: HitPart, Trail, CreateProjectile, Flames, Fire, 
-      ReplicateProjectile, RemoteEvent
-    - Characters have a part called "Hitbox"
-    - Characters have "HeadHB" (head hitbox)
-    
-    The simplest working method is the raycast redirect because:
-    - It catches all weapon types automatically
-    - No need to know specific remote argument formats
-    - No need to find specific remotes
-    - Works with game updates (remotes may change, raycasts don't)
+    This module provides:
+    - Arsenal-specific optimizations for DHE
+    - HeadHB expansion (Arsenal's real head hitbox)
+    - Proper team detection for Arsenal
+    - Notification to user about using DHE instead
 ]]
 
 if not getgenv().AX_Config then
@@ -39,14 +34,11 @@ local Config = getgenv().AX_Config
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
-local hookmetamethod = hookmetamethod
-local getnamecallmethod = getnamecallmethod or get_namecall_method
-local checkcaller = checkcaller or function() return false end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local Workspace = cloneref(game:GetService("Workspace"))
-local UserInputService = cloneref(game:GetService("UserInputService"))
+local StarterGui = cloneref(game:GetService("StarterGui"))
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -74,242 +66,136 @@ pcall(function()
 end)
 
 -- ============================================
--- TARGET SYSTEM
--- Finds nearest player AND nearest part
--- Based on the working script's approach:
--- 1. Find nearest PLAYER to crosshair
--- 2. Find nearest PART of that player to crosshair
--- This gives the most accurate hit
+-- ARSENAL-SPECIFIC HITBOX ENHANCEMENT
+-- Arsenal has special parts: HeadHB, Hitbox
+-- The main script's DHE only targets Head/HumanoidRootPart
+-- This module also expands HeadHB and Hitbox for Arsenal
 -- ============================================
 
-local CurrentTargetPlayer = nil
-local CurrentTargetPart = nil
+local ArsenalExpandedParts = {}
+local ArsenalOriginalSizes = {}
 
-local function GetNearestPlayer()
-    local bestPlayer = nil
-    local bestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
+local function ExpandArsenalHitboxes()
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
+        -- Restore all
+        for player, parts in pairs(ArsenalOriginalSizes) do
+            pcall(function()
+                if player and player.Parent and player.Character then
+                    for partName, originalSize in pairs(parts) do
+                        local part = player.Character:FindFirstChild(partName)
+                        if part then
+                            part.Size = originalSize
+                            part.Transparency = 0
+                            part.CanCollide = false
+                        end
+                    end
+                end
+            end)
+        end
+        ArsenalExpandedParts = {}
+        ArsenalOriginalSizes = {}
+        return
+    end
     
-    local mousePos = UserInputService:GetMouseLocation()
+    local maxSize = Config.Hitbox.MaxSize
+    local transparency = Config.Hitbox.Transparency
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         
         -- Team check
-        if Config.Silent.TeamCheck then
+        if Config.Hitbox.TeamCheck then
             if player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
-                continue
-            end
-            -- Also check TeamColor (some Arsenal modes use this)
-            if player.TeamColor == LocalPlayer.TeamColor then
                 continue
             end
         end
         
         local character = player.Character
         if not character then continue end
-        if not character.PrimaryPart then continue end
         
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
         if character:FindFirstChildOfClass("ForceField") then continue end
         
-        local screenPos, onScreen = cam:WorldToViewportPoint(character.PrimaryPart.Position)
-        if not onScreen then continue end
+        -- Arsenal-specific parts to expand
+        local arsenalParts = {"HeadHB", "Hitbox"}
         
-        local dist = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-        
-        if dist < bestDist then
-            bestDist = dist
-            bestPlayer = player
-        end
-    end
-    
-    return bestPlayer
-end
-
-local function GetNearestPart()
-    if not CurrentTargetPlayer or not CurrentTargetPlayer.Character then return nil end
-    
-    local bestPart = nil
-    local bestDist = math.huge
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
-    
-    local mousePos = UserInputService:GetMouseLocation()
-    
-    -- Priority parts for Arsenal (HeadHB is the real headshot hitbox)
-    local priorityParts = {"HeadHB", "Hitbox", "Head", "HumanoidRootPart"}
-    
-    -- First try priority parts
-    if Config.Silent.TargetPart == "Head" then
-        -- Try HeadHB first (Arsenal's actual head hitbox)
-        local headHB = CurrentTargetPlayer.Character:FindFirstChild("HeadHB")
-        if headHB and headHB:IsA("BasePart") then
-            local sp, on = cam:WorldToViewportPoint(headHB.Position)
-            if on then return headHB end
-        end
-        -- Fallback to Head
-        local head = CurrentTargetPlayer.Character:FindFirstChild("Head")
-        if head and head:IsA("BasePart") then
-            local sp, on = cam:WorldToViewportPoint(head.Position)
-            if on then return head end
-        end
-    elseif Config.Silent.TargetPart == "HumanoidRootPart" then
-        local hrp = CurrentTargetPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if hrp then return hrp end
-    end
-    
-    -- For "Random" or fallback: find closest part to crosshair
-    for _, part in ipairs(CurrentTargetPlayer.Character:GetChildren()) do
-        if part:IsA("BasePart") then
-            local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-            if onScreen then
-                local dist = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-                if dist < bestDist then
-                    bestDist = dist
-                    bestPart = part
+        for _, partName in ipairs(arsenalParts) do
+            local part = character:FindFirstChild(partName)
+            if part and part:IsA("BasePart") then
+                -- Save original
+                if not ArsenalOriginalSizes[player] then
+                    ArsenalOriginalSizes[player] = {}
                 end
+                if not ArsenalOriginalSizes[player][partName] then
+                    ArsenalOriginalSizes[player][partName] = part.Size
+                end
+                
+                -- Expand
+                pcall(function()
+                    part.Size = Vector3.new(maxSize, maxSize, maxSize)
+                    part.Transparency = transparency
+                    part.CanCollide = false
+                    part.Massless = true
+                end)
+                
+                ArsenalExpandedParts[player] = true
             end
         end
     end
     
-    return bestPart
+    -- Cleanup players who left or died
+    for player in pairs(ArsenalExpandedParts) do
+        if not player or not player.Parent then
+            ArsenalOriginalSizes[player] = nil
+            ArsenalExpandedParts[player] = nil
+        end
+    end
 end
 
 -- ============================================
--- VISIBILITY CHECK
+-- NOTIFY USER
 -- ============================================
 
-local function IsVisible(targetPart)
-    if not targetPart then return false end
-    local character = LocalPlayer.Character
-    if not character then return true end
-    local cam = Workspace.CurrentCamera
-    if not cam then return true end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character, cam}
-    local origin = cam.CFrame.Position
-    local direction = targetPart.Position - origin
-    local result = Workspace:Raycast(origin, direction, params)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
-    return true
-end
+task.spawn(function()
+    task.wait(5)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "⚡ ANNOMALY X - Arsenal",
+            Text = "Silent Aim not available. Use DHE (Hitbox tab, H key) + Aimbot (Q key) for best results!",
+            Duration = 10
+        })
+    end)
+end)
 
--- ============================================
--- SILENT AIM HOOK
--- Based on the verified working script
--- Hooks workspace:Raycast AND workspace:FindPartOnRayWithWhitelist
--- Redirects ALL workspace raycasts to target
--- No origin check needed - this is how the working scripts do it
--- ============================================
-
-local ogNamecall = nil
-ogNamecall = hookmetamethod(game, "__namecall", newcclosure(function(Self, ...)
-    local Args = {...}
-    local Method = getnamecallmethod()
-    
-    -- Only intercept workspace calls from game scripts (not our code)
-    if Self == Workspace and not checkcaller() then
-        -- Check if silent aim should redirect
-        if Config.Silent.Enabled and Config.Silent.Active 
-            and CurrentTargetPart and CurrentTargetPart.Parent then
-            
-            -- Hit chance check
-            if math.random(1, 100) <= Config.Silent.HitChance then
-                
-                -- ================================
-                -- workspace:Raycast() redirect
-                -- ================================
-                if Method == "Raycast" then
-                    local Origin = Args[1]
-                    local Direction = Args[2]
-                    
-                    if typeof(Origin) == "Vector3" and typeof(Direction) == "Vector3" then
-                        local newDirection = (CurrentTargetPart.Position - Origin).Unit * 1000
-                        Args[2] = newDirection
-                        return ogNamecall(Self, unpack(Args))
-                    end
-                end
-                
-                -- ================================
-                -- workspace:FindPartOnRayWithWhitelist() redirect
-                -- ================================
-                if Method == "FindPartOnRayWithWhitelist" then
-                    local OldRay = Args[1]
-                    
-                    if typeof(OldRay) == "Ray" then
-                        local Origin = OldRay.Origin
-                        local newDirection = (CurrentTargetPart.Position - Origin).Unit * 1000
-                        Args[1] = Ray.new(Origin, newDirection)
-                        return ogNamecall(Self, unpack(Args))
-                    end
-                end
-                
-                -- ================================
-                -- workspace:FindPartOnRayWithIgnoreList() redirect
-                -- (Arsonia uses this one)
-                -- ================================
-                if Method == "FindPartOnRayWithIgnoreList" then
-                    local OldRay = Args[1]
-                    
-                    if typeof(OldRay) == "Ray" then
-                        local Origin = OldRay.Origin
-                        local newDirection = (CurrentTargetPart.Position - Origin).Unit * 1000
-                        Args[1] = Ray.new(Origin, newDirection)
-                        return ogNamecall(Self, unpack(Args))
-                    end
-                end
-                
-                -- ================================
-                -- workspace:FindPartOnRay() redirect
-                -- ================================
-                if Method == "FindPartOnRay" then
-                    local OldRay = Args[1]
-                    
-                    if typeof(OldRay) == "Ray" then
-                        local Origin = OldRay.Origin
-                        local newDirection = (CurrentTargetPart.Position - Origin).Unit * 1000
-                        Args[1] = Ray.new(Origin, newDirection)
-                        return ogNamecall(Self, unpack(Args))
-                    end
-                end
+-- Silent aim notification when user tries to enable it
+task.spawn(function()
+    local lastNotify = 0
+    while task.wait(2) do
+        if Config.Silent.Enabled and Config.Silent.Active then
+            local now = tick()
+            if now - lastNotify > 20 then
+                lastNotify = now
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "⚠ Arsenal",
+                        Text = "Silent Aim patched in Arsenal. Use DHE (H key) instead - it works as silent aim!",
+                        Duration = 5
+                    })
+                end)
             end
         end
     end
-    
-    return ogNamecall(Self, ...)
-end))
+end)
 
 -- ============================================
--- TARGET UPDATE
--- Same approach as the working script:
--- 1. Find nearest player
--- 2. Find nearest part of that player
+-- MAIN LOOP
+-- Expand Arsenal-specific hitboxes alongside
+-- the main script's DHE system
 -- ============================================
 
-RunService.RenderStepped:Connect(function()
-    if Config.Silent.Enabled and Config.Silent.Active then
-        CurrentTargetPlayer = GetNearestPlayer()
-        
-        if CurrentTargetPlayer then
-            CurrentTargetPart = GetNearestPart()
-            
-            -- Visibility check if enabled
-            if Config.Silent.VisibleCheck and CurrentTargetPart then
-                if not IsVisible(CurrentTargetPart) then
-                    CurrentTargetPart = nil
-                end
-            end
-        else
-            CurrentTargetPart = nil
-        end
-    else
-        CurrentTargetPlayer = nil
-        CurrentTargetPart = nil
-    end
+RunService.Heartbeat:Connect(function()
+    ExpandArsenalHitboxes()
 end)
 
 -- ============================================
@@ -318,8 +204,26 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
-    CurrentTargetPlayer = nil
-    CurrentTargetPart = nil
+    -- Restore all on respawn
+    for player, parts in pairs(ArsenalOriginalSizes) do
+        pcall(function()
+            if player and player.Parent and player.Character then
+                for partName, originalSize in pairs(parts) do
+                    local part = player.Character:FindFirstChild(partName)
+                    if part then
+                        part.Size = originalSize
+                    end
+                end
+            end
+        end)
+    end
+    ArsenalExpandedParts = {}
+    ArsenalOriginalSizes = {}
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    ArsenalOriginalSizes[player] = nil
+    ArsenalExpandedParts[player] = nil
 end)
 
 -- ============================================
@@ -327,9 +231,8 @@ end)
 -- ============================================
 getgenv().AX_ArsenalLoaded = true
 
-print("  ✅ ARSENAL MODULE v8 loaded")
-print("  ✅ Method: Raycast + FindPartOnRay redirect")
-print("  ✅ Hooks: Raycast, FindPartOnRayWithWhitelist,")
-print("           FindPartOnRayWithIgnoreList, FindPartOnRay")
-print("  ✅ Target: Nearest player -> Nearest part")
-print("  ✅ Arsenal parts: HeadHB, Hitbox supported")
+print("  ✅ ARSENAL MODULE v9 loaded")
+print("  ⚠ Silent Aim: Not available (patched by Arsenal)")
+print("  ✅ DHE Enhancement: HeadHB + Hitbox expansion active")
+print("  ✅ Use DHE (H key) + Aimbot (Q key) for aim assist")
+print("  ✅ DHE acts as silent aim by expanding enemy hitboxes")
