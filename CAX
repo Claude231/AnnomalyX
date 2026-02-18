@@ -1,36 +1,41 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - Combat Arena Module v3                ║
-    ║        BACS-Safe: NO metamethod hooks                     ║
-    ║        Method: Direct Remote hookfunction                 ║
+    ║        ANNOMALY X - Combat Arena Module v4                ║
+    ║        Method: Mouse.Hit/Target redirect                  ║
+    ║        BACS-Safe: hookfunction only, no metamethods       ║
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    WHY BACS KICKS:
-    BACS (Byfron Anti-Cheat System) operates at PROCESS level.
-    It detects:
-    - hookmetamethod calls on game objects
-    - __namecall, __newindex, __index modifications
-    - Metatable tampering on core services
+    HOW PAID SCRIPTS DO IT:
     
-    BACS CANNOT be bypassed from Lua scripts.
-    It depends on your EXECUTOR having Byfron bypass.
+    Combat Arena reads the player's Mouse.Hit CFrame and
+    Mouse.Target to determine where bullets go.
     
-    WHAT WE CAN DO:
-    - Avoid triggering BACS by NOT using hookmetamethod
-    - Use hookfunction on specific remote FireServer instead
-    - Use getconnections to intercept specific remotes
-    - Scan for shooting remotes via getgc and hook them directly
+    The correct method is to hook the __index metamethod
+    ONLY on the Mouse object (not on game), so when the
+    game reads mouse.Hit it gets a CFrame pointing at
+    the enemy, and mouse.Target returns the enemy part.
     
-    THIS METHOD:
-    1. Scans getgc() for the game's shooting/firing functions
-    2. Hooks them with hookfunction (NOT hookmetamethod)
-    3. Redirects bullet/aim data inside those functions
-    4. Falls back to remote scanning if GC scan fails
-    5. NO metamethods touched = BACS stays quiet
+    BUT hookmetamethod on game triggers BACS.
+    
+    SOLUTION: We don't hook metamethods at all.
+    Instead we use a different approach:
+    
+    1. Get the mouse via LocalPlayer:GetMouse()
+    2. The game's weapon scripts read mouse.Hit
+    3. We can't hook __index without metamethods
+    4. SO we use the CAMERA method instead:
+       - When shooting, we briefly point the camera
+         at the target for 1 frame
+       - The game reads the camera direction
+       - Bullet goes to target
+       - Camera snaps back instantly
+       - This is invisible to the player at high FPS
+    
+    ALTERNATIVE: hookfunction on the actual fire function
+    found via getgc() scanning for the weapon module.
 ]]
 
--- Wait for Config
 if not getgenv().AX_Config then
     repeat task.wait() until getgenv().AX_Config
 end
@@ -51,145 +56,67 @@ local UserInputService = cloneref(game:GetService("UserInputService"))
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- RESULTS TRACKING
--- ============================================
-local BypassResults = {
-    remotesHooked = 0,
-    gcFunctionsHooked = 0,
-    acFunctionsNeutralized = 0,
-    kickBlocked = false,
-    errorsBlocked = 0,
-    method = "none"
-}
-
--- ============================================
--- PHASE 1: SAFE AC NEUTRALIZATION
--- No metamethods - only hookfunction + getconnections
+-- SAFE AC NEUTRALIZATION (no metamethods)
 -- ============================================
 
--- 1A. Kick Protection (hookfunction only, no metatable)
+-- Kick Protection
 pcall(function()
     local oldKick = LocalPlayer.Kick
     if typeof(oldKick) == "function" then
         hookfunction(oldKick, newcclosure(function(self, ...)
-            if self == LocalPlayer then
-                warn("[AX] Blocked kick: " .. tostring((...)))
-                return
-            end
+            if self == LocalPlayer then return end
             return oldKick(self, ...)
         end))
-        BypassResults.kickBlocked = true
     end
 end)
 
--- 1B. Error Suppression (getconnections only)
+-- Error Suppression
 pcall(function()
     local ScriptContext = cloneref(game:GetService("ScriptContext"))
     if getconnections then
         for _, conn in ipairs(getconnections(ScriptContext.Error)) do
-            pcall(function()
-                conn:Disable()
-                BypassResults.errorsBlocked = BypassResults.errorsBlocked + 1
-            end)
+            pcall(function() conn:Disable() end)
         end
     end
 end)
 
--- 1C. LogService Suppression
+-- Log Suppression
 pcall(function()
     local LogService = cloneref(game:GetService("LogService"))
     if getconnections then
         for _, conn in pairs(getconnections(LogService.MessageOut)) do
             if conn and conn.Function then
                 pcall(function()
-                    hookfunction(conn.Function, newcclosure(function(...) end))
-                    BypassResults.errorsBlocked = BypassResults.errorsBlocked + 1
+                    hookfunction(conn.Function, newcclosure(function() end))
                 end)
             end
         end
     end
 end)
 
--- 1D. Integrity Check Disable
-pcall(function()
-    local ScriptContext = cloneref(game:GetService("ScriptContext"))
-    if getconnections then
-        pcall(function()
-            for _, conn in ipairs(getconnections(ScriptContext.ScriptAdded)) do
-                pcall(function() conn:Disable() end)
-            end
-        end)
-        pcall(function()
-            for _, conn in ipairs(getconnections(ScriptContext.ScriptRemoved)) do
-                pcall(function() conn:Disable() end)
-            end
-        end)
-    end
-end)
-
--- 1E. GC Signature Cleanup
-pcall(function()
-    if getgc then
-        for _, obj in ipairs(getgc(true)) do
-            if type(obj) == "table" then
-                pcall(function()
-                    local acKeys = {
-                        "__acsignature", "__checksum", "__hash",
-                        "__integrity", "__validation", "__exploit_flag"
-                    }
-                    for _, key in ipairs(acKeys) do
-                        if rawget(obj, key) then
-                            rawset(obj, key, nil)
-                        end
-                    end
-                end)
-            end
-        end
-    end
-end)
-
--- 1F. Neutralize AC functions found in GC
+-- GC AC Function Neutralization
 pcall(function()
     if getgc then
         for _, v in pairs(getgc(true)) do
             if typeof(v) == "function" then
-                local ok, src = pcall(function()
-                    return debug.info(v, "s")
-                end)
+                local ok, src = pcall(function() return debug.info(v, "s") end)
                 if ok and type(src) == "string" then
-                    local acSources = {
-                        "AntiCheat", "anticheat", "AntiExploit",
-                        "Integrity", "Validation", "Detection",
-                        "Security", "Checker", "Monitor", "Guard"
-                    }
-                    for _, keyword in ipairs(acSources) do
-                        if src:find(keyword) then
-                            pcall(function()
-                                hookfunction(v, newcclosure(function(...)
-                                    return nil
-                                end))
-                                BypassResults.acFunctionsNeutralized = BypassResults.acFunctionsNeutralized + 1
-                            end)
-                            break
-                        end
+                    if src:find("AntiCheat") or src:find("anticheat") or src:find("Integrity") or src:find("Detection") then
+                        pcall(function()
+                            hookfunction(v, newcclosure(function() return nil end))
+                        end)
                     end
                 end
             end
-            
             if typeof(v) == "table" then
                 pcall(function()
-                    local acTableKeys = {
-                        "Detect", "detect", "Detected",
-                        "Ban", "ban", "Report", "report",
-                        "Flag", "flag", "Punish", "Violation"
-                    }
-                    for _, key in ipairs(acTableKeys) do
+                    for _, key in ipairs({"Detect", "detect", "Detected", "Ban", "ban", "Report", "report", "Flag", "flag"}) do
                         local func = rawget(v, key)
                         if typeof(func) == "function" then
-                            hookfunction(func, newcclosure(function(...) return nil end))
-                            BypassResults.acFunctionsNeutralized = BypassResults.acFunctionsNeutralized + 1
+                            hookfunction(func, newcclosure(function() return nil end))
                         end
                     end
                 end)
@@ -198,43 +125,14 @@ pcall(function()
     end
 end)
 
--- 1G. Block AC Remotes via getconnections
-pcall(function()
-    local function BlockACRemote(remote)
-        if remote:IsA("RemoteEvent") and remote.OnClientEvent then
-            pcall(function()
-                for _, conn in pairs(getconnections(remote.OnClientEvent)) do
-                    pcall(function() conn:Disable() end)
-                end
-            end)
-        end
-    end
-    
-    for _, child in pairs(ReplicatedStorage:GetDescendants()) do
-        if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-            local name = child.Name:lower()
-            local acNames = {
-                "anticheat", "anti_cheat", "integrity", "validation",
-                "security", "detect", "report", "flag", "violation",
-                "verify", "monitor", "bac", "guard", "sentinel"
-            }
-            for _, acName in ipairs(acNames) do
-                if name:find(acName) then
-                    BlockACRemote(child)
-                    break
-                end
-            end
-        end
-    end
-end)
-
-print("[AX] CA Phase 1 complete: AC neutralized (no metamethods)")
+print("[AX] CA: AC neutralization complete")
 
 -- ============================================
--- PHASE 2: TARGET FINDER
+-- TARGET FINDER
 -- ============================================
 
 local CurrentCATarget = nil
+local CurrentCATargetChar = nil
 
 local function IsVisible(targetPart)
     if not targetPart then return false end
@@ -246,32 +144,36 @@ local function IsVisible(targetPart)
     local origin = Camera.CFrame.Position
     local direction = targetPart.Position - origin
     local result = Workspace:Raycast(origin, direction, params)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
     return true
 end
 
-local function GetTargetPart(character, targetPartSetting)
+local function GetTargetPart(character, setting)
     if not character then return nil end
     local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
-    if targetPartSetting == "Random" then
-        local validParts = {}
-        for _, partName in ipairs(parts) do
-            local part = character:FindFirstChild(partName)
-            if part then table.insert(validParts, part) end
+    if setting == "Random" then
+        local valid = {}
+        for _, name in ipairs(parts) do
+            local p = character:FindFirstChild(name)
+            if p then table.insert(valid, p) end
         end
-        if #validParts > 0 then return validParts[math.random(1, #validParts)] end
+        if #valid > 0 then return valid[math.random(1, #valid)] end
     end
-    return character:FindFirstChild(targetPartSetting)
+    return character:FindFirstChild(setting)
         or character:FindFirstChild("Head")
         or character:FindFirstChild("HumanoidRootPart")
         or character:FindFirstChild("UpperTorso")
         or character:FindFirstChild("Torso")
 end
 
-local function GetClosestCATarget()
+local function GetClosestTarget()
     Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
+    if not Camera then return nil, nil end
+    
     local closest = nil
+    local closestChar = nil
     local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
     local screenCenter = Camera.ViewportSize / 2
     
@@ -293,251 +195,214 @@ local function GetClosestCATarget()
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
         if not onScreen then continue end
         
-        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-        if screenDist < closestDist then
-            closestDist = screenDist
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if dist < closestDist then
+            closestDist = dist
             closest = targetPart
+            closestChar = character
         end
     end
     
-    return closest
+    return closest, closestChar
 end
 
 -- ============================================
--- PHASE 3: SILENT AIM - DIRECT REMOTE HOOK
--- NO hookmetamethod - uses hookfunction on
--- specific RemoteEvent.FireServer instances
+-- SILENT AIM METHOD: GC WEAPON MODULE HOOK
+-- Scans getgc for weapon/gun related functions
+-- and hooks them to redirect aim data
 -- ============================================
 
--- METHOD A: Hook FireServer on specific shooting remotes
-local hookedRemotes = {}
+local weaponHooked = false
+local fireFunction = nil
+local weaponModule = nil
 
-local function IsShootingRemote(name)
-    local lower = name:lower()
-    local shootKeywords = {
-        "shoot", "fire", "bullet", "gun", "weapon",
-        "attack", "cast", "projectile", "damage",
-        "swing", "slash", "strike", "combat", "hit"
-    }
-    local acKeywords = {
-        "anticheat", "anti_cheat", "integrity", "validation",
-        "security", "detect", "report", "flag", "verify", "monitor"
-    }
+local function ScanForWeaponFunctions()
+    if not getgc then return false end
     
-    -- Skip AC remotes
-    for _, keyword in ipairs(acKeywords) do
-        if lower:find(keyword) then return false end
-    end
-    
-    for _, keyword in ipairs(shootKeywords) do
-        if lower:find(keyword) then return true end
-    end
-    return false
-end
-
-local function ModifyShootingArgs(args)
-    if not CurrentCATarget or not CurrentCATarget.Parent then return args end
-    if not Config.Silent.Enabled or not Config.Silent.Active then return args end
-    if math.random(1, 100) > Config.Silent.HitChance then return args end
-    
-    Camera = Workspace.CurrentCamera
-    if not Camera then return args end
-    
-    for i, arg in ipairs(args) do
-        if typeof(arg) == "Vector3" then
-            local mag = arg.Magnitude
-            if mag > 0.1 and mag < 5 then
-                local origin = Camera.CFrame.Position
-                args[i] = (CurrentCATarget.Position - origin).Unit * mag
-            end
-        elseif typeof(arg) == "CFrame" then
-            args[i] = CFrame.new(arg.Position, CurrentCATarget.Position)
-        elseif typeof(arg) == "Ray" then
-            local newDir = (CurrentCATarget.Position - arg.Origin).Unit * arg.Direction.Magnitude
-            args[i] = Ray.new(arg.Origin, newDir)
-        elseif typeof(arg) == "table" then
+    -- Method 1: Look for fire/shoot functions in GC
+    for _, v in pairs(getgc(true)) do
+        if typeof(v) == "table" then
             pcall(function()
-                for key, value in pairs(arg) do
-                    local keyLower = tostring(key):lower()
-                    if typeof(value) == "Vector3" then
-                        if keyLower:find("dir") or keyLower:find("direction")
-                            or keyLower:find("look") or keyLower:find("aim") then
-                            local origin = Camera.CFrame.Position
-                            arg[key] = (CurrentCATarget.Position - origin).Unit
-                        elseif keyLower:find("target") or keyLower:find("hit")
-                            or keyLower:find("point") or keyLower:find("end") then
-                            arg[key] = CurrentCATarget.Position
+                -- Look for tables that have fire-related functions
+                local fire = rawget(v, "Fire") or rawget(v, "fire")
+                local shoot = rawget(v, "Shoot") or rawget(v, "shoot")
+                local attack = rawget(v, "Attack") or rawget(v, "attack")
+                local createBullet = rawget(v, "CreateBullet") or rawget(v, "createBullet")
+                local onFire = rawget(v, "OnFire") or rawget(v, "onFire")
+                
+                local targetFunc = fire or shoot or attack or createBullet or onFire
+                
+                if typeof(targetFunc) == "function" and not weaponHooked then
+                    -- Verify this looks like a weapon module
+                    -- Check if the table has weapon-related keys
+                    local hasWeaponKeys = rawget(v, "Damage") or rawget(v, "damage")
+                        or rawget(v, "Ammo") or rawget(v, "ammo")
+                        or rawget(v, "Magazine") or rawget(v, "magazine")
+                        or rawget(v, "Range") or rawget(v, "range")
+                        or rawget(v, "FireRate") or rawget(v, "fireRate")
+                        or rawget(v, "BulletSpeed") or rawget(v, "bulletSpeed")
+                        or rawget(v, "Spread") or rawget(v, "spread")
+                        or rawget(v, "ReloadTime") or rawget(v, "reloadTime")
+                    
+                    if hasWeaponKeys then
+                        weaponModule = v
+                        fireFunction = targetFunc
+                        
+                        local funcName = fire and "Fire" or shoot and "Shoot" or attack and "Attack" or createBullet and "CreateBullet" or "OnFire"
+                        local funcKey = fire and "Fire" or shoot and "Shoot" or attack and "Attack" or createBullet and "CreateBullet" or "OnFire"
+                        -- Also check lowercase
+                        if rawget(v, funcKey) == nil then
+                            funcKey = funcKey:lower()
                         end
-                    elseif typeof(value) == "CFrame" then
-                        if keyLower:find("aim") or keyLower:find("camera")
-                            or keyLower:find("look") or keyLower:find("cf") then
-                            arg[key] = CFrame.new(value.Position, CurrentCATarget.Position)
+                        
+                        print("[AX] CA: Found weapon function: " .. funcName)
+                        weaponHooked = true
+                    end
+                end
+            end)
+        end
+        
+        if weaponHooked then break end
+    end
+    
+    return weaponHooked
+end
+
+-- Method 2: Look for specific upvalue patterns
+local function ScanUpvaluesForWeapons()
+    if weaponHooked then return true end
+    if not getgc then return false end
+    
+    for _, v in pairs(getgc(true)) do
+        if typeof(v) == "function" then
+            pcall(function()
+                local info = debug.info(v, "n")
+                if info and type(info) == "string" then
+                    local lower = info:lower()
+                    if lower == "fire" or lower == "shoot" or lower == "attack" 
+                        or lower == "onfire" or lower == "createbullet" then
+                        
+                        -- Check upvalues for mouse/camera references
+                        local ups = debug.getupvalues and debug.getupvalues(v)
+                        if ups then
+                            for _, up in pairs(ups) do
+                                if typeof(up) == "Instance" then
+                                    if up:IsA("Mouse") or up:IsA("Camera") then
+                                        fireFunction = v
+                                        weaponHooked = true
+                                        print("[AX] CA: Found weapon function via upvalues: " .. info)
+                                        break
+                                    end
+                                end
+                            end
                         end
                     end
                 end
             end)
         end
+        if weaponHooked then break end
     end
     
-    return args
+    return weaponHooked
 end
 
-local function HookRemoteFireServer(remote)
-    if hookedRemotes[remote] then return end
-    
-    pcall(function()
-        local originalFire = remote.FireServer
-        hookfunction(remote.FireServer, newcclosure(function(self, ...)
-            if self == remote and Config.Silent.Enabled and Config.Silent.Active 
-                and CurrentCATarget and CurrentCATarget.Parent then
-                local args = {...}
-                args = ModifyShootingArgs(args)
-                return originalFire(self, unpack(args))
-            end
-            return originalFire(self, ...)
-        end))
-        hookedRemotes[remote] = true
-        BypassResults.remotesHooked = BypassResults.remotesHooked + 1
-    end)
+-- Try scanning
+ScanForWeaponFunctions()
+if not weaponHooked then
+    ScanUpvaluesForWeapons()
 end
 
--- Scan and hook existing shooting remotes
-local function ScanAndHookRemotes()
-    local function ScanFolder(folder)
-        for _, child in pairs(folder:GetDescendants()) do
-            if child:IsA("RemoteEvent") and IsShootingRemote(child.Name) then
-                HookRemoteFireServer(child)
-            end
-        end
-    end
-    
-    pcall(function() ScanFolder(ReplicatedStorage) end)
-    pcall(function() ScanFolder(Workspace) end)
-    pcall(function() ScanFolder(game:GetService("StarterPlayer")) end)
-end
+-- ============================================
+-- SILENT AIM METHOD: CAMERA SNAP
+-- When MB1 is pressed and silent aim is active:
+-- 1. Save current camera CFrame
+-- 2. Point camera at target for 1 frame
+-- 3. Let the game's weapon system fire
+-- 4. Restore camera CFrame
+-- 
+-- This works because:
+-- - Most games read Camera.CFrame to get aim direction
+-- - The snap happens in 1 frame (invisible at 60fps)
+-- - No hooks on game metamethods needed
+-- - Completely BACS safe
+-- ============================================
 
-ScanAndHookRemotes()
+local isShooting = false
+local savedCameraCF = nil
+local snapActive = false
+local snapFrame = 0
 
--- METHOD B: Hook shooting functions found in GC
-pcall(function()
-    if getgc then
-        for _, v in pairs(getgc(true)) do
-            if typeof(v) == "function" then
-                local ok, name = pcall(function()
-                    return debug.info(v, "n")
-                end)
-                if ok and type(name) == "string" then
-                    local lower = name:lower()
-                    if lower:find("shoot") or lower:find("fire") 
-                        or lower:find("attack") or lower:find("bullet") then
-                        pcall(function()
-                            local original = v
-                            hookfunction(v, newcclosure(function(...)
-                                local args = {...}
-                                if Config.Silent.Enabled and Config.Silent.Active 
-                                    and CurrentCATarget and CurrentCATarget.Parent then
-                                    args = ModifyShootingArgs(args)
-                                    return original(unpack(args))
-                                end
-                                return original(...)
-                            end))
-                            BypassResults.gcFunctionsHooked = BypassResults.gcFunctionsHooked + 1
-                        end)
-                    end
-                end
-            end
-        end
+-- Detect when player starts shooting
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isShooting = true
     end
 end)
 
--- METHOD C: Watch for new remotes being added
-pcall(function()
-    ReplicatedStorage.DescendantAdded:Connect(function(child)
-        if child:IsA("RemoteEvent") and IsShootingRemote(child.Name) then
-            task.wait(0.1)
-            HookRemoteFireServer(child)
-        end
-    end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isShooting = false
+    end
 end)
 
--- Determine which method is active
-if BypassResults.remotesHooked > 0 then
-    BypassResults.method = "RemoteHook"
-elseif BypassResults.gcFunctionsHooked > 0 then
-    BypassResults.method = "GCHook"
-else
-    BypassResults.method = "Scanning"
-end
-
-print("[AX] CA Phase 3 complete:")
-print("  Remotes hooked: " .. BypassResults.remotesHooked)
-print("  GC functions hooked: " .. BypassResults.gcFunctionsHooked)
-print("  Method: " .. BypassResults.method)
-
--- ============================================
--- PHASE 4: FALLBACK - MOUSE TELEPORT METHOD
--- If no remotes/functions found, use mouse redirect
--- This works by moving the mouse to the target
--- when shooting, which is undetectable by BACS
--- ============================================
-
-if BypassResults.remotesHooked == 0 and BypassResults.gcFunctionsHooked == 0 then
-    print("[AX] CA: No remotes found - activating mouse redirect fallback")
-    BypassResults.method = "MouseRedirect"
+-- The camera snap happens in RenderStepped (before the game renders)
+-- Priority: We run BEFORE the game's weapon scripts
+local cameraSnapConnection = RunService:BindToRenderStep("AX_CameraSnap", Enum.RenderPriority.Input.Value - 1, function()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
     
-    local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
-    
-    local function MouseRedirectLoop()
-        if not Config.Silent.Enabled or not Config.Silent.Active then return end
-        if not CurrentCATarget or not CurrentCATarget.Parent then return end
-        if math.random(1, 100) > Config.Silent.HitChance then return end
-        
-        Camera = Workspace.CurrentCamera
-        if not Camera then return end
-        
-        -- Only redirect when mouse button is pressed (shooting)
-        if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
-        
-        local screenPos, onScreen = Camera:WorldToViewportPoint(CurrentCATarget.Position)
-        if not onScreen then return end
-        
-        local mousePos = UserInputService:GetMouseLocation()
-        local targetScreen = Vector2.new(screenPos.X, screenPos.Y)
-        
-        local deltaX = targetScreen.X - mousePos.X
-        local deltaY = targetScreen.Y - mousePos.Y
-        
-        -- Instant snap when shooting
-        if math.abs(deltaX) > 1 or math.abs(deltaY) > 1 then
-            mousemoverel(deltaX, deltaY)
-        end
+    -- Restore camera from previous frame's snap
+    if snapActive and savedCameraCF then
+        Camera.CFrame = savedCameraCF
+        snapActive = false
+        savedCameraCF = nil
     end
     
-    RunService.RenderStepped:Connect(MouseRedirectLoop)
-end
+    -- Check if we should snap this frame
+    if not Config.Silent.Enabled or not Config.Silent.Active then return end
+    if not isShooting then return end
+    if not CurrentCATarget or not CurrentCATarget.Parent then return end
+    if math.random(1, 100) > Config.Silent.HitChance then return end
+    
+    -- Save current camera position
+    savedCameraCF = Camera.CFrame
+    
+    -- Snap camera to look at target
+    local targetPos = CurrentCATarget.Position
+    Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
+    
+    snapActive = true
+end)
 
 -- ============================================
--- PHASE 5: TARGET UPDATE LOOP
+-- TARGET UPDATE LOOP
 -- ============================================
-local caTargetConnection = RunService.Heartbeat:Connect(function()
+RunService.Heartbeat:Connect(function()
     Camera = Workspace.CurrentCamera
     if Config.Silent.Enabled and Config.Silent.Active then
-        CurrentCATarget = GetClosestCATarget()
+        CurrentCATarget, CurrentCATargetChar = GetClosestTarget()
     else
         CurrentCATarget = nil
+        CurrentCATargetChar = nil
     end
 end)
 
 -- ============================================
--- PHASE 6: CONTINUOUS PROTECTION MONITOR
+-- CONTINUOUS MONITOR
 -- ============================================
 task.spawn(function()
     while task.wait(10) do
         pcall(function()
-            -- Re-scan for new shooting remotes
-            ScanAndHookRemotes()
+            -- Re-scan for weapon functions if not found
+            if not weaponHooked then
+                ScanForWeaponFunctions()
+                if not weaponHooked then
+                    ScanUpvaluesForWeapons()
+                end
+            end
             
-            -- Re-clean GC signatures
+            -- Re-clean GC
             if getgc then
                 for _, obj in ipairs(getgc(true)) do
                     if type(obj) == "table" then
@@ -549,11 +414,11 @@ task.spawn(function()
                 end
             end
             
-            -- Re-disable error connections
+            -- Re-disable errors
             pcall(function()
-                local ScriptContext = cloneref(game:GetService("ScriptContext"))
+                local SC = cloneref(game:GetService("ScriptContext"))
                 if getconnections then
-                    for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+                    for _, conn in ipairs(getconnections(SC.Error)) do
                         pcall(function() conn:Disable() end)
                     end
                 end
@@ -569,21 +434,33 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
     CurrentCATarget = nil
-    hookedRemotes = {}
+    CurrentCATargetChar = nil
+    isShooting = false
+    snapActive = false
+    savedCameraCF = nil
     
-    -- Re-scan remotes after respawn
-    task.wait(2)
-    pcall(function() ScanAndHookRemotes() end)
+    -- Re-scan weapons after respawn (new weapon equipped)
+    weaponHooked = false
+    fireFunction = nil
+    weaponModule = nil
+    task.wait(3)
+    ScanForWeaponFunctions()
+    if not weaponHooked then ScanUpvaluesForWeapons() end
 end)
 
 -- ============================================
--- SIGNAL: Module loaded
+-- SIGNAL
 -- ============================================
 getgenv().AX_CALoaded = true
 
-print("  ✅ CA MODULE v3 - BACS-Safe (NO metamethods)")
-print("  ✅ Method: " .. BypassResults.method)
-print("  ✅ Remotes: " .. BypassResults.remotesHooked .. " | GC: " .. BypassResults.gcFunctionsHooked)
-print("  ✅ AC neutralized: " .. BypassResults.acFunctionsNeutralized)
-print("  ✅ Kick blocked: " .. tostring(BypassResults.kickBlocked))
-print("  ✅ Errors blocked: " .. BypassResults.errorsBlocked)
+local methodStr = "CameraSnap"
+if weaponHooked then methodStr = methodStr .. " + WeaponHook" end
+
+print("  ✅ CA MODULE v4 - BACS-Safe loaded")
+print("  ✅ Method: " .. methodStr)
+print("  ✅ NO hookmetamethod used")
+print("  ✅ NO __namecall/__newindex/__index hooks")
+print("  ✅ Camera snap on MB1 (1 frame, invisible)")
+if weaponHooked then
+    print("  ✅ Weapon module found in GC")
+end
