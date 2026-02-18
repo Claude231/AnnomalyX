@@ -6,15 +6,12 @@
     ║        Creator: ElSacaLeche                               ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    CHANGES FROM v5:
-    - OPTIMIZED: Target finding throttled (every 2 frames)
-    - OPTIMIZED: Cached player list (no GetPlayers() every frame)
-    - OPTIMIZED: Character/Humanoid cached per player
-    - FIXED: ESP now handled by this module (main script ESP breaks in CA)
-    - FIXED: ESP searches multiple character containers
-    - FIXED: ForceField filter for spawning players
-    - UNCHANGED: All AC bypass code (was already working)
-    - UNCHANGED: Mouse __index hook method (was already working)
+    FIX v6.1:
+    - Mouse.Target hook was causing weapon swap/reload issues
+    - Now only redirects Mouse.Hit and Mouse.UnitRay
+    - Only activates during MouseButton1 held (shooting)
+    - Mouse.Target, Mouse.X, Mouse.Y left untouched
+      (these are used by CA for weapon swap, reload, UI, etc.)
 ]]
 
 if not getgenv().AX_Config then
@@ -39,8 +36,7 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- AC NEUTRALIZATION (UNCHANGED FROM v5)
--- This was already working, don't touch it
+-- AC NEUTRALIZATION (UNCHANGED - already working)
 -- ============================================
 
 pcall(function()
@@ -104,12 +100,32 @@ pcall(function()
 end)
 
 -- ============================================
--- OPTIMIZATION: CACHED PLAYER LIST
--- Avoids calling GetPlayers() every frame
+-- MOUSE BUTTON TRACKING
+-- Only redirect aim when actually shooting
+-- This prevents weapon swap / reload interference
+-- ============================================
+
+local isMouseDown = false
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isMouseDown = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isMouseDown = false
+    end
+end)
+
+-- ============================================
+-- CACHED PLAYER LIST
 -- ============================================
 
 local CachedPlayers = {}
-local CachedCharacters = {} -- player -> {char, humanoid, rootPart, lastUpdate}
+local CachedCharacters = {}
 
 local function RefreshPlayerList()
     CachedPlayers = {}
@@ -139,17 +155,13 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 -- ============================================
--- OPTIMIZATION: CHARACTER CACHE
--- Caches character, humanoid, root part
--- Refreshes only when character changes
+-- CHARACTER CACHE
 -- ============================================
 
 local function GetCachedCharacterData(player)
     if not player or not player.Parent then return nil end
     
     local cached = CachedCharacters[player]
-    
-    -- Check if cache is still valid
     if cached then
         local char = cached.char
         local hum = cached.humanoid
@@ -158,7 +170,6 @@ local function GetCachedCharacterData(player)
         end
     end
     
-    -- Rebuild cache
     local character = player.Character
     if not character then 
         CachedCharacters[player] = nil
@@ -186,13 +197,12 @@ local function GetCachedCharacterData(player)
 end
 
 -- ============================================
--- TARGET FINDER (OPTIMIZED)
--- Same logic as v5 but uses cached data
+-- TARGET FINDER
 -- ============================================
 
 local CurrentTargetPart = nil
 local FrameCounter = 0
-local TARGET_UPDATE_FRAMES = 2 -- Find target every 2 frames
+local TARGET_UPDATE_FRAMES = 2
 
 local function IsVisible(targetPart)
     if not targetPart then return false end
@@ -244,7 +254,6 @@ local function FindTarget()
         local data = GetCachedCharacterData(player)
         if not data then continue end
         
-        -- Skip spawning players
         if data.char:FindFirstChildOfClass("ForceField") then continue end
         
         local part = GetTargetPart(data.char, Config.Silent.TargetPart)
@@ -266,8 +275,19 @@ local function FindTarget()
 end
 
 -- ============================================
--- SILENT AIM: MOUSE __INDEX HOOK (UNCHANGED)
--- This was already working perfectly
+-- SILENT AIM: MOUSE __INDEX HOOK (FIXED)
+-- 
+-- PROBLEM: Hooking Mouse.Target caused the game to
+-- think we're clicking on weapons/pickups, triggering
+-- weapon swap and blocking reload.
+--
+-- FIX: 
+-- 1. ONLY hook Mouse.Hit and Mouse.UnitRay
+--    (these are what the shooting system reads)
+-- 2. DO NOT hook Mouse.Target, Mouse.X, Mouse.Y
+--    (these are used for UI, weapon pickup, reload, etc.)
+-- 3. Only redirect when MouseButton1 is held (shooting)
+--    (prevents interference during idle/reload/swap)
 -- ============================================
 
 local mouseHooked = false
@@ -279,27 +299,32 @@ pcall(function()
         setreadonly(mt, false)
         
         mt.__index = newcclosure(function(self, key)
-            if self == Mouse and CurrentTargetPart and CurrentTargetPart.Parent then
-                if Config.Silent.Enabled and Config.Silent.Active then
-                    if math.random(1, 100) <= Config.Silent.HitChance then
-                        if key == "Hit" then
-                            return CFrame.new(CurrentTargetPart.Position)
-                        elseif key == "Target" then
-                            return CurrentTargetPart
-                        elseif key == "X" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTargetPart.Position)
-                            return pos.X
-                        elseif key == "Y" then
-                            local pos = Camera:WorldToScreenPoint(CurrentTargetPart.Position)
-                            return pos.Y
-                        elseif key == "UnitRay" then
-                            local origin = Camera.CFrame.Position
-                            local direction = (CurrentTargetPart.Position - origin).Unit
-                            return Ray.new(origin, direction)
-                        end
-                    end
+            -- Only redirect when ALL conditions met:
+            -- 1. We have a target
+            -- 2. Silent aim is enabled and active
+            -- 3. Mouse button is held (actually shooting)
+            -- 4. Hit chance passes
+            if self == Mouse 
+                and CurrentTargetPart and CurrentTargetPart.Parent 
+                and Config.Silent.Enabled and Config.Silent.Active 
+                and isMouseDown
+                and math.random(1, 100) <= Config.Silent.HitChance then
+                
+                -- ONLY redirect Hit and UnitRay
+                -- These are what the weapon system uses for bullet direction
+                if key == "Hit" then
+                    return CFrame.new(CurrentTargetPart.Position)
+                elseif key == "UnitRay" then
+                    local origin = Camera.CFrame.Position
+                    local direction = (CurrentTargetPart.Position - origin).Unit
+                    return Ray.new(origin, direction)
                 end
+                
+                -- DO NOT redirect these:
+                -- Mouse.Target -> used for weapon pickup, interaction
+                -- Mouse.X / Mouse.Y -> used for UI, cursor position
             end
+            
             return oldIndex(self, key)
         end)
         
@@ -308,7 +333,7 @@ pcall(function()
     end
 end)
 
--- Fallback (UNCHANGED from v5)
+-- Fallback (UNCHANGED)
 if not mouseHooked then
     pcall(function()
         local mt = getrawmetatable(Mouse)
@@ -328,10 +353,7 @@ if not mouseHooked then
 end
 
 -- ============================================
--- ESP FIX: CA-SPECIFIC ESP
--- The main script's ESP breaks because it can't
--- find characters properly in CA. This module
--- handles ESP using our cached character data.
+-- ESP (CA-specific, fixes main script ESP)
 -- ============================================
 
 local CAESPObjects = {}
@@ -404,7 +426,6 @@ local function UpdateCAESP()
         local esp = CAESPObjects[player]
         if not esp then continue end
         
-        -- Team check
         if Config.ESP.TeamCheck and player.Team and LocalPlayer.Team 
             and player.Team == LocalPlayer.Team then
             HideCAESP(esp)
@@ -445,18 +466,16 @@ local function UpdateCAESP()
     end
 end
 
--- Tell main script this module handles ESP
 getgenv().AX_PF_HandlesESP = true
 
 -- ============================================
--- MAIN LOOP (OPTIMIZED)
+-- MAIN LOOP
 -- ============================================
 
 RunService.Heartbeat:Connect(function()
     Camera = Workspace.CurrentCamera
     FrameCounter = FrameCounter + 1
     
-    -- Target finding: every 2 frames instead of every frame
     if Config.Silent.Enabled and Config.Silent.Active then
         if FrameCounter % TARGET_UPDATE_FRAMES == 0 then
             CurrentTargetPart = FindTarget()
@@ -465,7 +484,6 @@ RunService.Heartbeat:Connect(function()
         CurrentTargetPart = nil
     end
     
-    -- ESP update (has its own internal throttle)
     UpdateCAESP()
 end)
 
@@ -477,6 +495,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     Camera = Workspace.CurrentCamera
     CurrentTargetPart = nil
+    isMouseDown = false
     CachedCharacters = {}
 end)
 
@@ -490,8 +509,9 @@ end)
 -- ============================================
 getgenv().AX_CALoaded = true
 
-print("  ✅ CA MODULE v6 loaded")
+print("  ✅ CA MODULE v6.1 loaded")
 print("  ✅ Mouse hooked: " .. tostring(mouseHooked))
+print("  ✅ FIXED: Only Hook Mouse.Hit + Mouse.UnitRay")
+print("  ✅ FIXED: Mouse.Target untouched (no weapon swap)")
+print("  ✅ FIXED: Only redirects when MouseButton1 held")
 print("  ✅ ESP: CA-specific (fixed)")
-print("  ✅ Optimized: cached players + throttled target")
-print("  ✅ AC bypass: unchanged from working v5")
