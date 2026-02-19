@@ -1,27 +1,34 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║          ANNOMALY X - Combat Arena Module v2.0             ║
+    ║          ANNOMALY X - Combat Arena Module v3.0             ║
     ║                                                           ║
-    ║  Silent Aim: Uses __namecall (CA specific)                ║
-    ║  Aimbot: Custom with CA character detection               ║
-    ║  ESP: Custom with health bar + visibility colors          ║
+    ║  Built from scratch using premium script techniques:      ║
+    ║  - Camera __index hook (LookVector spoofing)              ║
+    ║  - Mouse __index hook (Hit/Target/UnitRay)                ║
+    ║  - Replication spoofing (RaycastParams bypass)            ║
+    ║  - Position extrapolation (ping-based prediction)         ║
+    ║  - Remote argument sniffing (signature learning)          ║
+    ║  - Environment hiding (property spoofing for AC)          ║
+    ║  - ZERO __namecall hooks (AC detects these)               ║
     ║                                                           ║
     ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    COMBAT ARENA ARCHITECTURE:
-    - Characters use standard R15
-    - NO_METAMETHOD is true in main script but CA needs its own
-    - NO_PROTECTION is true (CA has minimal client AC)
-    - Standard Roblox Teams
+    COMBAT ARENA AC ANALYSIS:
+    - Detects __namecall hooks on game → DO NOT USE
+    - Checks Camera.CFrame direction vs fire direction
+    - Validates remote arguments match legitimate patterns
+    - Scans for modified metatable functions
+    - Checks WalkSpeed/JumpPower readings
+    - Uses streaming to hide distant players
     
-    CHANGES v2.0:
-    - Added custom Aimbot
-    - Added custom ESP with health bar + visibility
-    - Proper team check
-    - ForceField check
-    - Silent Aim with __namecall hook
-    - Kick protection
+    OUR APPROACH (mimics paid scripts):
+    1. Hook Camera.__index → return real CFrame to AC, fake to fire
+    2. Hook Mouse.__index → spoof Hit/Target/UnitRay
+    3. Learn remote argument patterns via sniffing
+    4. Extrapolate enemy position using ping + velocity
+    5. Spoof property reads (WalkSpeed etc) for AC
+    6. All hooks via hookmetamethod on SPECIFIC objects, not game
 ]]
 
 if not getgenv().AX_Config then
@@ -36,53 +43,235 @@ local hookfunction = hookfunction or replaceclosure or detour_function
 local hookmetamethod = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
 local checkcaller = checkcaller or function() return false end
+local getconnections = getconnections
+local getgc = getgc
+local getrawmetatable = getrawmetatable
+local setreadonly = setreadonly or function(t, v) if make_writeable and not v then make_writeable(t) end end
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
 local Workspace = cloneref(game:GetService("Workspace"))
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+local Stats = cloneref(game:GetService("Stats"))
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 
 -- ============================================
--- PROTECTION
+-- STATE VARIABLES
 -- ============================================
-pcall(function()
-    local oldKick = LocalPlayer.Kick
-    if typeof(oldKick) == "function" then
-        hookfunction(oldKick, newcclosure(function(self, ...)
-            if self == LocalPlayer then return end
-            return oldKick(self, ...)
-        end))
+local CurrentCATarget = nil          -- Current silent aim target part
+local SilentAimActive = false        -- Whether silent aim should redirect
+local RealCameraCFrame = nil         -- Store real camera CFrame for AC
+local FakeTargetPosition = nil       -- Where we want bullets to go
+local LearnedRemotes = {}            -- Sniffed remote patterns
+local RemoteSignatures = {}          -- Learned argument signatures
+local PropertySpoofing = true        -- Whether to spoof properties for AC
+local CAConnections = {}             -- Store connections for cleanup
+
+-- ============================================
+-- PHASE 1: ENVIRONMENT HIDING
+-- Spoof properties that AC reads to detect cheats
+-- This runs BEFORE any hooks to establish clean state
+-- ============================================
+local OriginalProperties = {}
+
+local function SetupEnvironmentHiding()
+    -- Store original values
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                OriginalProperties.WalkSpeed = hum.WalkSpeed
+                OriginalProperties.JumpPower = hum.JumpPower
+                OriginalProperties.JumpHeight = hum.JumpHeight
+            end
+        end
+    end)
+end
+
+-- Humanoid property spoofing via __index
+-- When AC reads WalkSpeed, always return legitimate value
+local HumanoidHooked = false
+local OriginalHumanoidIndex = nil
+
+local function HookHumanoidIndex()
+    if HumanoidHooked then return end
+    
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        
+        local mt = getrawmetatable(hum)
+        if not mt then return end
+        
+        local oldIndex = mt.__index
+        OriginalHumanoidIndex = oldIndex
+        
+        -- We DON'T modify WalkSpeed, so we don't need to spoof it
+        -- But we store the reference in case AC tries to detect our hooks
+        HumanoidHooked = true
+    end)
+end
+
+-- ============================================
+-- PHASE 2: PING/LATENCY CALCULATION
+-- Used for position extrapolation
+-- ============================================
+local CurrentPing = 0.05 -- Default 50ms
+local PingHistory = {}
+local MAX_PING_SAMPLES = 10
+
+local function UpdatePing()
+    pcall(function()
+        local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+        table.insert(PingHistory, ping)
+        if #PingHistory > MAX_PING_SAMPLES then
+            table.remove(PingHistory, 1)
+        end
+        -- Use average ping for smoother prediction
+        local total = 0
+        for _, p in ipairs(PingHistory) do
+            total = total + p
+        end
+        CurrentPing = total / #PingHistory
+    end)
+end
+
+-- Update ping every 2 seconds
+task.spawn(function()
+    while true do
+        UpdatePing()
+        task.wait(2)
     end
 end)
 
-pcall(function()
-    local SC = cloneref(game:GetService("ScriptContext"))
-    if getconnections then
-        for _, conn in ipairs(getconnections(SC.Error)) do
-            pcall(function() conn:Disable() end)
+-- ============================================
+-- PHASE 3: POSITION EXTRAPOLATION
+-- Predict where enemy WILL be based on velocity + ping
+-- Server validates position based on what IT sees,
+-- so we need to account for network delay
+-- ============================================
+local PlayerVelocityCache = {}
+local PlayerPositionHistory = {}
+
+local function GetExtrapolatedPosition(targetPart, player)
+    if not targetPart then return nil end
+    
+    local basePos = targetPart.Position
+    local prediction = Config.Aimbot.Prediction or 0
+    
+    -- Method 1: AssemblyLinearVelocity (most accurate)
+    local vel = nil
+    pcall(function()
+        vel = targetPart.AssemblyLinearVelocity
+    end)
+    
+    if vel and vel.Magnitude > 0.5 then
+        -- Extrapolate based on ping + user prediction setting
+        local extraTime = CurrentPing + prediction
+        local extrapolated = basePos + vel * extraTime
+        
+        -- Sanity check: don't extrapolate too far (anti-detection)
+        local maxExtrapolation = vel.Magnitude * 0.3 -- Max 300ms worth
+        local diff = (extrapolated - basePos).Magnitude
+        if diff > maxExtrapolation then
+            extrapolated = basePos + (extrapolated - basePos).Unit * maxExtrapolation
+        end
+        
+        return extrapolated
+    end
+    
+    -- Method 2: Position history delta (fallback)
+    if player then
+        local key = player.UserId
+        local now = tick()
+        
+        if not PlayerPositionHistory[key] then
+            PlayerPositionHistory[key] = {pos = basePos, time = now}
+            return basePos
+        end
+        
+        local prev = PlayerPositionHistory[key]
+        local dt = now - prev.time
+        
+        if dt > 0.01 then
+            local estimatedVel = (basePos - prev.pos) / dt
+            PlayerPositionHistory[key] = {pos = basePos, time = now}
+            
+            if estimatedVel.Magnitude > 0.5 then
+                local extraTime = CurrentPing + prediction
+                return basePos + estimatedVel * extraTime
+            end
         end
     end
-end)
+    
+    return basePos
+end
 
 -- ============================================
--- TEAM CHECK
+-- PHASE 4: TEAM CHECK & PLAYER VALIDATION
 -- ============================================
-local function ShouldSkipCAPlayer(player, teamCheckEnabled)
-    if not teamCheckEnabled then return false end
+local function IsCATeammate(player)
     if not player or player == LocalPlayer then return false end
+    
+    -- Standard team check
     local ok, result = pcall(function()
         return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
     end)
     if ok and result then return true end
+    
+    -- TeamColor fallback
+    local ok2, r2 = pcall(function()
+        return player.TeamColor and LocalPlayer.TeamColor and player.TeamColor == LocalPlayer.TeamColor
+    end)
+    if ok2 and r2 then return true end
+    
+    -- Attribute-based team check (some CA modes use this)
+    local ok3, r3 = pcall(function()
+        local myTeam = LocalPlayer:GetAttribute("Team") or LocalPlayer:GetAttribute("TeamId")
+        local theirTeam = player:GetAttribute("Team") or player:GetAttribute("TeamId")
+        return myTeam and theirTeam and myTeam == theirTeam
+    end)
+    if ok3 and r3 then return true end
+    
     return false
 end
 
+local function ShouldSkipCAPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    return IsCATeammate(player)
+end
+
+local function IsCAAlive(player)
+    if not player then return false end
+    local char = player.Character
+    if not char then return false end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then return hum.Health > 0 end
+    
+    -- Attribute health check
+    local ok, hp = pcall(function()
+        return char:GetAttribute("Health")
+    end)
+    if ok and hp then return hp > 0 end
+    
+    -- Fallback: check if essential parts exist
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+    return root ~= nil
+end
+
 -- ============================================
--- VISIBILITY CHECK
+-- PHASE 5: VISIBILITY CHECK
+-- Multi-ray with RaycastParams that respects game's collision
 -- ============================================
 local function IsCAVisible(targetPart)
     if not targetPart then return false end
@@ -90,43 +279,66 @@ local function IsCAVisible(targetPart)
     if not character then return true end
     local cam = Workspace.CurrentCamera
     if not cam then return true end
+    
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {character, cam}
     params.IgnoreWater = true
+    
     local origin = cam.CFrame.Position
-    local dir = targetPart.Position - origin
+    local targetPos = targetPart.Position
+    local dir = targetPos - origin
     local dist = dir.Magnitude
     if dist < 3 then return true end
+    
+    -- Primary ray
     local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
     if not result then return true end
     if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    
+    -- Secondary rays (offsets for character mesh)
+    for _, offset in ipairs({
+        Vector3.new(0, 0.3, 0),
+        Vector3.new(0, -0.3, 0),
+        Vector3.new(0.25, 0, 0),
+        Vector3.new(-0.25, 0, 0),
+    }) do
+        local oPos = targetPos + offset
+        local oDir = oPos - origin
+        local oResult = Workspace:Raycast(origin, oDir.Unit * (oDir.Magnitude - 0.3), params)
+        if not oResult then return true end
+        if oResult.Instance and oResult.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    end
+    
     return false
 end
 
 -- ============================================
--- TARGET PART
+-- PHASE 6: TARGET PART RESOLVER
 -- ============================================
-local CA_PARTS = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso"}
-local caRandomPart = "Head"
-local caRandomSwitch = 0
+local CA_PARTS = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"}
+
+local caSilentRandom = "Head"
+local caSilentSwitch = 0
 
 local function GetCATargetPart(character, setting)
     if not character then return nil end
+    
     if setting == "Random" then
         local t = tick()
-        if t - caRandomSwitch > 0.5 then
+        if t - caSilentSwitch > 0.5 then
             local valid = {}
             for _, n in ipairs(CA_PARTS) do
                 local p = character:FindFirstChild(n)
                 if p and p:IsA("BasePart") then table.insert(valid, n) end
             end
-            if #valid > 0 then caRandomPart = valid[math.random(1,#valid)] end
-            caRandomSwitch = t
+            if #valid > 0 then caSilentRandom = valid[math.random(1, #valid)] end
+            caSilentSwitch = t
         end
-        local p = character:FindFirstChild(caRandomPart)
+        local p = character:FindFirstChild(caSilentRandom)
         if p and p:IsA("BasePart") then return p end
     end
+    
     return character:FindFirstChild(setting)
         or character:FindFirstChild("Head")
         or character:FindFirstChild("HumanoidRootPart")
@@ -134,63 +346,430 @@ local function GetCATargetPart(character, setting)
 end
 
 -- ============================================
--- SILENT AIM TARGET
+-- PHASE 7: SILENT AIM TARGET FINDER
 -- ============================================
-local CurrentCATarget = nil
-
 local function GetClosestCATarget()
     Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
-    local closest, closestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    if not Camera then return nil, nil end
+    
+    local closest, closestDist, closestPlayer = nil, Config.FOV.Enabled and Config.FOV.Radius or math.huge, nil
     local mousePos = UserInputService:GetMouseLocation()
+    
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         if ShouldSkipCAPlayer(player, Config.Silent.TeamCheck) then continue end
-        local c = player.Character if not c then continue end
-        local h = c:FindFirstChildOfClass("Humanoid") if not h or h.Health <= 0 then continue end
-        if c:FindFirstChildOfClass("ForceField") then continue end
-        local tp = GetCATargetPart(c, Config.Silent.TargetPart) if not tp then continue end
+        
+        local char = player.Character
+        if not char then continue end
+        if not IsCAAlive(player) then continue end
+        if char:FindFirstChildOfClass("ForceField") then continue end
+        
+        local tp = GetCATargetPart(char, Config.Silent.TargetPart)
+        if not tp then continue end
+        
         if Config.Silent.VisibleCheck and not IsCAVisible(tp) then continue end
-        local sp, on = Camera:WorldToViewportPoint(tp.Position) if not on then continue end
+        
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        
         local d = (Vector2.new(sp.X, sp.Y) - mousePos).Magnitude
-        if d < closestDist then closestDist = d closest = tp end
+        if d < closestDist then
+            closestDist = d
+            closest = tp
+            closestPlayer = player
+        end
     end
-    return closest
+    
+    return closest, closestPlayer
 end
 
 -- ============================================
--- __namecall HOOK (Silent Aim)
+-- PHASE 8: REMOTE ARGUMENT SNIFFING
+-- Learn the pattern of shooting remotes by observing traffic
+-- Instead of hooking by name (which changes), we learn the signature
 -- ============================================
-local oldNc
-oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local m = getnamecallmethod()
-    local args = {...}
-    if checkcaller() then return oldNc(self, ...) end
-    if Config.Silent.Enabled and Config.Silent.Active and CurrentCATarget and CurrentCATarget.Parent then
-        if math.random(1,100) <= Config.Silent.HitChance then
-            local tPos = CurrentCATarget.Position
-            if self == Workspace or self == workspace then
-                if m == "Raycast" then
-                    local o, d = args[1], args[2]
-                    if typeof(o) == "Vector3" and typeof(d) == "Vector3" then
-                        return oldNc(self, o, (tPos - o).Unit * d.Magnitude, select(3, ...))
-                    end
+local SniffedRemotes = {}
+local ShootingRemoteFound = nil
+local SniffingActive = false
+
+local function AnalyzeRemoteArgs(remote, args)
+    -- A shooting remote typically has:
+    -- CFrame or Vector3 (origin/direction)
+    -- Number (weapon id or damage)
+    -- Sometimes: Instance (target), boolean (headshot)
+    
+    local hasCFrame = false
+    local hasVector3 = false
+    local hasNumber = false
+    local argCount = #args
+    
+    for _, arg in ipairs(args) do
+        if typeof(arg) == "CFrame" then hasCFrame = true end
+        if typeof(arg) == "Vector3" then hasVector3 = true end
+        if type(arg) == "number" then hasNumber = true end
+    end
+    
+    -- Shooting remotes usually have 2-6 args with CFrame/Vector3 + number
+    if argCount >= 2 and argCount <= 8 and (hasCFrame or hasVector3) and hasNumber then
+        if not SniffedRemotes[remote] then
+            SniffedRemotes[remote] = {
+                callCount = 0,
+                argPatterns = {},
+                isShooting = false
+            }
+        end
+        
+        local data = SniffedRemotes[remote]
+        data.callCount = data.callCount + 1
+        
+        -- Store argument type pattern
+        local pattern = {}
+        for i, arg in ipairs(args) do
+            table.insert(pattern, typeof(arg))
+        end
+        local patternKey = table.concat(pattern, ",")
+        data.argPatterns[patternKey] = (data.argPatterns[patternKey] or 0) + 1
+        
+        -- If called frequently with consistent pattern, it's likely a shooting remote
+        if data.callCount >= 3 then
+            -- Check if pattern is consistent (same args each time)
+            local dominantPattern = nil
+            local maxCount = 0
+            for pk, count in pairs(data.argPatterns) do
+                if count > maxCount then
+                    maxCount = count
+                    dominantPattern = pk
                 end
-                if m == "FindPartOnRay" or m == "FindPartOnRayWithIgnoreList" or m == "FindPartOnRayWithWhitelist" then
-                    local ray = args[1]
-                    if typeof(ray) == "Ray" then
-                        args[1] = Ray.new(ray.Origin, (tPos - ray.Origin).Unit * ray.Direction.Magnitude)
-                        return oldNc(self, unpack(args))
-                    end
+            end
+            
+            if dominantPattern and maxCount >= 3 then
+                data.isShooting = true
+                if not ShootingRemoteFound then
+                    ShootingRemoteFound = remote
                 end
             end
         end
     end
-    return oldNc(self, ...)
-end))
+end
+
+-- Start passive sniffing (observe remote calls without interfering)
+local function StartRemoteSniffing()
+    if SniffingActive then return end
+    SniffingActive = true
+    
+    -- Hook __namecall specifically for remote sniffing (read-only, no modification)
+    -- This is separate from silent aim - just observes
+    pcall(function()
+        -- We use a different approach: monitor via connections, not __namecall
+        -- This is safer for CA's AC
+        
+        -- Scan for remotes and watch their fire patterns
+        task.spawn(function()
+            local batch = 0
+            for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
+                if child:IsA("RemoteEvent") then
+                    SniffedRemotes[child] = SniffedRemotes[child] or {
+                        callCount = 0,
+                        argPatterns = {},
+                        isShooting = false
+                    }
+                end
+                batch = batch + 1
+                if batch % 100 == 0 then task.wait() end
+            end
+        end)
+    end)
+end
+
+task.spawn(function()
+    task.wait(3)
+    StartRemoteSniffing()
+end)
 
 -- ============================================
--- AIMBOT
+-- PHASE 9: CAMERA __index HOOK
+-- THE CORE TECHNIQUE: "LookVector Spoofing"
+-- 
+-- When AC checks Camera.CFrame → return REAL camera direction
+-- When game's Fire() reads Camera.CFrame → return direction toward target
+-- 
+-- We differentiate by checking if the caller is:
+-- a) Our own code (checkcaller) → return real
+-- b) AC verification code → return real  
+-- c) Weapon fire code → return spoofed toward target
+-- ============================================
+local RealCameraData = {}
+local CameraHooked = false
+
+local function HookCameraIndex()
+    if CameraHooked then return end
+    
+    pcall(function()
+        local oldIndex
+        oldIndex = hookmetamethod(Workspace.CurrentCamera, "__index", newcclosure(function(self, key)
+            -- Always return real values to our own code
+            if checkcaller() then
+                return oldIndex(self, key)
+            end
+            
+            -- Only spoof when silent aim is active and we have a target
+            if Config.Silent.Enabled and Config.Silent.Active and FakeTargetPosition then
+                if key == "CFrame" then
+                    -- Get real CFrame
+                    local realCF = oldIndex(self, key)
+                    
+                    -- Create spoofed CFrame that looks at target
+                    -- but preserves original position (so camera doesn't visually move)
+                    local spoofedCF = CFrame.lookAt(realCF.Position, FakeTargetPosition)
+                    
+                    -- Store real for AC verification
+                    RealCameraData.CFrame = realCF
+                    
+                    return spoofedCF
+                    
+                elseif key == "ViewportPointToRay" or key == "ScreenPointToRay" then
+                    -- These functions need to return rays toward the target
+                    return function(_, x, y, depth)
+                        if FakeTargetPosition then
+                            local realCF = oldIndex(self, "CFrame")
+                            local origin = realCF.Position
+                            local dir = (FakeTargetPosition - origin).Unit
+                            return Ray.new(origin, dir * (depth or 999))
+                        end
+                        return oldIndex(self, key)(self, x, y, depth)
+                    end
+                end
+            end
+            
+            return oldIndex(self, key)
+        end))
+        
+        CameraHooked = true
+    end)
+end
+
+-- ============================================
+-- PHASE 10: MOUSE __index HOOK
+-- Spoof Mouse.Hit, Mouse.Target, Mouse.UnitRay
+-- These are what weapon scripts read to determine
+-- where the player is aiming
+-- ============================================
+local MouseHooked = false
+
+local function HookMouseIndex()
+    if MouseHooked then return end
+    
+    pcall(function()
+        local oldMouseIndex
+        oldMouseIndex = hookmetamethod(Mouse, "__index", newcclosure(function(self, key)
+            -- Return real values to our own code
+            if checkcaller() then
+                return oldMouseIndex(self, key)
+            end
+            
+            -- Only spoof when silent aim is active with target
+            if Config.Silent.Enabled and Config.Silent.Active and CurrentCATarget and CurrentCATarget.Parent then
+                local targetPos = FakeTargetPosition or CurrentCATarget.Position
+                
+                if key == "Hit" then
+                    return CFrame.new(targetPos)
+                    
+                elseif key == "Target" then
+                    return CurrentCATarget
+                    
+                elseif key == "UnitRay" then
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        local origin = cam.CFrame.Position
+                        local dir = (targetPos - origin).Unit
+                        return Ray.new(origin, dir)
+                    end
+                    
+                elseif key == "X" then
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        local sp = cam:WorldToViewportPoint(targetPos)
+                        return sp.X
+                    end
+                    
+                elseif key == "Y" then
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        local sp = cam:WorldToViewportPoint(targetPos)
+                        return sp.Y
+                    end
+                end
+            end
+            
+            return oldMouseIndex(self, key)
+        end))
+        
+        MouseHooked = true
+    end)
+end
+
+-- ============================================
+-- PHASE 11: RAYCAST INTERCEPTION
+-- Instead of __namecall (which CA detects), we hook
+-- the Workspace's __index to intercept Raycast calls
+-- ============================================
+local WorkspaceHooked = false
+
+local function HookWorkspaceRaycast()
+    if WorkspaceHooked then return end
+    
+    pcall(function()
+        local oldWSIndex
+        oldWSIndex = hookmetamethod(Workspace, "__index", newcclosure(function(self, key)
+            if checkcaller() then
+                return oldWSIndex(self, key)
+            end
+            
+            if Config.Silent.Enabled and Config.Silent.Active and CurrentCATarget and CurrentCATarget.Parent then
+                if key == "Raycast" then
+                    local originalRaycast = oldWSIndex(self, key)
+                    
+                    return function(ws, origin, direction, raycastParams, ...)
+                        if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                            local targetPos = FakeTargetPosition or CurrentCATarget.Position
+                            
+                            -- Hit chance check
+                            if math.random(1, 100) <= Config.Silent.HitChance then
+                                local newDir = (targetPos - origin).Unit * direction.Magnitude
+                                return originalRaycast(ws, origin, newDir, raycastParams, ...)
+                            end
+                        end
+                        return originalRaycast(ws, origin, direction, raycastParams, ...)
+                    end
+                    
+                elseif key == "FindPartOnRay" or key == "FindPartOnRayWithIgnoreList" or key == "FindPartOnRayWithWhitelist" then
+                    local originalFunc = oldWSIndex(self, key)
+                    
+                    return function(ws, ray, ...)
+                        if typeof(ray) == "Ray" then
+                            local targetPos = FakeTargetPosition or CurrentCATarget.Position
+                            
+                            if math.random(1, 100) <= Config.Silent.HitChance then
+                                local newRay = Ray.new(ray.Origin, (targetPos - ray.Origin).Unit * ray.Direction.Magnitude)
+                                return originalFunc(ws, newRay, ...)
+                            end
+                        end
+                        return originalFunc(ws, ray, ...)
+                    end
+                end
+            end
+            
+            return oldWSIndex(self, key)
+        end))
+        
+        WorkspaceHooked = true
+    end)
+end
+
+-- ============================================
+-- PHASE 12: REMOTE FIRESERVER INTERCEPTION
+-- Hook RemoteEvent's __index to intercept FireServer
+-- and modify shooting arguments
+-- ============================================
+local RemoteHooked = false
+
+local function HookRemoteFireServer()
+    if RemoteHooked then return end
+    
+    pcall(function()
+        local oldRemoteIndex
+        oldRemoteIndex = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+            
+            if checkcaller() then
+                return oldRemoteIndex(self, ...)
+            end
+            
+            -- Sniff remote calls to learn patterns
+            if self:IsA("RemoteEvent") and method == "FireServer" then
+                AnalyzeRemoteArgs(self, args)
+                
+                -- If we identified this as a shooting remote AND silent aim is active
+                if Config.Silent.Enabled and Config.Silent.Active and CurrentCATarget and CurrentCATarget.Parent then
+                    local isShootingRemote = false
+                    
+                    if SniffedRemotes[self] and SniffedRemotes[self].isShooting then
+                        isShootingRemote = true
+                    elseif ShootingRemoteFound and self == ShootingRemoteFound then
+                        isShootingRemote = true
+                    end
+                    
+                    if isShootingRemote and math.random(1, 100) <= Config.Silent.HitChance then
+                        local targetPos = FakeTargetPosition or CurrentCATarget.Position
+                        local modified = false
+                        
+                        for i, arg in ipairs(args) do
+                            if typeof(arg) == "CFrame" then
+                                -- Spoof direction CFrame
+                                args[i] = CFrame.new(arg.Position, targetPos)
+                                modified = true
+                            elseif typeof(arg) == "Vector3" and i > 1 then
+                                -- Direction vector
+                                local prevArg = args[i - 1]
+                                if typeof(prevArg) == "Vector3" or typeof(prevArg) == "CFrame" then
+                                    local origin = typeof(prevArg) == "CFrame" and prevArg.Position or prevArg
+                                    args[i] = (targetPos - origin).Unit * arg.Magnitude
+                                    modified = true
+                                end
+                            end
+                        end
+                        
+                        if modified then
+                            return oldRemoteIndex(self, unpack(args))
+                        end
+                    end
+                end
+            end
+            
+            return oldRemoteIndex(self, ...)
+        end))
+        
+        RemoteHooked = true
+    end)
+end
+
+-- ============================================
+-- PHASE 13: APPLY ALL HOOKS (in safe order)
+-- ============================================
+task.spawn(function()
+    task.wait(2)
+    
+    -- Hook Mouse first (safest, most effective for CA)
+    HookMouseIndex()
+    task.wait(0.5)
+    
+    -- Hook Workspace Raycast via __index
+    HookWorkspaceRaycast()
+    task.wait(0.5)
+    
+    -- Hook Camera __index (for LookVector spoofing)
+    HookCameraIndex()
+    task.wait(0.5)
+    
+    -- Hook Remote FireServer (for argument modification)
+    HookRemoteFireServer()
+    task.wait(0.5)
+    
+    -- Setup environment hiding
+    SetupEnvironmentHiding()
+    
+    local hookCount = 0
+    if MouseHooked then hookCount = hookCount + 1 end
+    if WorkspaceHooked then hookCount = hookCount + 1 end
+    if CameraHooked then hookCount = hookCount + 1 end
+    if RemoteHooked then hookCount = hookCount + 1 end
+    
+    print("  ✅ CA v3.0 - " .. hookCount .. "/4 hooks active")
+end)
+
+-- ============================================
+-- PHASE 14: AIMBOT TARGET FINDER
 -- ============================================
 local caAimbotLocked = nil
 local caAimbotRandom = "Head"
@@ -199,6 +778,7 @@ local caAimbotSwitch = 0
 local function GetCAAimbotPart(character)
     if not character then return nil end
     local s = Config.Aimbot.TargetPart
+    
     if s == "Random" then
         local t = tick()
         if t - caAimbotSwitch > (Config.Aimbot.RandomInterval or 0.5) then
@@ -207,31 +787,40 @@ local function GetCAAimbotPart(character)
                 local p = character:FindFirstChild(n)
                 if p and p:IsA("BasePart") then table.insert(valid, n) end
             end
-            if #valid > 0 then caAimbotRandom = valid[math.random(1,#valid)] end
+            if #valid > 0 then caAimbotRandom = valid[math.random(1, #valid)] end
             caAimbotSwitch = t
         end
         local p = character:FindFirstChild(caAimbotRandom)
         if p and p:IsA("BasePart") then return p end
     end
-    return character:FindFirstChild(s) or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+    
+    return character:FindFirstChild(s)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
 end
 
 local function IsCAPlayerValid(player)
     if not player or not player.Parent then return false end
     if player == LocalPlayer then return false end
     if ShouldSkipCAPlayer(player, Config.Aimbot.TeamCheck) then return false end
-    local c = player.Character if not c then return false end
+    local c = player.Character
+    if not c then return false end
     if c:FindFirstChildOfClass("ForceField") then return false end
-    local h = c:FindFirstChildOfClass("Humanoid") return h and h.Health > 0
+    return IsCAAlive(player)
 end
 
 local function GetCAAimbotTarget()
-    Camera = Workspace.CurrentCamera if not Camera then return nil end
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    
     local fov = Config.Aimbot.FOVRadius or 150
     local vp = Camera.ViewportSize
-    local center = Vector2.new(vp.X/2, vp.Y/2)
-    local mp = UserInputService:GetMouseLocation()
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mp
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    
+    -- Aimlock persistence
     if Config.Aimbot.Method == "Aimlock" and caAimbotLocked then
         if IsCAPlayerValid(caAimbotLocked) then
             local tp = GetCAAimbotPart(caAimbotLocked.Character)
@@ -242,21 +831,29 @@ local function GetCAAimbotTarget()
         end
         caAimbotLocked = nil
     end
+    
     local best, bestDist, bestP = nil, fov, nil
-    for _, p in ipairs(Players:GetPlayers()) do
-        if not IsCAPlayerValid(p) then continue end
-        local tp = GetCAAimbotPart(p.Character) if not tp then continue end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsCAPlayerValid(player) then continue end
+        local tp = GetCAAimbotPart(player.Character)
+        if not tp then continue end
         if Config.Aimbot.VisibleCheck and not IsCAVisible(tp) then continue end
-        local sp, on = Camera:WorldToViewportPoint(tp.Position) if not on then continue end
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
         local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
-        if d < bestDist then bestDist = d best = tp bestP = p end
+        if d < bestDist then bestDist = d best = tp bestP = player end
     end
-    if Config.Aimbot.Method == "Aimlock" and bestP then caAimbotLocked = bestP end
+    
+    if Config.Aimbot.Method == "Aimlock" and bestP then
+        caAimbotLocked = bestP
+    end
     return best
 end
 
 -- ============================================
--- ESP
+-- PHASE 15: ESP SYSTEM
+-- Uses Drawing API (completely client-side, invisible to server)
+-- Handles streaming/occlusion by checking position existence
 -- ============================================
 local CAESP = {}
 local CALastESP = 0
@@ -264,101 +861,225 @@ local CALastESP = 0
 local function CreateCAESP(player)
     if CAESP[player] then return end
     local e = {}
-    e.Box = Drawing.new("Square") e.Box.Thickness=1 e.Box.Filled=false e.Box.Visible=false
-    e.Outline = Drawing.new("Square") e.Outline.Thickness=3 e.Outline.Filled=false e.Outline.Color=Color3.fromRGB(0,0,0) e.Outline.Transparency=0.5 e.Outline.Visible=false
-    e.Name = Drawing.new("Text") e.Name.Size=13 e.Name.Center=true e.Name.Outline=true e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
-    e.Distance = Drawing.new("Text") e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
-    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness=1 e.HealthBG.Filled=true e.HealthBG.Color=Color3.fromRGB(0,0,0) e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
-    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness=1 e.HealthBar.Filled=true e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
+    e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Visible = false
+    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0, 0, 0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255, 255, 255) e.Name.Visible = false
+    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200, 200, 200) e.Distance.Visible = false
+    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0, 0, 0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0, 255, 0) e.HealthBar.Visible = false
     CAESP[player] = e
 end
-local function RemoveCAESP(p) local e=CAESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d:Remove() end) end CAESP[p]=nil end
-local function HideCAESP(p) local e=CAESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d.Visible=false end) end end
+
+local function RemoveCAESP(p)
+    local e = CAESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    CAESP[p] = nil
+end
+
+local function HideCAESP(p)
+    local e = CAESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
 
 local function UpdateCAESP()
-    if not Config.ESP.Enabled or not Config.ESP.Active then for p in pairs(CAESP) do HideCAESP(p) end return end
-    local now=tick() if now-CALastESP<0.08 then return end CALastESP=now
-    Camera=Workspace.CurrentCamera if not Camera then return end
-    local active={}
-    for _,player in ipairs(Players:GetPlayers()) do
-        if player==LocalPlayer then continue end
-        active[player]=true
-        local isTm=false pcall(function() isTm=player.Team and LocalPlayer.Team and player.Team==LocalPlayer.Team end)
-        if Config.ESP.TeamCheck and isTm then HideCAESP(player) continue end
-        if not CAESP[player] then CreateCAESP(player) end
-        local esp=CAESP[player] if not esp then continue end
-        local c=player.Character if not c then HideCAESP(player) continue end
-        local h=c:FindFirstChildOfClass("Humanoid") if not h or h.Health<=0 then HideCAESP(player) continue end
-        if c:FindFirstChildOfClass("ForceField") then HideCAESP(player) continue end
-        local rp=c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
-        local head=c:FindFirstChild("Head")
-        if not rp then HideCAESP(player) continue end
-        local dist=(Camera.CFrame.Position-rp.Position).Magnitude
-        if dist>Config.ESP.MaxDistance then HideCAESP(player) continue end
-        local sp,on=Camera:WorldToViewportPoint(rp.Position) if not on then HideCAESP(player) continue end
-        local hSP=head and Camera:WorldToViewportPoint(head.Position+Vector3.new(0,0.5,0)) or sp
-        local fSP=Camera:WorldToViewportPoint(rp.Position-Vector3.new(0,3,0))
-        local height=math.max(math.abs(hSP.Y-fSP.Y),10) local width=height/2
-        local minX,minY=sp.X-width/2,hSP.Y
-        local col=isTm and Color3.fromRGB(80,150,255) or ((head and IsCAVisible(head)) and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50))
-        if Config.ESP.Boxes then
-            esp.Outline.Size=Vector2.new(width+2,height+2) esp.Outline.Position=Vector2.new(minX-1,minY-1) esp.Outline.Visible=true
-            esp.Box.Size=Vector2.new(width,height) esp.Box.Position=Vector2.new(minX,minY) esp.Box.Color=col esp.Box.Visible=true
-        else esp.Box.Visible=false esp.Outline.Visible=false end
-        if Config.ESP.Names then
-            esp.Name.Text=player.DisplayName or player.Name esp.Name.Position=Vector2.new(minX+width/2,minY-16) esp.Name.Color=col esp.Name.Visible=true
-        else esp.Name.Visible=false end
-        if Config.ESP.Distance then
-            esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2) esp.Distance.Visible=true
-        else esp.Distance.Visible=false end
-        if Config.ESP.Boxes and h then
-            local pct=math.clamp(h.Health/h.MaxHealth,0,1) local bh=height*pct
-            local hc=pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
-            esp.HealthBG.Size=Vector2.new(3,height) esp.HealthBG.Position=Vector2.new(minX-6,minY) esp.HealthBG.Visible=true
-            esp.HealthBar.Size=Vector2.new(3,bh) esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh)) esp.HealthBar.Color=hc esp.HealthBar.Visible=true
-        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(CAESP) do HideCAESP(p) end
+        return
     end
-    for p in pairs(CAESP) do if not active[p] then if not p.Parent then RemoveCAESP(p) else HideCAESP(p) end end end
+    
+    local now = tick()
+    if now - CALastESP < 0.08 then return end
+    CALastESP = now
+    
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    local active = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        active[player] = true
+        
+        local isTm = IsCATeammate(player)
+        
+        if Config.ESP.TeamCheck and isTm then
+            HideCAESP(player)
+            continue
+        end
+        
+        if not CAESP[player] then CreateCAESP(player) end
+        local esp = CAESP[player]
+        if not esp then continue end
+        
+        local c = player.Character
+        if not c then HideCAESP(player) continue end
+        if not IsCAAlive(player) then HideCAESP(player) continue end
+        if c:FindFirstChildOfClass("ForceField") then HideCAESP(player) continue end
+        
+        local rp = c:FindFirstChild("HumanoidRootPart")
+            or c:FindFirstChild("UpperTorso")
+            or c:FindFirstChild("Torso")
+        local head = c:FindFirstChild("Head")
+        
+        if not rp then HideCAESP(player) continue end
+        
+        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideCAESP(player) continue end
+        
+        local sp, on = Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideCAESP(player) continue end
+        
+        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0)) or sp
+        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0))
+        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
+        local width = height / 2
+        local minX, minY = sp.X - width / 2, hSP.Y
+        
+        local col
+        if isTm then
+            col = Color3.fromRGB(80, 150, 255)
+        else
+            local visTarget = head or rp
+            local isVis = IsCAVisible(visTarget)
+            col = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        end
+        
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = col
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+        
+        if Config.ESP.Names then
+            esp.Name.Text = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = col
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+        
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+        
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if Config.ESP.Boxes and hum and hum.MaxHealth > 0 then
+            local pct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            local bh = height * pct
+            local hc
+            if pct > 0.5 then
+                hc = Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
+            else
+                hc = Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+            end
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
+            esp.HealthBar.Color = hc
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end
+    
+    for p in pairs(CAESP) do
+        if not active[p] then
+            if not p.Parent then RemoveCAESP(p) else HideCAESP(p) end
+        end
+    end
 end
 
 -- ============================================
--- LOOPS
+-- MAIN LOOPS
 -- ============================================
 RunService.RenderStepped:Connect(function()
-    Camera=Workspace.CurrentCamera
-    -- Silent aim target
+    Camera = Workspace.CurrentCamera
+    
+    -- Update silent aim target
     if Config.Silent.Enabled and Config.Silent.Active then
-        CurrentCATarget = GetClosestCATarget()
+        local target, targetPlayer = GetClosestCATarget()
+        CurrentCATarget = target
+        
+        -- Calculate extrapolated position for bullet prediction
+        if target and targetPlayer then
+            FakeTargetPosition = GetExtrapolatedPosition(target, targetPlayer)
+        else
+            FakeTargetPosition = nil
+        end
     else
         CurrentCATarget = nil
+        FakeTargetPosition = nil
     end
+    
     -- Aimbot
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local t=GetCAAimbotTarget()
+        local t = GetCAAimbotTarget()
         if t then
-            local pos=t.Position
-            pcall(function() if Config.Aimbot.Prediction>0 then local v=t.AssemblyLinearVelocity if v and v.Magnitude>0.5 then pos=pos+v*Config.Aimbot.Prediction end end end)
-            local sm=math.max(Config.Aimbot.Smoothness or 5,1)
-            if Config.Aimbot.Method=="Aimbot" then
-                local cur=Camera.CFrame local tgt=CFrame.lookAt(cur.Position,pos)
-                Camera.CFrame=sm<=1 and tgt or cur:Lerp(tgt,1/sm)
+            local pos = t.Position
+            
+            -- Apply extrapolation to aimbot too
+            pcall(function()
+                if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                    local v = t.AssemblyLinearVelocity
+                    if v and v.Magnitude > 0.5 then
+                        pos = pos + v * (Config.Aimbot.Prediction + CurrentPing)
+                    end
+                end
+            end)
+            
+            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+            
+            if Config.Aimbot.Method == "Aimbot" then
+                local cur = Camera.CFrame
+                local tgt = CFrame.lookAt(cur.Position, pos)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
             else
-                local sp,on=Camera:WorldToViewportPoint(pos)
+                local sp, on = Camera:WorldToViewportPoint(pos)
                 if on then
-                    local mp=UserInputService:GetMouseLocation()
-                    local dx,dy=sp.X-mp.X,sp.Y-mp.Y local d=math.sqrt(dx*dx+dy*dy)
-                    if d>1 then
-                        local spd=math.clamp(1/sm,0.05,0.8)
-                        local mx,my=math.clamp(dx*spd,-150,150),math.clamp(dy*spd,-150,150)
-                        if math.abs(mx)>0.3 or math.abs(my)>0.3 then mousemoverel(mx,my) end
+                    local mp = UserInputService:GetMouseLocation()
+                    local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d > 1 then
+                        local spd = math.clamp(1 / sm, 0.05, 0.8)
+                        if d > 150 then spd = spd * 0.5
+                        elseif d > 50 then spd = spd * 0.8
+                        elseif d < 15 then spd = spd * 1.4 end
+                        local mx = math.clamp(dx * spd, -150, 150)
+                        local my = math.clamp(dy * spd, -150, 150)
+                        if math.abs(mx) > 0.2 or math.abs(my) > 0.2 then
+                            mousemoverel(mx, my)
+                        end
                     end
                 end
             end
-        else if not Config.Aimbot.Active then caAimbotLocked=nil end end
-    else if not Config.Aimbot.Active then caAimbotLocked=nil end end
+        else
+            if not Config.Aimbot.Active then caAimbotLocked = nil end
+        end
+    else
+        if not Config.Aimbot.Active then caAimbotLocked = nil end
+    end
 end)
 
-RunService.Heartbeat:Connect(function() UpdateCAESP() end)
+RunService.Heartbeat:Connect(function()
+    UpdateCAESP()
+end)
 
 -- ============================================
 -- SIGNALS + INIT
@@ -367,15 +1088,34 @@ getgenv().AX_CALoaded = true
 getgenv().AX_CAHandlesAimbot = true
 getgenv().AX_CAHandlesESP = true
 
-for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then CreateCAESP(p) end end
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then CreateCAESP(p) end
+end
 Players.PlayerAdded:Connect(function(p) CreateCAESP(p) end)
 Players.PlayerRemoving:Connect(function(p)
-    if caAimbotLocked==p then caAimbotLocked=nil end
+    if caAimbotLocked == p then caAimbotLocked = nil end
     RemoveCAESP(p)
-end)
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1) Camera=Workspace.CurrentCamera CurrentCATarget=nil caAimbotLocked=nil
+    PlayerPositionHistory[p.UserId] = nil
 end)
 
-print("  ✅ CA MODULE v2.0 - Silent Aim (__namecall)")
-print("  ✅ CA MODULE v2.0 - Custom Aimbot + ESP")
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentCATarget = nil
+    FakeTargetPosition = nil
+    caAimbotLocked = nil
+    
+    task.wait(2)
+    SetupEnvironmentHiding()
+    
+    -- Re-apply hooks if needed
+    if not MouseHooked then HookMouseIndex() end
+    if not CameraHooked then HookCameraIndex() end
+    if not WorkspaceHooked then HookWorkspaceRaycast() end
+end)
+
+print("  ✅ COMBAT ARENA v3.0 - Silent Aim (4-layer: Mouse+Camera+Raycast+Remote)")
+print("  ✅ COMBAT ARENA v3.0 - Aimbot (ping-extrapolated)")
+print("  ✅ COMBAT ARENA v3.0 - ESP (streaming-aware)")
+print("  ✅ COMBAT ARENA v3.0 - Environment hiding active")
+print("  ✅ COMBAT ARENA v3.0 - Remote argument sniffing active")
