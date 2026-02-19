@@ -1,12 +1,36 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║              ANNOMALY X - Flick Silent Aim Module         ║
-    ║              AC Bypass + BulletHandler.Fire Hook          ║
-    ║              Creator: ElSacaLeche                         ║
+    ║          ANNOMALY X - Flick Module v2.0                   ║
+    ║                                                           ║
+    ║  Silent Aim: BulletHandler.Fire hook                      ║
+    ║  AC Bypass: Solvent method (Detected + Kill + debug.info) ║
+    ║  Aimbot: Custom with ForceField/team check                ║
+    ║  ESP: Custom with health bar + visibility colors          ║
+    ║                                                           ║
+    ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
+    
+    FLICK ARCHITECTURE:
+    - Uses BulletHandler.Fire for shooting (ReplicatedStorage.ModuleScripts.GunModules.BulletHandler)
+    - data.Direction = direction vector, data.Origin = barrel position
+    - Characters use standard R15/R6 with HeadHB for headshot hitbox
+    - Standard Roblox Teams
+    
+    SILENT AIM METHOD:
+    - Hook BulletHandler.Fire and replace data.Direction
+    - This is the cleanest method because we modify the direction
+      BEFORE the bullet is created, so the server receives a
+      valid trajectory
+    
+    CHANGES v2.0:
+    - Added custom Aimbot (Camera + mousemoverel)
+    - Added custom ESP with health bar + visibility colors
+    - Uses ShouldSkipPlayer pattern from main script
+    - ForceField check on all systems
+    - Continuous AC re-application
+    - Memory signature cleanup
 ]]
 
--- Espera a que Config esté disponible (inyectado por el script principal)
 if not getgenv().AX_Config then
     repeat task.wait() until getgenv().AX_Config
 end
@@ -16,8 +40,11 @@ local Config = getgenv().AX_Config
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 local Players = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
 local Workspace = cloneref(game:GetService("Workspace"))
 local Camera = Workspace.CurrentCamera
 
@@ -26,57 +53,191 @@ local LocalPlayer = Players.LocalPlayer
 -- ============================================
 -- FLICK ANTICHEAT BYPASS (Solvent method)
 -- ============================================
-pcall(function()
-    local Detected, Kill
+local function ApplyFlickACBypass()
+    local results = {detected = false, kill = false, debugInfo = false}
+    
+    pcall(function()
+        local Detected, Kill
 
-    setthreadidentity(2)
+        pcall(function() setthreadidentity(2) end)
 
-    for i, v in getgc(true) do
-        if typeof(v) == "table" then
-            local DetectFunc = rawget(v, "Detected")
-            local KillFunc = rawget(v, "Kill")
+        if getgc then
+            for i, v in getgc(true) do
+                if typeof(v) == "table" then
+                    local DetectFunc = rawget(v, "Detected")
+                    local KillFunc = rawget(v, "Kill")
 
-            if typeof(DetectFunc) == "function" and not Detected then
-                Detected = DetectFunc
-                hookfunction(Detected, function(Action, Info, NoCrash)
-                    return true
-                end)
-            end
+                    if typeof(DetectFunc) == "function" and not Detected then
+                        Detected = DetectFunc
+                        hookfunction(Detected, function(Action, Info, NoCrash)
+                            return true
+                        end)
+                        results.detected = true
+                    end
 
-            if rawget(v, "Variables") and rawget(v, "Process") and typeof(KillFunc) == "function" and not Kill then
-                Kill = KillFunc
-                hookfunction(Kill, function(Info)
-                end)
+                    if rawget(v, "Variables") and rawget(v, "Process") and typeof(KillFunc) == "function" and not Kill then
+                        Kill = KillFunc
+                        hookfunction(Kill, function(Info) end)
+                        results.kill = true
+                    end
+                end
             end
         end
+
+        pcall(function()
+            if getrenv and getrenv().debug and getrenv().debug.info then
+                local OldDebugInfo = getrenv().debug.info
+                hookfunction(getrenv().debug.info, newcclosure(function(...)
+                    local LevelOrFunc, Info = ...
+                    if Detected and LevelOrFunc == Detected then
+                        return coroutine.yield(coroutine.running())
+                    end
+                    return OldDebugInfo(...)
+                end))
+                results.debugInfo = true
+            end
+        end)
+
+        pcall(function() setthreadidentity(7) end)
+    end)
+    
+    return results
+end
+
+local acResults = ApplyFlickACBypass()
+
+-- Continuous AC re-application
+task.spawn(function()
+    while task.wait(20) do
+        pcall(function()
+            -- Re-check for new AC functions
+            if getgc then
+                for _, v in getgc(true) do
+                    if typeof(v) == "table" then
+                        pcall(function()
+                            local DetectFunc = rawget(v, "Detected")
+                            if typeof(DetectFunc) == "function" then
+                                hookfunction(DetectFunc, function() return true end)
+                            end
+                        end)
+                    end
+                end
+            end
+            
+            -- Memory cleanup
+            if getgc then
+                for _, obj in ipairs(getgc(true)) do
+                    if type(obj) == "table" then
+                        pcall(function()
+                            if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
+                            if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
+                            if rawget(obj, "__exploit_flag") then rawset(obj, "__exploit_flag", nil) end
+                        end)
+                    end
+                end
+            end
+        end)
     end
-
-    local OldDebugInfo = getrenv().debug.info
-    hookfunction(getrenv().debug.info, newcclosure(function(...)
-        local LevelOrFunc, Info = ...
-        if Detected and LevelOrFunc == Detected then
-            return coroutine.yield(coroutine.running())
-        end
-        return OldDebugInfo(...)
-    end))
-
-    setthreadidentity(7)
 end)
 
 -- ============================================
--- UTILITY: Get Target Part
+-- TEAM CHECK (Flick uses standard Roblox Teams)
 -- ============================================
-local function GetTargetPart(character, targetPartSetting)
-    if not character then return nil end
-    local parts = {"HeadHB", "Head", "HumanoidRootPart", "UpperTorso", "Torso"}
-    if targetPartSetting == "Random" then
-        local validParts = {}
-        for _, partName in ipairs(parts) do
-            local part = character:FindFirstChild(partName)
-            if part then table.insert(validParts, part) end
-        end
-        if #validParts > 0 then return validParts[math.random(1, #validParts)] end
+local function ShouldSkipFlickPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    
+    local ok, result = pcall(function()
+        return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+    end)
+    if ok and result then return true end
+    
+    return false
+end
+
+-- ============================================
+-- VISIBILITY CHECK (multi-ray)
+-- ============================================
+local function IsFlickVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+    params.IgnoreWater = true
+    
+    local origin = cam.CFrame.Position
+    local targetPos = targetPart.Position
+    local dir = targetPos - origin
+    local dist = dir.Magnitude
+    
+    if dist < 3 then return true end
+    
+    -- Primary ray
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
+    if not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    
+    -- Secondary rays
+    local offsets = {
+        Vector3.new(0, 0.3, 0),
+        Vector3.new(0, -0.3, 0),
+        Vector3.new(0.2, 0, 0),
+        Vector3.new(-0.2, 0, 0),
+    }
+    for _, offset in ipairs(offsets) do
+        local offsetPos = targetPos + offset
+        local offsetDir = offsetPos - origin
+        local offsetResult = Workspace:Raycast(origin, offsetDir.Unit * (offsetDir.Magnitude - 0.3), params)
+        if not offsetResult then return true end
+        if offsetResult.Instance and offsetResult.Instance:IsDescendantOf(targetPart.Parent) then return true end
     end
+    
+    return false
+end
+
+-- ============================================
+-- TARGET PART RESOLVER
+-- Flick uses HeadHB as priority headshot hitbox
+-- ============================================
+local FLICK_PARTS = {"HeadHB", "Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
+
+local flickRandomPart = "Head"
+local flickRandomLastSwitch = 0
+
+local function GetFlickTargetPart(character, targetPartSetting)
+    if not character then return nil end
+    
+    if targetPartSetting == "Random" then
+        local t = tick()
+        if t - flickRandomLastSwitch > 0.5 then
+            local validParts = {}
+            for _, partName in ipairs(FLICK_PARTS) do
+                local part = character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    table.insert(validParts, partName)
+                end
+            end
+            if #validParts > 0 then
+                flickRandomPart = validParts[math.random(1, #validParts)]
+            end
+            flickRandomLastSwitch = t
+        end
+        local p = character:FindFirstChild(flickRandomPart)
+        if p and p:IsA("BasePart") then return p end
+    end
+    
+    -- HeadHB is Flick's actual headshot hitbox
+    if targetPartSetting == "Head" then
+        return character:FindFirstChild("HeadHB")
+            or character:FindFirstChild("Head")
+    end
+    
     return character:FindFirstChild(targetPartSetting)
         or character:FindFirstChild("HeadHB")
         or character:FindFirstChild("Head")
@@ -86,52 +247,38 @@ local function GetTargetPart(character, targetPartSetting)
 end
 
 -- ============================================
--- UTILITY: Visibility Check
+-- SILENT AIM TARGET FINDER
 -- ============================================
-local function IsVisible(targetPart)
-    if not targetPart then return false end
-    local character = LocalPlayer.Character
-    if not character then return true end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character, Camera}
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
-    local result = Workspace:Raycast(origin, direction, params)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
-    return true
-end
-
--- ============================================
--- GET CLOSEST TARGET (Screen Center method)
--- ============================================
-local function GetClosestTargetScreenCenter()
+local function GetClosestFlickTarget()
     Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    
     local closest = nil
-    local distance = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local screenCenter = Camera.ViewportSize / 2
+    local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mousePos = UserInputService:GetMouseLocation()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if Config.Silent.TeamCheck and player.Team == LocalPlayer.Team then continue end
-
+        if ShouldSkipFlickPlayer(player, Config.Silent.TeamCheck) then continue end
+        
         local character = player.Character
         if not character then continue end
-
+        
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
+        if character:FindFirstChildOfClass("ForceField") then continue end
 
-        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        local targetPart = GetFlickTargetPart(character, Config.Silent.TargetPart)
         if not targetPart then continue end
 
-        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        if Config.Silent.VisibleCheck and not IsFlickVisible(targetPart) then continue end
 
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
         if not onScreen then continue end
 
-        local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-        if screenDistance < distance then
-            distance = screenDistance
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+        if screenDist < closestDist then
+            closestDist = screenDist
             closest = targetPart
         end
     end
@@ -140,16 +287,123 @@ local function GetClosestTargetScreenCenter()
 end
 
 -- ============================================
--- HOOK BulletHandler.Fire
+-- AIMBOT TARGET FINDER
+-- ============================================
+local flickAimbotLockedPlayer = nil
+local flickAimbotRandomPart = "Head"
+local flickAimbotLastSwitch = 0
+
+local function GetFlickAimbotTargetPart(character)
+    if not character then return nil end
+    local setting = Config.Aimbot.TargetPart
+    
+    if setting == "Random" then
+        local t = tick()
+        if t - flickAimbotLastSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local validParts = {}
+            for _, partName in ipairs(FLICK_PARTS) do
+                local part = character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    table.insert(validParts, partName)
+                end
+            end
+            if #validParts > 0 then
+                flickAimbotRandomPart = validParts[math.random(1, #validParts)]
+            end
+            flickAimbotLastSwitch = t
+        end
+        local p = character:FindFirstChild(flickAimbotRandomPart)
+        if p and p:IsA("BasePart") then return p end
+    end
+    
+    if setting == "Head" then
+        return character:FindFirstChild("HeadHB") or character:FindFirstChild("Head")
+    end
+    
+    return character:FindFirstChild(setting)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsFlickPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipFlickPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c then return false end
+    if c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetClosestFlickAimbotTarget()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    
+    local fovRadius = Config.Aimbot.FOVRadius or 150
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    
+    -- Aimlock: keep locked
+    if Config.Aimbot.Method == "Aimlock" and flickAimbotLockedPlayer then
+        if IsFlickPlayerValid(flickAimbotLockedPlayer) then
+            local tp = GetFlickAimbotTargetPart(flickAimbotLockedPlayer.Character)
+            if tp then
+                if not Config.Aimbot.VisibleCheck or IsFlickVisible(tp) then
+                    local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                    if on then return tp end
+                end
+            end
+        end
+        flickAimbotLockedPlayer = nil
+    end
+    
+    local closestPart = nil
+    local closestDist = fovRadius
+    local closestPlayer = nil
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsFlickPlayerValid(player) then continue end
+        
+        local tp = GetFlickAimbotTargetPart(player.Character)
+        if not tp then continue end
+        
+        if Config.Aimbot.VisibleCheck and not IsFlickVisible(tp) then continue end
+        
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < closestDist then
+            closestDist = d
+            closestPart = tp
+            closestPlayer = player
+        end
+    end
+    
+    if Config.Aimbot.Method == "Aimlock" and closestPlayer then
+        flickAimbotLockedPlayer = closestPlayer
+    end
+    
+    return closestPart
+end
+
+-- ============================================
+-- HOOK BulletHandler.Fire (Silent Aim)
 -- ============================================
 pcall(function()
-    local bullet_handler = require(game:GetService("ReplicatedStorage").ModuleScripts.GunModules.BulletHandler)
+    local bullet_handler = require(
+        game:GetService("ReplicatedStorage").ModuleScripts.GunModules.BulletHandler
+    )
     local old_fire = bullet_handler.Fire
 
     bullet_handler.Fire = function(data)
         if Config.Silent.Enabled and Config.Silent.Active then
             if math.random(1, 100) <= Config.Silent.HitChance then
-                local closest = GetClosestTargetScreenCenter()
+                local closest = GetClosestFlickTarget()
                 if closest and closest.Parent then
                     data.Direction = (closest.Position - data.Origin).Unit
                 end
@@ -160,8 +414,304 @@ pcall(function()
 end)
 
 -- ============================================
--- SIGNAL: Module loaded
+-- ESP SYSTEM
+-- ============================================
+local FlickESPObjects = {}
+local FlickLastESPUpdate = 0
+local FLICK_ESP_UPDATE_INTERVAL = 0.08
+
+local function CreateFlickESP(player)
+    if FlickESPObjects[player] then return end
+    
+    local e = {}
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1
+    e.Box.Filled = false
+    e.Box.Visible = false
+    
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness = 3
+    e.Outline.Filled = false
+    e.Outline.Color = Color3.fromRGB(0, 0, 0)
+    e.Outline.Transparency = 0.5
+    e.Outline.Visible = false
+    
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13
+    e.Name.Center = true
+    e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255)
+    e.Name.Visible = false
+    
+    e.Distance = Drawing.new("Text")
+    e.Distance.Size = 12
+    e.Distance.Center = true
+    e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200, 200, 200)
+    e.Distance.Visible = false
+    
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Thickness = 1
+    e.HealthBG.Filled = true
+    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
+    e.HealthBG.Transparency = 0.5
+    e.HealthBG.Visible = false
+    
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness = 1
+    e.HealthBar.Filled = true
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    e.HealthBar.Visible = false
+    
+    FlickESPObjects[player] = e
+end
+
+local function RemoveFlickESP(player)
+    local e = FlickESPObjects[player]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    FlickESPObjects[player] = nil
+end
+
+local function HideFlickESP(player)
+    local e = FlickESPObjects[player]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+local function UpdateFlickESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(FlickESPObjects) do HideFlickESP(p) end
+        return
+    end
+    
+    local now = tick()
+    if now - FlickLastESPUpdate < FLICK_ESP_UPDATE_INTERVAL then return end
+    FlickLastESPUpdate = now
+    
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    local activePlayers = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        activePlayers[player] = true
+        
+        local isTeammate = false
+        pcall(function()
+            isTeammate = player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+        end)
+        
+        if Config.ESP.TeamCheck and isTeammate then
+            HideFlickESP(player)
+            continue
+        end
+        
+        if not FlickESPObjects[player] then
+            CreateFlickESP(player)
+        end
+        
+        local esp = FlickESPObjects[player]
+        if not esp then continue end
+        
+        local character = player.Character
+        if not character then HideFlickESP(player) continue end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then HideFlickESP(player) continue end
+        if character:FindFirstChildOfClass("ForceField") then HideFlickESP(player) continue end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("UpperTorso")
+            or character:FindFirstChild("Torso")
+        local head = character:FindFirstChild("Head")
+        
+        if not rootPart then HideFlickESP(player) continue end
+        
+        local dist = (Camera.CFrame.Position - rootPart.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideFlickESP(player) continue end
+        
+        local sp, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+        if not onScreen then HideFlickESP(player) continue end
+        
+        -- Box dimensions
+        local headSP = sp
+        local footSP = sp
+        if head then
+            headSP = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        end
+        footSP = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
+        
+        local height = math.abs(headSP.Y - footSP.Y)
+        if height < 10 then height = 10 end
+        local width = height / 2
+        local minX = sp.X - width / 2
+        local minY = headSP.Y
+        
+        -- Color
+        local espColor
+        if isTeammate then
+            espColor = Color3.fromRGB(80, 150, 255)
+        else
+            local headPart = character:FindFirstChild("HeadHB") or head
+            local isVisible = headPart and IsFlickVisible(headPart) or false
+            espColor = isVisible and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        end
+        
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = espColor
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+        
+        if Config.ESP.Names then
+            esp.Name.Text = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = espColor
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+        
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+        
+        if Config.ESP.Boxes and humanoid then
+            local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+            local barHeight = height * healthPct
+            local healthColor
+            if healthPct > 0.5 then
+                healthColor = Color3.fromRGB(math.floor(255 * (1 - healthPct) * 2), 255, 0)
+            else
+                healthColor = Color3.fromRGB(255, math.floor(255 * healthPct * 2), 0)
+            end
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3, barHeight)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - barHeight))
+            esp.HealthBar.Color = healthColor
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end
+    
+    for player in pairs(FlickESPObjects) do
+        if not activePlayers[player] then
+            if not player.Parent then
+                RemoveFlickESP(player)
+            else
+                HideFlickESP(player)
+            end
+        end
+    end
+end
+
+-- ============================================
+-- RENDER LOOP (Aimbot)
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local aimTarget = GetClosestFlickAimbotTarget()
+        
+        if aimTarget then
+            local pos = aimTarget.Position
+            
+            if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                pcall(function()
+                    local vel = aimTarget.AssemblyLinearVelocity
+                    if vel and vel.Magnitude > 0.5 then
+                        pos = pos + vel * Config.Aimbot.Prediction
+                    end
+                end)
+            end
+            
+            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+            
+            if Config.Aimbot.Method == "Aimbot" then
+                local cur = Camera.CFrame
+                local tgt = CFrame.lookAt(cur.Position, pos)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+            else
+                local sp, on = Camera:WorldToViewportPoint(pos)
+                if on then
+                    local mp = UserInputService:GetMouseLocation()
+                    local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+                    local dist = math.sqrt(dx * dx + dy * dy)
+                    if dist > 1 then
+                        local spd = math.clamp(1 / sm, 0.05, 0.8)
+                        local mx = math.clamp(dx * spd, -150, 150)
+                        local my = math.clamp(dy * spd, -150, 150)
+                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                            mousemoverel(mx, my)
+                        end
+                    end
+                end
+            end
+        else
+            if not Config.Aimbot.Active then
+                flickAimbotLockedPlayer = nil
+            end
+        end
+    else
+        if not Config.Aimbot.Active then
+            flickAimbotLockedPlayer = nil
+        end
+    end
+end)
+
+-- ============================================
+-- HEARTBEAT LOOP (ESP)
+-- ============================================
+RunService.Heartbeat:Connect(function()
+    UpdateFlickESP()
+end)
+
+-- ============================================
+-- SIGNALS
 -- ============================================
 getgenv().AX_FlickLoaded = true
+getgenv().AX_FlickHandlesAimbot = true
+getgenv().AX_FlickHandlesESP = true
 
-print("  ✅ FLICK MODULE - AC Bypassed + BulletHandler.Fire hooked")
+-- ============================================
+-- INIT ESP
+-- ============================================
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then CreateFlickESP(p) end
+end
+Players.PlayerAdded:Connect(function(p) CreateFlickESP(p) end)
+Players.PlayerRemoving:Connect(function(p)
+    if flickAimbotLockedPlayer == p then flickAimbotLockedPlayer = nil end
+    RemoveFlickESP(p)
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    flickAimbotLockedPlayer = nil
+    task.wait(2)
+    pcall(function() ApplyFlickACBypass() end)
+end)
+
+print("  ✅ FLICK MODULE v2.0 - AC Bypassed (Detected + Kill + debug.info)")
+print("  ✅ FLICK MODULE v2.0 - BulletHandler.Fire hooked")
+print("  ✅ FLICK MODULE v2.0 - Custom Aimbot + ESP")
