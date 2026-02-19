@@ -1,7 +1,10 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v16.9
-    ONLY handles: Aimbot via mousemoverel
-    ESP is handled by main script
+    ANNOMALY X - Blox Strike Module (BSX) v17.0
+    
+    KEY DISCOVERY: BloxStrike stores player models as
+    children of workspace.CurrentCamera, NOT as standard
+    player.Character objects.
+    
     Creator: ElSacaLeche
 ]]
 
@@ -14,190 +17,488 @@ local Config = getgenv().AX_Config
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local GuiService = game:GetService("GuiService")
 local Workspace = workspace
-local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
-local GuiInset = Vector2.new(0, 36)
-pcall(function() GuiInset = GuiService:GetGuiInset() end)
-
+-- ============================================
+-- VARIABLES
+-- ============================================
 local LockedPlayer = nil
+local LockedModel = nil
 local RandomPart = "Head"
 local LastRandomSwitch = 0
+local BSXESPObjects = {}
+local LastESPUpdate = 0
 
 -- ============================================
--- TEAM CHECK (same as main script)
+-- GET ALL ENEMY MODELS
+-- BloxStrike stores player models in Camera
+-- AND also as standard player characters
 -- ============================================
-local function SameTeam(a, b)
-    if not a or not b then return false end
-    local s1, r1 = pcall(function()
-        return a.Team and b.Team and a.Team == b.Team
-    end)
-    if s1 and r1 then return true end
-    local s2, r2 = pcall(function()
-        return a.TeamColor and b.TeamColor and a.TeamColor == b.TeamColor
-    end)
-    if s2 and r2 then return true end
-    return false
+local function GetAllTargets()
+    local targets = {}
+    local Camera = Workspace.CurrentCamera
+    if not Camera then return targets end
+    
+    -- Method 1: Camera children (BloxStrike's main method)
+    for _, model in ipairs(Camera:GetChildren()) do
+        if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
+            local head = model:FindFirstChild("Head") or model:FindFirstChild("HeadHB")
+            local humanoid = model:FindFirstChildOfClass("Humanoid")
+            local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
+            
+            if head and head:IsA("BasePart") and humanoid and humanoid.Health > 0 then
+                local player = Players:FindFirstChild(model.Name)
+                table.insert(targets, {
+                    Model = model,
+                    Player = player,
+                    Head = head,
+                    Root = hrp or head,
+                    Humanoid = humanoid
+                })
+            end
+        end
+    end
+    
+    -- Method 2: Standard player characters (fallback)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            local head = char:FindFirstChild("Head")
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+            
+            if head and humanoid and humanoid.Health > 0 then
+                -- Check not already added from Camera
+                local alreadyAdded = false
+                for _, t in ipairs(targets) do
+                    if t.Model == char or (t.Player and t.Player == player) then
+                        alreadyAdded = true
+                        break
+                    end
+                end
+                
+                if not alreadyAdded then
+                    table.insert(targets, {
+                        Model = char,
+                        Player = player,
+                        Head = head,
+                        Root = hrp or head,
+                        Humanoid = humanoid
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Method 3: Workspace Players/Characters folder
+    local playersFolder = Workspace:FindFirstChild("Players") or Workspace:FindFirstChild("Characters")
+    if playersFolder then
+        for _, model in ipairs(playersFolder:GetChildren()) do
+            if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
+                local head = model:FindFirstChild("Head")
+                local humanoid = model:FindFirstChildOfClass("Humanoid")
+                local hrp = model:FindFirstChild("HumanoidRootPart")
+                
+                if head and humanoid and humanoid.Health > 0 then
+                    local alreadyAdded = false
+                    for _, t in ipairs(targets) do
+                        if t.Model == model then alreadyAdded = true break end
+                    end
+                    
+                    if not alreadyAdded then
+                        local player = Players:FindFirstChild(model.Name)
+                        table.insert(targets, {
+                            Model = model,
+                            Player = player,
+                            Head = head,
+                            Root = hrp or head,
+                            Humanoid = humanoid
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    return targets
 end
 
 -- ============================================
--- TARGET PART
+-- TEAM CHECK
+-- BloxStrike method: find player by model name
+-- then compare Team objects
 -- ============================================
-local function GetPart(char)
-    if not char then return nil end
+local function IsTeammate(targetData)
+    if not Config.Aimbot.TeamCheck and not Config.ESP.TeamCheck then return false end
+    
+    local player = targetData.Player
+    if not player then
+        player = Players:FindFirstChild(targetData.Model.Name)
+    end
+    
+    if player and player.Team and LocalPlayer.Team then
+        return player.Team == LocalPlayer.Team
+    end
+    
+    -- Fallback: TeamColor value in model
+    local targetTC = targetData.Model:FindFirstChild("TeamColor")
+    local myChar = LocalPlayer.Character
+    local myTC = myChar and myChar:FindFirstChild("TeamColor")
+    if targetTC and myTC then
+        return targetTC.Value == myTC.Value
+    end
+    
+    return false
+end
+
+local function IsTeammateForAimbot(targetData)
+    if not Config.Aimbot.TeamCheck then return false end
+    return IsTeammate(targetData)
+end
+
+local function IsTeammateForESP(targetData)
+    if not Config.ESP.TeamCheck then return false end
+    return IsTeammate(targetData)
+end
+
+-- ============================================
+-- GET AIM PART
+-- ============================================
+local function GetAimPart(model)
+    if not model then return nil end
     local s = Config.Aimbot.TargetPart
+    
     if s == "Random" then
         local t = tick()
         if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
             local o = {}
-            for _, n in ipairs({"Head","HumanoidRootPart","Torso","UpperTorso"}) do
-                if char:FindFirstChild(n) then table.insert(o, n) end
+            for _, n in ipairs({"Head", "HeadHB", "HumanoidRootPart", "Torso", "UpperTorso"}) do
+                local p = model:FindFirstChild(n)
+                if p and p:IsA("BasePart") then table.insert(o, n) end
             end
             if #o > 0 then RandomPart = o[math.random(#o)] end
             LastRandomSwitch = t
         end
-        return char:FindFirstChild(RandomPart) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        local p = model:FindFirstChild(RandomPart)
+        if p and p:IsA("BasePart") then return p end
     end
-    return char:FindFirstChild(s) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+    
+    if s == "Head" then
+        return model:FindFirstChild("Head") or model:FindFirstChild("HeadHB")
+    end
+    
+    local p = model:FindFirstChild(s)
+    if p and p:IsA("BasePart") then return p end
+    
+    return model:FindFirstChild("Head")
+        or model:FindFirstChild("HeadHB")
+        or model:FindFirstChild("HumanoidRootPart")
 end
 
 -- ============================================
--- VISIBILITY
+-- FIND AIMBOT TARGET
+-- Same method as working BloxStrike scripts:
+-- Check Camera children first, then fallback
 -- ============================================
-local function CanSee(part)
-    if not part then return false end
-    local c = LocalPlayer.Character
-    if not c then return true end
-    local cam = Workspace.CurrentCamera
-    if not cam then return true end
-    local p = RaycastParams.new()
-    p.FilterType = Enum.RaycastFilterType.Exclude
-    p.FilterDescendantsInstances = {c, cam}
-    local o = cam.CFrame.Position
-    local d = part.Position - o
-    local r = Workspace:Raycast(o, d, p)
-    if r then return r.Instance:IsDescendantOf(part.Parent) end
-    return true
-end
-
--- ============================================
--- VALID CHECK
--- ============================================
-local function Valid(player)
-    if not player or player == LocalPlayer or not player.Parent then return false end
-    if Config.Aimbot.TeamCheck and SameTeam(LocalPlayer, player) then return false end
-    local c = player.Character
-    if not c then return false end
-    local h = c:FindFirstChildOfClass("Humanoid")
-    return h and h.Health > 0
-end
-
--- ============================================
--- FIND TARGET
--- ============================================
-local function FindTarget()
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
-
-    if Config.Aimbot.Method == "Aimlock" and LockedPlayer then
-        if Valid(LockedPlayer) then
-            local tp = GetPart(LockedPlayer.Character)
-            if tp and (not Config.Aimbot.VisibleCheck or CanSee(tp)) then
-                local sp, on = cam:WorldToViewportPoint(tp.Position)
-                if on then return tp end
+local function FindAimTarget()
+    local Camera = Workspace.CurrentCamera
+    if not Camera then return nil, nil end
+    
+    local mousePos = UserInputService:GetMouseLocation()
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    local fov = Config.Aimbot.FOVRadius or 150
+    
+    -- Aimlock: keep locked
+    if Config.Aimbot.Method == "Aimlock" and LockedModel then
+        local head = LockedModel:FindFirstChild("Head") or LockedModel:FindFirstChild("HeadHB")
+        local hum = LockedModel:FindFirstChildOfClass("Humanoid")
+        if head and hum and hum.Health > 0 then
+            local aimPart = GetAimPart(LockedModel)
+            if aimPart then
+                local sp, on = Camera:WorldToViewportPoint(aimPart.Position)
+                if on then return aimPart, LockedModel end
             end
         end
-        LockedPlayer = nil
+        LockedModel = nil
     end
-
-    local vp = cam.ViewportSize
-    local center = Vector2.new(vp.X / 2, vp.Y / 2)
-    local mouse = UserInputService:GetMouseLocation()
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mouse
-
-    local best, bestD, bestP = nil, Config.Aimbot.FOVRadius or 150, nil
-    for _, p in ipairs(Players:GetPlayers()) do
-        if not Valid(p) then continue end
-        local tp = GetPart(p.Character)
-        if not tp then continue end
-        if Config.Aimbot.VisibleCheck and not CanSee(tp) then continue end
-        local sp, on = cam:WorldToViewportPoint(tp.Position)
+    
+    local allTargets = GetAllTargets()
+    local bestPart, bestDist, bestModel = nil, fov, nil
+    
+    for _, data in ipairs(allTargets) do
+        -- Team check
+        if IsTeammateForAimbot(data) then continue end
+        
+        local aimPart = GetAimPart(data.Model)
+        if not aimPart then continue end
+        
+        -- Visible check
+        if Config.Aimbot.VisibleCheck then
+            local myChar = LocalPlayer.Character
+            if myChar then
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.FilterDescendantsInstances = {myChar, Camera}
+                local origin = Camera.CFrame.Position
+                local dir = aimPart.Position - origin
+                local result = Workspace:Raycast(origin, dir, params)
+                if result and not result.Instance:IsDescendantOf(data.Model) then
+                    continue
+                end
+            end
+        end
+        
+        local sp, on = Camera:WorldToViewportPoint(aimPart.Position)
         if not on then continue end
+        
         local d = (ref - Vector2.new(sp.X, sp.Y)).Magnitude
-        if d < bestD then best = tp bestD = d bestP = p end
+        if d < bestDist then
+            bestPart = aimPart
+            bestDist = d
+            bestModel = data.Model
+        end
     end
-    if Config.Aimbot.Method == "Aimlock" and bestP then LockedPlayer = bestP end
-    return best
+    
+    if Config.Aimbot.Method == "Aimlock" and bestModel then
+        LockedModel = bestModel
+    end
+    
+    return bestPart, bestModel
 end
 
 -- ============================================
--- AIMBOT LOOP
--- Uses mousemoverel only
--- NO GuiInset correction - direct screen delta
+-- ESP CREATE / REMOVE / HIDE
 -- ============================================
-RunService.RenderStepped:Connect(function()
-    Camera = Workspace.CurrentCamera
-    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
-        if not Config.Aimbot.Active then LockedPlayer = nil end
+local function CreateESP(model)
+    if BSXESPObjects[model] then return end
+    
+    local e = {}
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1
+    e.Box.Filled = false
+    e.Box.Color = Color3.fromRGB(255, 255, 255)
+    e.Box.Visible = false
+    
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness = 3
+    e.Outline.Filled = false
+    e.Outline.Color = Color3.fromRGB(0, 0, 0)
+    e.Outline.Transparency = 0.5
+    e.Outline.Visible = false
+    
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13
+    e.Name.Center = true
+    e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255)
+    e.Name.Visible = false
+    
+    e.Dist = Drawing.new("Text")
+    e.Dist.Size = 13
+    e.Dist.Center = true
+    e.Dist.Outline = true
+    e.Dist.Color = Color3.fromRGB(255, 255, 255)
+    e.Dist.Visible = false
+    
+    BSXESPObjects[model] = e
+end
+
+local function RemoveESP(model)
+    local e = BSXESPObjects[model]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    BSXESPObjects[model] = nil
+end
+
+local function HideESP(model)
+    local e = BSXESPObjects[model]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+-- ============================================
+-- ESP UPDATE
+-- Uses same method as working BloxStrike scripts
+-- ============================================
+local function UpdateBSXESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for m in pairs(BSXESPObjects) do HideESP(m) end
         return
     end
-
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
-
-    local tp = FindTarget()
-    if not tp then return end
-
-    local pos = tp.Position
-    pcall(function()
-        if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-            local v = tp.AssemblyLinearVelocity
-            if v and v.Magnitude > 0.1 then pos = pos + v * Config.Aimbot.Prediction end
+    
+    local now = tick()
+    if now - LastESPUpdate < 0.08 then return end
+    LastESPUpdate = now
+    
+    local Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    local allTargets = GetAllTargets()
+    local activeModels = {}
+    
+    for _, data in ipairs(allTargets) do
+        local model = data.Model
+        activeModels[model] = true
+        
+        if not BSXESPObjects[model] then
+            CreateESP(model)
         end
-    end)
-
-    local sp, on = cam:WorldToViewportPoint(pos)
-    if not on then return end
-
-    -- Use ViewportPointToRay to get the exact screen center the game uses
-    local mouse = UserInputService:GetMouseLocation()
-
-    -- Delta calculation
-    -- mouse already has GuiInset, sp does not
-    -- Add GuiInset to sp to match
-    local dx = sp.X - mouse.X
-    local dy = (sp.Y + GuiInset.Y) - mouse.Y
-    local dist = math.sqrt(dx * dx + dy * dy)
-
-    if dist < 1 then return end
-
-    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-    local speed = 1 / sm
-
-    -- Scale movement
-    local mx = dx * speed
-    local my = dy * speed
-
-    -- Prevent oscillation: if very close, use smaller movements
-    if dist < 5 then
-        mx = dx * 0.5
-        my = dy * 0.5
+        
+        local esp = BSXESPObjects[model]
+        if not esp then continue end
+        
+        -- Team check for ESP
+        if IsTeammateForESP(data) then
+            HideESP(model)
+            continue
+        end
+        
+        local head = data.Head
+        local root = data.Root
+        local humanoid = data.Humanoid
+        
+        if root and head then
+            local rootPos = root.Position
+            local sp, on = Camera:WorldToViewportPoint(rootPos)
+            
+            if on and sp.Z > 0 then
+                -- Box calculation (same as working scripts)
+                local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                local footPos = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
+                
+                local height = math.abs(headPos.Y - footPos.Y)
+                local width = height / 2
+                
+                local minX = sp.X - width / 2
+                local minY = headPos.Y
+                local boxWidth = width
+                local boxHeight = math.abs(footPos.Y - headPos.Y)
+                
+                -- Team color
+                local color = Color3.fromRGB(255, 50, 50) -- Red for enemies
+                if data.Player and data.Player.Team then
+                    color = data.Player.Team.TeamColor.Color
+                end
+                
+                -- Box outline
+                if Config.ESP.Boxes then
+                    esp.Outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
+                    esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+                    esp.Outline.Visible = true
+                    
+                    esp.Box.Size = Vector2.new(boxWidth, boxHeight)
+                    esp.Box.Position = Vector2.new(minX, minY)
+                    esp.Box.Color = color
+                    esp.Box.Visible = true
+                else
+                    esp.Box.Visible = false
+                    esp.Outline.Visible = false
+                end
+                
+                -- Name
+                if Config.ESP.Names then
+                    local name = model.Name
+                    if data.Player then name = data.Player.DisplayName or data.Player.Name end
+                    esp.Name.Text = name
+                    esp.Name.Position = Vector2.new(minX + boxWidth / 2, minY - 16)
+                    esp.Name.Color = color
+                    esp.Name.Visible = true
+                else
+                    esp.Name.Visible = false
+                end
+                
+                -- Distance
+                if Config.ESP.Distance then
+                    local myChar = LocalPlayer.Character
+                    local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head"))
+                    if myRoot then
+                        local dist = (myRoot.Position - rootPos).Magnitude
+                        esp.Dist.Text = math.floor(dist) .. "m"
+                        esp.Dist.Position = Vector2.new(minX + boxWidth / 2, minY + boxHeight + 2)
+                        esp.Dist.Visible = true
+                    else
+                        esp.Dist.Visible = false
+                    end
+                else
+                    esp.Dist.Visible = false
+                end
+            else
+                HideESP(model)
+            end
+        else
+            HideESP(model)
+        end
     end
-    if dist < 2 then
-        mx = dx * 0.3
-        my = dy * 0.3
+    
+    -- Cleanup old ESP objects
+    for model in pairs(BSXESPObjects) do
+        if not activeModels[model] then
+            RemoveESP(model)
+        end
     end
+end
 
-    mx = math.clamp(mx, -150, 150)
-    my = math.clamp(my, -150, 150)
-
-    if math.abs(mx) > 0.15 or math.abs(my) > 0.15 then
-        mousemoverel(mx, my)
+-- ============================================
+-- MAIN LOOP
+-- Aimbot: exact same delta method as working scripts
+-- deltaX = (targetPos.X - mousePos.X) * smoothing
+-- NO GuiInset correction needed
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    local Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    -- === AIMBOT ===
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local target = FindAimTarget()
+        
+        if target then
+            local pos = target.Position
+            
+            -- Prediction
+            pcall(function()
+                if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                    local v = target.AssemblyLinearVelocity
+                    if v and v.Magnitude > 0.1 then
+                        pos = pos + v * Config.Aimbot.Prediction
+                    end
+                end
+            end)
+            
+            local targetPos, on = Camera:WorldToViewportPoint(pos)
+            
+            if on then
+                local mousePos = UserInputService:GetMouseLocation()
+                
+                -- EXACT same method as working BloxStrike scripts:
+                -- Simple delta * smoothing, NO offset corrections
+                local smoothing = 1 / math.max(Config.Aimbot.Smoothness or 5, 1)
+                
+                local deltaX = (targetPos.X - mousePos.X) * smoothing
+                local deltaY = (targetPos.Y - mousePos.Y) * smoothing
+                
+                -- Clamp to prevent huge jumps
+                deltaX = math.clamp(deltaX, -150, 150)
+                deltaY = math.clamp(deltaY, -150, 150)
+                
+                if math.abs(deltaX) > 0.1 or math.abs(deltaY) > 0.1 then
+                    mousemoverel(deltaX, deltaY)
+                end
+            end
+        end
+    else
+        if not Config.Aimbot.Active then
+            LockedModel = nil
+        end
     end
+    
+    -- === ESP ===
+    UpdateBSXESP()
 end)
 
 -- ============================================
@@ -205,20 +506,18 @@ end)
 -- ============================================
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    Camera = Workspace.CurrentCamera
-    LockedPlayer = nil
-    pcall(function() GuiInset = GuiService:GetGuiInset() end)
+    LockedModel = nil
 end)
 
 Players.PlayerRemoving:Connect(function(p)
-    if LockedPlayer == p then LockedPlayer = nil end
+    if LockedModel and LockedModel.Name == p.Name then
+        LockedModel = nil
+    end
 end)
 
 -- ============================================
 -- SIGNAL
--- BSX handles aimbot only, NOT ESP
--- Main script handles ESP for BSX
 -- ============================================
 getgenv().AX_BSXLoaded = true
 getgenv().AX_BSX_HandlesAimbot = true
--- DO NOT set AX_PF_HandlesESP - main script handles ESP
+getgenv().AX_PF_HandlesESP = true
