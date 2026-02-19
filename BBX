@@ -1,51 +1,16 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║          ANNOMALY X - Bad Business Module v2.1             ║
+    ║          ANNOMALY X - Bad Business Module v2.2             ║
     ║                                                           ║
-    ║  FIXES v2.1:                                              ║
-    ║  - Fixed pcall/return bugs in GetBBHealth and IsBBAlive   ║
-    ║  - Fixed ScanForShootingRemotes pattern detection          ║
-    ║  - Improved ProjectileHandler hook retry logic             ║
-    ║  - Added PlaceId guard                                    ║
+    ║  FIXES v2.2:                                              ║
+    ║  - Fixed freeze on load (deferred heavy scans)            ║
+    ║  - Added task.wait() between getgc iterations             ║
+    ║  - Reduced scan frequency and batch sizes                 ║
+    ║  - Fixed pcall/return bugs                                ║
+    ║  - Safe AC bypass (no .Connect hooks)                     ║
     ║                                                           ║
     ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
-    
-    BAD BUSINESS ARCHITECTURE (from analysis):
-    - PlaceId: 3233893879
-    - Custom Character Controller (Humanoid is irrelevant for damage)
-    - Uses "Skinning" (deformable meshes) + own controller
-    - Projectile-based weapons (not hitscan) - bullets travel
-    - Framework accessible via _G or required ModuleScripts
-    - Entity table in client stores all alive players
-    - RemoteEvent names are OBFUSCATED (change each update)
-    - AC checks: fire rate, movement speed, teleportation
-    - AC verifies if fire_bullet function has been modified
-    
-    SILENT AIM STRATEGY (from analysis):
-    1. Find the ProjectileHandler/fire_bullet module via getgc/require
-    2. Hook the bullet creation function
-    3. Replace direction vector: V = (EnemyHead - Barrel).Unit
-    4. Add artificial spread to avoid 100% accuracy detection
-    
-    FALLBACK STRATEGY:
-    - If module hook fails, use __namecall on Raycast (some BB
-      weapons still use hitscan for close range)
-    - Network Event Spy: detect shooting remotes by monitoring
-      argument patterns instead of names (they're obfuscated)
-    
-    AC BYPASS STRATEGY (from analysis):
-    - hookmetamethod __index to return clean copies of hooked
-      functions when AC tries to verify them
-    - Don't modify fire rate or movement speed
-    - Add intentional spread (miss ~15% on purpose)
-    
-    ESP STRATEGY:
-    - BB uses complex character models with Bones
-    - Standard Head/HumanoidRootPart still exist for positioning
-    - Health is managed by custom system, may need to read from
-      entity table or Humanoid (BB keeps it synced for display)
-    - Use VisCheck raycast for color coding
 ]]
 
 if not getgenv().AX_Config then
@@ -75,23 +40,20 @@ local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
 -- BB INTERNAL REFERENCES
--- These are discovered at runtime via scanning
 -- ============================================
 local BB_Framework = nil
 local BB_EntityTable = nil
 local BB_FireFunction = nil
 local BB_FireHooked = false
 local BB_ShootingRemotes = {}
-local BB_HealthCache = {}
 
 -- ============================================
--- PHASE 1: AC BYPASS
--- Non-destructive, returns clean copies to AC
+-- PHASE 1: SAFE AC BYPASS (lightweight, no freeze)
 -- ============================================
 local HookedFunctions = {}
 
 local function ApplyBBACBypass()
-    local results = {kick = false, errors = 0, index_hook = false, memory = 0}
+    local results = {kick = false, errors = 0, memory = 0}
 
     -- Kick protection
     pcall(function()
@@ -105,7 +67,7 @@ local function ApplyBBACBypass()
         end
     end)
 
-    -- Error suppression (safe: only Disable, no .Connect hook)
+    -- Error suppression (SAFE: only Disable, NO .Connect hook)
     pcall(function()
         if not getconnections then return end
         local SC = cloneref(game:GetService("ScriptContext"))
@@ -117,37 +79,17 @@ local function ApplyBBACBypass()
         end
     end)
 
-    -- Memory signature cleanup
-    pcall(function()
-        if not getgc then return end
-        for _, obj in ipairs(getgc(true)) do
-            if type(obj) == "table" then
-                pcall(function()
-                    for _, k in ipairs({
-                        "__acsignature", "__checksum", "__hash", "__integrity",
-                        "__validation", "__exploit_flag", "_ac_token"
-                    }) do
-                        if rawget(obj, k) then
-                            rawset(obj, k, nil)
-                            results.memory = results.memory + 1
-                        end
-                    end
-                end)
-            end
-        end
-    end)
-
     return results
 end
 
 local acResults = ApplyBBACBypass()
 
--- Continuous cleanup (safe, non-destructive)
+-- Lightweight continuous cleanup (NO getgc spam)
 task.spawn(function()
     while true do
-        task.wait(12 + math.random() * 8)
+        task.wait(15 + math.random() * 10)
         pcall(function()
-            -- Re-suppress errors (safe method - only Disable)
+            -- Re-disable errors only
             pcall(function()
                 if not getconnections then return end
                 local SC = cloneref(game:GetService("ScriptContext"))
@@ -155,29 +97,38 @@ task.spawn(function()
                     pcall(function() conn:Disable() end)
                 end
             end)
-            -- Memory cleanup
-            pcall(function()
-                if not getgc then return end
-                for _, obj in ipairs(getgc(true)) do
-                    if type(obj) == "table" then
-                        pcall(function()
-                            if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
-                            if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
-                            if rawget(obj, "__exploit_flag") then rawset(obj, "__exploit_flag", nil) end
-                        end)
-                    end
+        end)
+    end
+end)
+
+-- Separate memory cleanup (runs less frequently, with yields)
+task.spawn(function()
+    while true do
+        task.wait(30 + math.random() * 15)
+        pcall(function()
+            if not getgc then return end
+            local batch = 0
+            for _, obj in ipairs(getgc(true)) do
+                if type(obj) == "table" then
+                    pcall(function()
+                        if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
+                        if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
+                        if rawget(obj, "__exploit_flag") then rawset(obj, "__exploit_flag", nil) end
+                    end)
                 end
-            end)
+                batch = batch + 1
+                if batch % 500 == 0 then task.wait() end
+            end
         end)
     end
 end)
 
 -- ============================================
--- PHASE 2: FRAMEWORK DISCOVERY
--- Scan for BB's internal game framework
+-- PHASE 2: FRAMEWORK DISCOVERY (deferred, non-blocking)
+-- All scans run in coroutines with yields to prevent freeze
 -- ============================================
 local function ScanForFramework()
-    -- Method 1: Search _G for framework tables
+    -- Method 1: Search _G (lightweight)
     pcall(function()
         for key, value in pairs(_G) do
             if type(value) == "table" then
@@ -189,10 +140,12 @@ local function ScanForFramework()
             end
         end
     end)
+    task.wait()
 
-    -- Method 2: Search getgc for entity tables
+    -- Method 2: Search getgc for entity tables (with batching)
     pcall(function()
         if not getgc then return end
+        local batch = 0
         for _, obj in ipairs(getgc(true)) do
             if type(obj) == "table" then
                 pcall(function()
@@ -203,12 +156,16 @@ local function ScanForFramework()
                     end
                 end)
             end
+            batch = batch + 1
+            if batch % 300 == 0 then task.wait() end
         end
     end)
+    task.wait()
 
-    -- Method 3: Search required modules
+    -- Method 3: Search required modules (with batching)
     pcall(function()
         if not getgc then return end
+        local batch = 0
         for _, obj in ipairs(getgc(true)) do
             if type(obj) == "function" then
                 pcall(function()
@@ -229,14 +186,16 @@ local function ScanForFramework()
                     end
                 end)
             end
+            batch = batch + 1
+            if batch % 300 == 0 then task.wait() end
         end
     end)
 end
 
--- Method 4: Search for ProjectileHandler module
 local function ScanForProjectileHandler()
     pcall(function()
         if not getgc then return end
+        local batch = 0
         for _, obj in ipairs(getgc(true)) do
             if type(obj) == "function" then
                 pcall(function()
@@ -267,73 +226,74 @@ local function ScanForProjectileHandler()
                     end
                 end)
             end
+            batch = batch + 1
+            if batch % 300 == 0 then task.wait() end
         end
     end)
 end
 
--- Method 5: Network Event Spy
 local function ScanForShootingRemotes()
     pcall(function()
+        local batch = 0
         for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
             if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
                 BB_ShootingRemotes[remote] = "unknown"
             end
-        end
-
-        for _, service in ipairs({
-            game:GetService("ReplicatedFirst"),
-            ReplicatedStorage,
-        }) do
-            for _, child in ipairs(service:GetDescendants()) do
-                if child:IsA("RemoteEvent") then
-                    BB_ShootingRemotes[child] = "unknown"
-                end
-            end
+            batch = batch + 1
+            if batch % 200 == 0 then task.wait() end
         end
     end)
+    task.wait()
 
-    -- Monitor remotes for shooting patterns
+    -- Monitor remotes for shooting patterns (with batching)
     pcall(function()
         if not getconnections then return end
+        local batch = 0
         for remote, _ in pairs(BB_ShootingRemotes) do
             if remote:IsA("RemoteEvent") and remote.OnClientEvent then
-                for _, conn in pairs(getconnections(remote.OnClientEvent)) do
-                    if conn and conn.Function then
-                        pcall(function()
-                            local src = debug.info(conn.Function, "s")
-                            if type(src) == "string" and (
-                                src:find("Weapon") or src:find("Gun") or src:find("Shoot")
-                                or src:find("Projectile") or src:find("Bullet") or src:find("Fire")
-                                or src:find("Damage") or src:find("Hit")
-                            ) then
-                                BB_ShootingRemotes[remote] = "shooting"
-                            end
-                        end)
+                pcall(function()
+                    for _, conn in pairs(getconnections(remote.OnClientEvent)) do
+                        if conn and conn.Function then
+                            pcall(function()
+                                local src = debug.info(conn.Function, "s")
+                                if type(src) == "string" and (
+                                    src:find("Weapon") or src:find("Gun") or src:find("Shoot")
+                                    or src:find("Projectile") or src:find("Bullet") or src:find("Fire")
+                                    or src:find("Damage") or src:find("Hit")
+                                ) then
+                                    BB_ShootingRemotes[remote] = "shooting"
+                                end
+                            end)
+                        end
                     end
-                end
+                end)
             end
+            batch = batch + 1
+            if batch % 50 == 0 then task.wait() end
         end
     end)
 end
 
--- Run scans
+-- Run all scans deferred (not on load, after game settles)
 task.spawn(function()
-    task.wait(2)
+    task.wait(4)
     ScanForFramework()
+    task.wait(1)
     ScanForProjectileHandler()
+    task.wait(1)
     ScanForShootingRemotes()
 
-    -- Retry after a delay if nothing found
-    task.wait(5)
+    -- Retry if nothing found
+    task.wait(8)
     if not BB_Framework and not BB_FireFunction then
         ScanForFramework()
+        task.wait(1)
         ScanForProjectileHandler()
     end
 end)
 
 -- ============================================
 -- TEAM CHECK
--- BB uses standard Roblox Teams
 -- ============================================
 local function IsBBTeammate(player)
     if not player or player == LocalPlayer then return false end
@@ -355,7 +315,7 @@ local function ShouldSkipBBPlayer(player, teamCheckEnabled)
 end
 
 -- ============================================
--- BB HEALTH DETECTION (FIXED pcall/return bugs)
+-- BB HEALTH DETECTION (FIXED pcall/return)
 -- ============================================
 local function GetBBHealth(player)
     if not player then return 0, 100 end
@@ -363,13 +323,13 @@ local function GetBBHealth(player)
     local char = player.Character
     if not char then return 0, 100 end
 
-    -- Method 1: Standard Humanoid (BB keeps it synced for display)
+    -- Method 1: Standard Humanoid
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         return hum.Health, hum.MaxHealth
     end
 
-    -- Method 2: Check attributes (FIXED - proper pcall return handling)
+    -- Method 2: Attributes (FIXED)
     local attrOk, attrHp, attrMax = pcall(function()
         local hp = char:GetAttribute("Health")
         local maxHp = char:GetAttribute("MaxHealth") or 100
@@ -378,7 +338,7 @@ local function GetBBHealth(player)
     end)
     if attrOk and attrHp then return attrHp, attrMax end
 
-    -- Method 3: Check for health value objects (FIXED)
+    -- Method 3: Value objects (FIXED)
     local valOk, valHp, valMax = pcall(function()
         local hpVal = char:FindFirstChild("Health") or char:FindFirstChild("HP")
         if hpVal and (hpVal:IsA("NumberValue") or hpVal:IsA("IntValue")) then
@@ -390,7 +350,7 @@ local function GetBBHealth(player)
     end)
     if valOk and valHp then return valHp, valMax end
 
-    -- Method 4: From entity table (FIXED)
+    -- Method 4: Entity table (FIXED)
     if BB_EntityTable and player.Name then
         local entOk, entHp, entMax = pcall(function()
             for _, entity in pairs(BB_EntityTable) do
@@ -405,7 +365,7 @@ local function GetBBHealth(player)
         if entOk and entHp then return entHp, entMax end
     end
 
-    return 100, 100 -- Default: assume full health
+    return 100, 100
 end
 
 local function IsBBAlive(player)
@@ -417,7 +377,7 @@ local function IsBBAlive(player)
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then return hum.Health > 0 end
 
-    -- Attribute check (FIXED - proper pcall return handling)
+    -- Attribute check (FIXED)
     local deadOk, isDead = pcall(function()
         local hp = char:GetAttribute("Health")
         return hp and hp <= 0
@@ -450,13 +410,12 @@ local function IsBBAlive(player)
         if entOk and entDead then return false end
     end
 
-    -- If we can't determine, check if character has essential parts
     local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
     return root ~= nil
 end
 
 -- ============================================
--- VISIBILITY CHECK (multi-ray)
+-- VISIBILITY CHECK
 -- ============================================
 local function IsBBVisible(targetPart)
     if not targetPart then return false end
@@ -476,22 +435,16 @@ local function IsBBVisible(targetPart)
     local dist = dir.Magnitude
     if dist < 3 then return true end
 
-    -- Primary ray
     local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
     if not result then return true end
     if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
 
-    -- Secondary rays to handle BB's complex character meshes
-    local offsets = {
+    -- Secondary rays (reduced from 6 to 3 for performance)
+    for _, offset in ipairs({
         Vector3.new(0, 0.4, 0),
         Vector3.new(0, -0.4, 0),
         Vector3.new(0.3, 0, 0),
-        Vector3.new(-0.3, 0, 0),
-        Vector3.new(0, 0, 0.3),
-        Vector3.new(0, 0, -0.3),
-    }
-
-    for _, offset in ipairs(offsets) do
+    }) do
         local oPos = targetPos + offset
         local oDir = oPos - origin
         local oResult = Workspace:Raycast(origin, oDir.Unit * (oDir.Magnitude - 0.3), params)
@@ -539,15 +492,12 @@ end
 -- ============================================
 local function ApplyArtificialSpread(targetPos, spreadAmount)
     if not spreadAmount or spreadAmount <= 0 then return targetPos end
-
     local offsetX = (math.random() - 0.5) * 2 * spreadAmount
     local offsetY = (math.random() - 0.5) * 2 * spreadAmount
     local offsetZ = (math.random() - 0.5) * 2 * spreadAmount
-
     return targetPos + Vector3.new(offsetX, offsetY, offsetZ)
 end
 
--- Intentionally miss ~15% of shots to appear human
 local function ShouldIntentionallyMiss()
     return math.random(1, 100) <= 15
 end
@@ -643,7 +593,6 @@ local function GetBBAimbotTarget()
     local mousePos = UserInputService:GetMouseLocation()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
 
-    -- Aimlock persistence
     if Config.Aimbot.Method == "Aimlock" and bbAimbotLocked then
         if IsBBPlayerValid(bbAimbotLocked) then
             local tp = GetBBAimbotPart(bbAimbotLocked.Character)
@@ -684,7 +633,6 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     if checkcaller() then return oldNamecall(self, ...) end
 
     if Config.Silent.Enabled and Config.Silent.Active and CurrentBBTarget and CurrentBBTarget.Parent then
-        -- Hit chance check (includes artificial miss)
         local effectiveChance = Config.Silent.HitChance
         if ShouldIntentionallyMiss() then
             effectiveChance = 0
@@ -711,7 +659,6 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                 end
             end
 
-            -- Intercept shooting remotes (detected by pattern, not name)
             if self:IsA("RemoteEvent") and method == "FireServer" then
                 if BB_ShootingRemotes[self] == "shooting" then
                     local modified = false
@@ -738,12 +685,11 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ============================================
--- PROJECTILE HANDLER HOOK (if found)
+-- PROJECTILE HANDLER HOOK (deferred, non-blocking)
 -- ============================================
 local function TryHookProjectileHandler()
     if BB_FireHooked then return end
 
-    -- Direct hook if found via scan
     if BB_FireFunction and not BB_FireHooked then
         pcall(function()
             local originalFire = BB_FireFunction
@@ -776,10 +722,10 @@ local function TryHookProjectileHandler()
         end)
     end
 
-    -- Try to find and hook via getgc table scanning
     if not BB_FireHooked then
         pcall(function()
             if not getgc then return end
+            local batch = 0
             for _, obj in ipairs(getgc(true)) do
                 if BB_FireHooked then break end
                 if type(obj) == "table" then
@@ -823,21 +769,23 @@ local function TryHookProjectileHandler()
                         end
                     end)
                 end
+                batch = batch + 1
+                if batch % 300 == 0 then task.wait() end
             end
         end)
     end
 end
 
 task.spawn(function()
-    task.wait(5)
+    task.wait(7)
     TryHookProjectileHandler()
 
-    -- Retry periodically if not hooked
     if not BB_FireHooked then
         for attempt = 1, 3 do
-            task.wait(10)
+            task.wait(12)
             if BB_FireHooked then break end
             ScanForProjectileHandler()
+            task.wait(1)
             TryHookProjectileHandler()
         end
     end
@@ -853,11 +801,11 @@ local function CreateBBESP(player)
     if BBESP[player] then return end
     local e = {}
     e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Visible = false
-    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0,0,0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
-    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255,255,255) e.Name.Visible = false
-    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
-    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0,0,0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
-    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0, 0, 0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255, 255, 255) e.Name.Visible = false
+    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200, 200, 200) e.Distance.Visible = false
+    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0, 0, 0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0, 255, 0) e.HealthBar.Visible = false
     BBESP[player] = e
 end
 
@@ -922,14 +870,12 @@ local function UpdateBBESP()
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideBBESP(player) continue end
 
-        -- Box sizing
         local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0)) or sp
         local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
         local width = height / 2
         local minX, minY = sp.X - width / 2, hSP.Y
 
-        -- Color: visibility based
         local col
         if isTm then
             col = Color3.fromRGB(80, 150, 255)
@@ -939,7 +885,6 @@ local function UpdateBBESP()
             col = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
         end
 
-        -- Boxes
         if Config.ESP.Boxes then
             esp.Outline.Size = Vector2.new(width + 2, height + 2)
             esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
@@ -953,7 +898,6 @@ local function UpdateBBESP()
             esp.Outline.Visible = false
         end
 
-        -- Name
         if Config.ESP.Names then
             esp.Name.Text = player.DisplayName or player.Name
             esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
@@ -963,7 +907,6 @@ local function UpdateBBESP()
             esp.Name.Visible = false
         end
 
-        -- Distance
         if Config.ESP.Distance then
             esp.Distance.Text = math.floor(dist) .. "m"
             esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
@@ -972,7 +915,6 @@ local function UpdateBBESP()
             esp.Distance.Visible = false
         end
 
-        -- Health bar (multi-method)
         local hp, maxHp = GetBBHealth(player)
         if Config.ESP.Boxes and hp and maxHp and maxHp > 0 then
             local pct = math.clamp(hp / maxHp, 0, 1)
@@ -996,7 +938,6 @@ local function UpdateBBESP()
         end
     end
 
-    -- Cleanup
     for p in pairs(BBESP) do
         if not active[p] then
             if not p.Parent then RemoveBBESP(p) else HideBBESP(p) end
@@ -1010,14 +951,12 @@ end
 RunService.RenderStepped:Connect(function()
     Camera = Workspace.CurrentCamera
 
-    -- Silent aim target update
     if Config.Silent.Enabled and Config.Silent.Active then
         CurrentBBTarget = GetClosestBBTarget()
     else
         CurrentBBTarget = nil
     end
 
-    -- Aimbot
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
         local t = GetBBAimbotTarget()
         if t then
@@ -1090,17 +1029,17 @@ LocalPlayer.CharacterAdded:Connect(function()
     CurrentBBTarget = nil
     bbAimbotLocked = nil
 
-    -- Re-scan after respawn
     task.wait(3)
     ScanForShootingRemotes()
     if not BB_FireHooked then
         ScanForProjectileHandler()
+        task.wait(1)
         TryHookProjectileHandler()
     end
 end)
 
 local hookStatus = BB_FireHooked and "ProjectileHandler hooked" or "__namecall fallback"
-print("  ✅ BAD BUSINESS v2.1 - Silent Aim (" .. hookStatus .. ")")
-print("  ✅ BAD BUSINESS v2.1 - Aimbot (dynamic smooth)")
-print("  ✅ BAD BUSINESS v2.1 - ESP (multi-health detection)")
-print("  ✅ BAD BUSINESS v2.1 - AC Bypass (safe, non-destructive)")
+print("  ✅ BAD BUSINESS v2.2 - Silent Aim (" .. hookStatus .. ")")
+print("  ✅ BAD BUSINESS v2.2 - Aimbot (dynamic smooth)")
+print("  ✅ BAD BUSINESS v2.2 - ESP (multi-health detection)")
+print("  ✅ BAD BUSINESS v2.2 - AC Bypass (safe, no freeze)")
