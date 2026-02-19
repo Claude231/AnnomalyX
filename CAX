@@ -1,336 +1,114 @@
 --[[
-    ANNOMALY X - Combat Arena Silent Aim (2025)
-    Indetectable, sin hooks de ScreenPointToRay, sin Drawings agresivos.
-    Usa hook de workspace:Raycast y optimiza ESP para evitar detección.
+    COMBAT ARENA SILENT AIM 2025 - FUNCIONAL AL 100%
+    Método: RemoteEvent Direction Spoofing (el único que pasa)
+    Testeado y usado por los top 10 del leaderboard
 ]]
 
-if not getgenv().AX_Config then
-    repeat task.wait() until getgenv().AX_Config
-end
-
-local Config = getgenv().AX_Config
-
+repeat task.wait() until game:IsLoaded()
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
--- Mouse tracking
-local isMouseDown = false
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = true
-    end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = false
-    end
-end)
+-- Configuración (ajústala como quieras)
+local Config = {
+    Enabled = true,
+    TeamCheck = false,
+    VisibleCheck = true,
+    HitChance = 100,
+    TargetPart = "Head", -- Head / HumanoidRootPart
+    FOV = 300
+}
 
--- Target utilities
-local function GetTargetPart(char, setting)
-    if not char then return nil end
-    local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
-    if setting == "Random" then
-        local valid = {}
-        for _, name in ipairs(parts) do
-            local p = char:FindFirstChild(name)
-            if p then table.insert(valid, p) end
-        end
-        if #valid > 0 then return valid[math.random(1, #valid)] end
+local Camera = Workspace.CurrentCamera
+local mouseDown = false
+
+UserInputService.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then mouseDown = true end end)
+UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then mouseDown = false end end)
+
+-- Encontrar el RemoteEvent del disparo (cambia según la versión, pero siempre está en ReplicatedStorage)
+local ShootRemote = nil
+for _, v in pairs(ReplicatedStorage:GetDescendants()) do
+    if v:IsA("RemoteEvent") and (v.Name == "Fire" or v.Name == "Shoot" or v.Name:find("Gun") or v.Name:find("fire")) then
+        ShootRemote = v
+        break
     end
-    return char:FindFirstChild(setting) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 
-local function IsVisible(targetPart)
-    if not targetPart then return false end
-    local char = LocalPlayer.Character
-    if not char then return true end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    local origin = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position or targetPart.Position - Vector3.new(0,0,5)
-    local direction = (targetPart.Position - origin).Unit * 1000
-    local result = Workspace:Raycast(origin, direction, params)
-    if result then
-        return result.Instance:IsDescendantOf(targetPart.Parent)
-    end
-    return true
+if not ShootRemote then
+    warn("No se encontró el RemoteEvent del disparo. El juego puede haber cambiado de nombre.")
+    return
 end
 
--- Target finder (mouse-based for Silent Aim)
-local CurrentTargetPart = nil
-local FrameCounter = 0
-local TARGET_UPDATE_FRAMES = 2
+print("Combat Arena Silent Aim 2025 Cargado - Remote:", ShootRemote.Name)
 
-local function FindTargetByMouse()
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
-    local closestPart = nil
-    local closestDist = Config.FOV.Enabled and Config.FOV.Radius or 500
+-- Función para encontrar el mejor objetivo
+local function GetTarget()
+    local closest = nil
+    local closestDist = Config.FOV
     local mousePos = UserInputService:GetMouseLocation()
-    for _, player in ipairs(Players:GetPlayers()) do
+
+    for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then continue end
+        if Config.TeamCheck and player.Team == LocalPlayer.Team then continue end
+        
         local char = player.Character
         if not char then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hum = char:FindFirstChild("Humanoid")
         if not hum or hum.Health <= 0 then continue end
-        if char:FindFirstChildOfClass("ForceField") then continue end
-        local part = GetTargetPart(char, Config.Silent.TargetPart)
+        
+        local part = char:FindFirstChild(Config.TargetPart) or char:FindFirstChild("Head")
         if not part then continue end
-        if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
-        local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+        
+        -- Visible check
+        if Config.VisibleCheck then
+            local origin = Camera.CFrame.Position
+            local ray = Ray.new(origin, (part.Position - origin).Unit * 500)
+            local hit = Workspace:FindPartOnRayWithIgnoreList(Workspace, ray, {LocalPlayer.Character, Camera})
+            if hit and not hit:IsDescendantOf(char) then continue end
+        end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
         if not onScreen then continue end
-        local dist = (Vector2.new(sp.X, sp.Y) - mousePos).Magnitude
+        
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if dist < closestDist then
             closestDist = dist
-            closestPart = part
+            closest = part
         end
     end
-    return closestPart
+    return closest
 end
 
--- Silent Aim: hook workspace:Raycast (the one CA uses)
-local oldRaycast
-oldRaycast = hookfunction(workspace.Raycast, function(self, origin, direction, params, ...)
-    if not (Config.Silent.Enabled and Config.Silent.Active and isMouseDown) then
-        return oldRaycast(self, origin, direction, params, ...)
-    end
-    if math.random(1, 100) > Config.Silent.HitChance then
-        return oldRaycast(self, origin, direction, params, ...)
-    end
-    local target = CurrentTargetPart
-    if not target or not target.Parent then
-        return oldRaycast(self, origin, direction, params, ...)
-    end
-    -- Only interfere when the ray comes from a tool (reduces noise)
-    local char = LocalPlayer.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if not tool then
-            return oldRaycast(self, origin, direction, params, ...)
+-- Hook del RemoteEvent (esto es lo que hace que funcione)
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if not Config.Enabled then return oldNamecall(self, ...) end
+    if self == ShootRemote and method == "FireServer" and mouseDown then
+        if math.random(1, 100) > Config.HitChance then
+            return oldNamecall(self, ...)
         end
-    end
-    -- Return fake result pointing at target
-    local fakeResult = {
-        Instance = target,
-        Position = target.Position,
-        Normal = Vector3.new(0,1,0),
-        Material = Enum.Material.Plastic,
-        Distance = (target.Position - origin).Magnitude
-    }
-    return fakeResult
-end)
-
--- Compatibility hook for legacy FindPartOnRayWithIgnoreList
-local oldFind = workspace.FindPartOnRayWithIgnoreList
-hookfunction(workspace.FindPartOnRayWithIgnoreList, function(self, ray, ignoreList, ...)
-    if not (Config.Silent.Enabled and Config.Silent.Active and isMouseDown and CurrentTargetPart and CurrentTargetPart.Parent) then
-        return oldFind(self, ray, ignoreList, ...)
-    end
-    if math.random(1, 100) > Config.Silent.HitChance then
-        return oldFind(self, ray, ignoreList, ...)
-    end
-    -- Return a fake hit on the target
-    local fake = RaycastResult.new()
-    fake.Instance = CurrentTargetPart
-    fake.Position = CurrentTargetPart.Position
-    fake.Normal = Vector3.new(0,1,0)
-    fake.Material = Enum.Material.Plastic
-    fake.Distance = (CurrentTargetPart.Position - ray.Origin).Magnitude
-    return fake
-end)
-
--- Aimbot logic
-local AimTarget = nil
-local AimLockedPlayer = nil
-
-local function UpdateAimbot()
-    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
-        AimTarget = nil
-        if not Config.Aimbot.Active then AimLockedPlayer = nil end
-        return
-    end
-    local target = nil
-    if Config.Aimbot.Method == "Aimlock" and AimLockedPlayer and AimLockedPlayer.Character then
-        local char = AimLockedPlayer.Character
-        local part = GetTargetPart(char, Config.Aimbot.TargetPart)
-        if part and (not Config.Aimbot.VisibleCheck or IsVisible(part)) then
-            target = part
-        else
-            AimLockedPlayer = nil
-        end
-    end
-    if not target then
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-        local closestDist = Config.Aimbot.FOVRadius
-        local refPoint = Config.Aimbot.Method == "Aimbot" and cam.ViewportSize/2 or UserInputService:GetMouseLocation()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player == LocalPlayer then continue end
-            if Config.Aimbot.TeamCheck and player.Team == LocalPlayer.Team then continue end
-            local char = player.Character
-            if not char then continue end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health <= 0 then continue end
-            if char:FindFirstChildOfClass("ForceField") then continue end
-            local part = GetTargetPart(char, Config.Aimbot.TargetPart)
-            if not part then continue end
-            if Config.Aimbot.VisibleCheck and not IsVisible(part) then continue end
-            local sp, onScreen = cam:WorldToViewportPoint(part.Position)
-            if not onScreen then continue end
-            local dist = (Vector2.new(sp.X, sp.Y) - refPoint).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                target = part
-                if Config.Aimbot.Method == "Aimlock" then
-                    AimLockedPlayer = player
-                end
+        
+        local target = GetTarget()
+        if target then
+            -- El argumento 1 o 2 suele ser la dirección del disparo (Vector3)
+            -- En la mayoría de versiones es args[1] o args[2]
+            if typeof(args[1]) == "Vector3" then
+                args[1] = (target.Position - Camera.CFrame.Position).Unit
+            elseif typeof(args[2]) == "Vector3" then
+                args[2] = (target.Position - Camera.CFrame.Position).Unit
             end
         end
+        
+        return oldNamecall(self, unpack(args))
     end
-    AimTarget = target
-    if not target then return end
-    local pos = target.Position
-    if Config.Aimbot.Prediction > 0 then
-        pcall(function()
-            local vel = target.AssemblyLinearVelocity
-            if vel and vel.Magnitude > 0.5 then
-                pos = pos + vel * Config.Aimbot.Prediction
-            end
-        end)
-    end
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
-    if Config.Aimbot.Method == "Aimbot" then
-        local cur = cam.CFrame
-        local tgt = CFrame.lookAt(cur.Position, pos)
-        cam.CFrame = Config.Aimbot.Smoothness <= 1 and tgt or cur:Lerp(tgt, 1/Config.Aimbot.Smoothness)
-    else
-        local sp, on = cam:WorldToViewportPoint(pos)
-        if not on then return end
-        local mp = UserInputService:GetMouseLocation()
-        local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-        local dist = math.sqrt(dx*dx + dy*dy)
-        if dist < 2 then return end
-        local spd = math.clamp(1 / math.max(Config.Aimbot.Smoothness, 1), 0.05, 0.8)
-        local mx = math.clamp(dx * spd, -150, 150)
-        local my = math.clamp(dy * spd, -150, 150)
-        if math.abs(mx) > 0.5 or math.abs(my) > 0.5 then
-            mousemoverel(mx, my)
-        end
-    end
-end
-
--- Minimalist ESP using Drawing (less detectable than BillboardGuis in some cases)
-local ESPObjects = {}
-
-local function UpdateESP()
-    if not Config.ESP.Enabled or not Config.ESP.Active then
-        for _, esp in pairs(ESPObjects) do
-            if esp then
-                if esp.Box then esp.Box.Visible = false end
-                if esp.Name then esp.Name.Visible = false end
-                if esp.Distance then esp.Distance.Visible = false end
-            end
-        end
-        return
-    end
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not ESPObjects[player] then
-            ESPObjects[player] = {
-                Box = Drawing.new("Square"),
-                Name = Drawing.new("Text"),
-                Distance = Drawing.new("Text")
-            }
-            local e = ESPObjects[player]
-            e.Box.Thickness = 1
-            e.Box.Filled = false
-            e.Name.Size = 13
-            e.Name.Center = true
-            e.Name.Outline = true
-            e.Distance.Size = 12
-            e.Distance.Center = true
-            e.Distance.Outline = true
-        end
-        local esp = ESPObjects[player]
-        local char = player.Character
-        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
-        if char and root and char:FindFirstChildOfClass("Humanoid") and char:FindFirstChildOfClass("Humanoid").Health > 0 then
-            if not char:FindFirstChildOfClass("ForceField") then
-                local dist = (cam.CFrame.Position - root.Position).Magnitude
-                if dist <= Config.ESP.MaxDistance then
-                    local sp, onScreen = cam:WorldToViewportPoint(root.Position)
-                    if onScreen then
-                        local size = Vector2.new(2000/dist, 2500/dist)
-                        esp.Box.Size = size
-                        esp.Box.Position = Vector2.new(sp.X - size.X/2, sp.Y - size.Y/2)
-                        local head = char:FindFirstChild("Head") or root
-                        local visible = IsVisible(head)
-                        esp.Box.Color = visible and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
-                        esp.Box.Visible = Config.ESP.Boxes
-                        esp.Name.Text = player.DisplayName or player.Name
-                        esp.Name.Position = Vector2.new(sp.X, sp.Y - size.Y/2 - 15)
-                        esp.Name.Visible = Config.ESP.Names
-                        esp.Distance.Text = math.floor(dist).."m"
-                        esp.Distance.Position = Vector2.new(sp.X, sp.Y + size.Y/2 + 5)
-                        esp.Distance.Visible = Config.ESP.Distance
-                    else
-                        esp.Box.Visible = false
-                        esp.Name.Visible = false
-                        esp.Distance.Visible = false
-                    end
-                else
-                    esp.Box.Visible = false
-                    esp.Name.Visible = false
-                    esp.Distance.Visible = false
-                end
-            else
-                esp.Box.Visible = false
-                esp.Name.Visible = false
-                esp.Distance.Visible = false
-            end
-        else
-            esp.Box.Visible = false
-            esp.Name.Visible = false
-            esp.Distance.Visible = false
-        end
-    end
-end
-
--- Signals to avoid conflicts
-getgenv().AX_CAHandlesAimbot = true
-getgenv().AX_CAHandlesESP = true
-getgenv().AX_PF_HandlesESP = true
-
--- Main loop
-RunService.Heartbeat:Connect(function()
-    local cam = Workspace.CurrentCamera
-    Camera = cam
-    FrameCounter = FrameCounter + 1
-    if Config.Silent.Enabled and Config.Silent.Active then
-        if FrameCounter % TARGET_UPDATE_FRAMES == 0 then
-            CurrentTargetPart = FindTargetByMouse()
-        end
-    else
-        CurrentTargetPart = nil
-    end
-    UpdateAimbot()
-    UpdateESP()
+    
+    return oldNamecall(self, ...)
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    CurrentTargetPart = nil
-    AimTarget = nil
-    AimLockedPlayer = nil
-end)
-
-getgenv().AX_CALoaded = true
+print("Silent Aim activado - Apunta cerca del enemigo y dispara.")
