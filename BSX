@@ -1,6 +1,12 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v17.3
-    TeamCheck: Detects CT vs T by analyzing model differences
+    ANNOMALY X - Blox Strike Module (BSX) v17.4
+    
+    CONFIRMED BY DEBUG:
+    - Team = nil for everyone (no teams exist)
+    - Camera children are WEAPONS not players
+    - Players use standard player.Character
+    - TeamCheck is impossible (no team system)
+    
     Creator: ElSacaLeche
 ]]
 
@@ -13,649 +19,316 @@ local Config = getgenv().AX_Config
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Teams = game:GetService("Teams")
 local Workspace = workspace
 local LocalPlayer = Players.LocalPlayer
 
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 -- ============================================
+-- FORCE DISABLE TEAM CHECK
+-- BSX has NO teams (Team = nil, 0 teams exist)
+-- ============================================
+Config.Aimbot.TeamCheck = false
+Config.ESP.TeamCheck = false
+
+-- ============================================
 -- VARIABLES
 -- ============================================
-local LockedModel = nil
+local LockedPlayer = nil
 local RandomPart = "Head"
 local LastRandomSwitch = 0
 local BSXESPObjects = {}
 local LastESPUpdate = 0
-local DebugDone = false
 
 -- ============================================
--- DEEP DEBUG - Find how BSX identifies teams
--- Check F9 console after 6 seconds in game
+-- GET VALID ENEMIES
+-- Standard player.Character - confirmed by debug
+-- Camera children are weapons, NOT players
 -- ============================================
-task.spawn(function()
-    task.wait(6)
+local function GetEnemies()
+    local enemies = {}
     
-    local Camera = Workspace.CurrentCamera
-    if not Camera then return end
-    
-    warn("========== [AX BSX] TEAM DEBUG START ==========")
-    
-    -- Debug local player
-    warn("[AX BSX] --- LOCAL PLAYER ---")
-    pcall(function() warn("  Name: " .. LocalPlayer.Name) end)
-    pcall(function() warn("  Team: " .. tostring(LocalPlayer.Team)) end)
-    pcall(function() warn("  Team.Name: " .. tostring(LocalPlayer.Team.Name)) end)
-    pcall(function() warn("  TeamColor: " .. tostring(LocalPlayer.TeamColor)) end)
-    pcall(function() warn("  Neutral: " .. tostring(LocalPlayer.Neutral)) end)
-    
-    -- Debug local character
-    local myChar = LocalPlayer.Character
-    if myChar then
-        warn("[AX BSX] --- LOCAL CHARACTER ---")
-        for _, child in ipairs(myChar:GetChildren()) do
-            if child:IsA("ValueBase") then
-                warn("  ValueBase: " .. child.Name .. " = " .. tostring(child.Value) .. " [" .. child.ClassName .. "]")
-            end
-        end
-        -- Attributes
-        pcall(function()
-            for key, val in pairs(myChar:GetAttributes()) do
-                warn("  Attribute: " .. key .. " = " .. tostring(val))
-            end
-        end)
-        -- BodyColors
-        pcall(function()
-            local bc = myChar:FindFirstChildOfClass("BodyColors")
-            if bc then
-                warn("  BodyColors.TorsoColor3: " .. tostring(bc.TorsoColor3))
-                warn("  BodyColors.LeftArmColor3: " .. tostring(bc.LeftArmColor3))
-            end
-        end)
-        -- Shirt
-        pcall(function()
-            local sh = myChar:FindFirstChildOfClass("Shirt")
-            if sh then warn("  Shirt: " .. tostring(sh.ShirtTemplate)) end
-        end)
-        -- Pants
-        pcall(function()
-            local pa = myChar:FindFirstChildOfClass("Pants")
-            if pa then warn("  Pants: " .. tostring(pa.PantsTemplate)) end
-        end)
-    end
-    
-    -- Debug all Teams service
-    warn("[AX BSX] --- TEAMS SERVICE ---")
-    pcall(function()
-        local allTeams = Teams:GetTeams()
-        warn("  Total teams: " .. #allTeams)
-        for _, team in ipairs(allTeams) do
-            local playersInTeam = team:GetPlayers()
-            local names = {}
-            for _, p in ipairs(playersInTeam) do table.insert(names, p.Name) end
-            warn("  Team: " .. team.Name .. " | Color: " .. tostring(team.TeamColor) .. " | Players: " .. table.concat(names, ", "))
-        end
-    end)
-    
-    -- Debug Camera children (enemy models)
-    warn("[AX BSX] --- CAMERA MODELS ---")
-    local modelCount = 0
-    for _, model in ipairs(Camera:GetChildren()) do
-        if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
-            modelCount = modelCount + 1
-            if modelCount <= 3 then
-                warn("  Model: " .. model.Name)
-                
-                -- All children
-                for _, child in ipairs(model:GetChildren()) do
-                    if child:IsA("ValueBase") then
-                        warn("    ValueBase: " .. child.Name .. " = " .. tostring(child.Value) .. " [" .. child.ClassName .. "]")
-                    elseif child:IsA("BasePart") then
-                        -- skip parts
-                    else
-                        warn("    Child: " .. child.Name .. " [" .. child.ClassName .. "]")
-                    end
-                end
-                
-                -- Attributes
-                pcall(function()
-                    for key, val in pairs(model:GetAttributes()) do
-                        warn("    Attribute: " .. key .. " = " .. tostring(val))
-                    end
-                end)
-                
-                -- BodyColors
-                pcall(function()
-                    local bc = model:FindFirstChildOfClass("BodyColors")
-                    if bc then
-                        warn("    BodyColors.TorsoColor3: " .. tostring(bc.TorsoColor3))
-                        warn("    BodyColors.LeftArmColor3: " .. tostring(bc.LeftArmColor3))
-                    end
-                end)
-                
-                -- Shirt
-                pcall(function()
-                    local sh = model:FindFirstChildOfClass("Shirt")
-                    if sh then warn("    Shirt: " .. tostring(sh.ShirtTemplate)) end
-                end)
-                
-                -- Pants
-                pcall(function()
-                    local pa = model:FindFirstChildOfClass("Pants")
-                    if pa then warn("    Pants: " .. tostring(pa.PantsTemplate)) end
-                end)
-                
-                -- Player object info
-                local targetPlayer = Players:FindFirstChild(model.Name)
-                if targetPlayer then
-                    pcall(function() warn("    Player.Team: " .. tostring(targetPlayer.Team)) end)
-                    pcall(function() warn("    Player.Team.Name: " .. tostring(targetPlayer.Team.Name)) end)
-                    pcall(function() warn("    Player.TeamColor: " .. tostring(targetPlayer.TeamColor)) end)
-                end
-            end
-        end
-    end
-    warn("  Total camera models: " .. modelCount)
-    
-    -- Debug other players
-    warn("[AX BSX] --- OTHER PLAYERS ---")
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            pcall(function() 
-                warn("  " .. p.Name .. " | Team: " .. tostring(p.Team) .. " | TeamColor: " .. tostring(p.TeamColor))
-            end)
-        end
-    end
-    
-    -- Check workspace for any team-related folders
-    warn("[AX BSX] --- WORKSPACE FOLDERS ---")
-    for _, child in ipairs(Workspace:GetChildren()) do
-        if child:IsA("Folder") or child:IsA("Model") then
-            if child.Name:lower():find("team") or child.Name:lower():find("ct") or child.Name:lower():find("terrorist") or child.Name == "Players" or child.Name == "Characters" then
-                warn("  Found: " .. child.Name .. " [" .. child.ClassName .. "] with " .. #child:GetChildren() .. " children")
-            end
-        end
-    end
-    
-    -- Check ReplicatedStorage for team info
-    warn("[AX BSX] --- REPLICATED STORAGE ---")
-    pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        for _, child in ipairs(rs:GetChildren()) do
-            if child.Name:lower():find("team") or child.Name:lower():find("round") or child.Name:lower():find("match") then
-                warn("  Found: " .. child.Name .. " [" .. child.ClassName .. "]")
-                if child:IsA("ValueBase") then
-                    warn("    Value: " .. tostring(child.Value))
-                end
-            end
-        end
-    end)
-    
-    warn("========== [AX BSX] TEAM DEBUG END ==========")
-    warn("[AX BSX] COPY EVERYTHING ABOVE AND SEND IT")
-    DebugDone = true
-end)
-
--- ============================================
--- TEAM CHECK FUNCTION
--- Uses multiple methods to detect same team
--- Returns true ONLY if confirmed same team
--- Returns false if different team OR unknown
--- ============================================
-local function IsAlly(targetModel, targetPlayer)
-    if not targetPlayer then
-        targetPlayer = Players:FindFirstChild(targetModel.Name)
-    end
-    
-    -- Method 1: Player.Team comparison (only if both have teams and they differ)
-    if targetPlayer then
-        local s1, r1 = pcall(function()
-            if targetPlayer.Team and LocalPlayer.Team then
-                return targetPlayer.Team == LocalPlayer.Team
-            end
-            return nil -- can't determine
-        end)
-        -- Only trust this if we got a definitive answer
-        if s1 and r1 ~= nil then return r1 end
-    end
-    
-    -- Method 2: TeamColor comparison
-    if targetPlayer then
-        local s2, r2 = pcall(function()
-            if targetPlayer.TeamColor and LocalPlayer.TeamColor then
-                return tostring(targetPlayer.TeamColor) == tostring(LocalPlayer.TeamColor)
-            end
-            return nil
-        end)
-        if s2 and r2 ~= nil then return r2 end
-    end
-    
-    -- Method 3: Teams service - check which team each player is on
-    if targetPlayer then
-        local s3, r3 = pcall(function()
-            local allTeams = Teams:GetTeams()
-            if #allTeams < 2 then return nil end -- need at least 2 teams
-            
-            local myTeam = nil
-            local theirTeam = nil
-            
-            for _, team in ipairs(allTeams) do
-                for _, p in ipairs(team:GetPlayers()) do
-                    if p == LocalPlayer then myTeam = team end
-                    if p == targetPlayer then theirTeam = team end
-                end
-            end
-            
-            if myTeam and theirTeam then
-                return myTeam == theirTeam
-            end
-            return nil
-        end)
-        if s3 and r3 ~= nil then return r3 end
-    end
-    
-    -- Method 4: Shirt/Pants comparison (same uniform = same team in BSX)
-    local s4, r4 = pcall(function()
-        local myChar = LocalPlayer.Character
-        if not myChar then return nil end
-        
-        local sh1 = targetModel:FindFirstChildOfClass("Shirt")
-        local sh2 = myChar:FindFirstChildOfClass("Shirt")
-        if sh1 and sh2 then
-            return sh1.ShirtTemplate == sh2.ShirtTemplate
-        end
-        return nil
-    end)
-    if s4 and r4 ~= nil then return r4 end
-    
-    -- Method 5: BodyColors comparison
-    local s5, r5 = pcall(function()
-        local myChar = LocalPlayer.Character
-        if not myChar then return nil end
-        
-        local bc1 = targetModel:FindFirstChildOfClass("BodyColors")
-        local bc2 = myChar:FindFirstChildOfClass("BodyColors")
-        if bc1 and bc2 then
-            return bc1.TorsoColor3 == bc2.TorsoColor3
-        end
-        return nil
-    end)
-    if s5 and r5 ~= nil then return r5 end
-    
-    -- Method 6: ValueBase children comparison
-    local s6, r6 = pcall(function()
-        local myChar = LocalPlayer.Character
-        if not myChar then return nil end
-        
-        for _, name in ipairs({"TeamColor", "Team", "Side", "TeamValue"}) do
-            local v1 = targetModel:FindFirstChild(name)
-            local v2 = myChar:FindFirstChild(name)
-            if v1 and v2 and v1:IsA("ValueBase") and v2:IsA("ValueBase") then
-                return v1.Value == v2.Value
-            end
-        end
-        return nil
-    end)
-    if s6 and r6 ~= nil then return r6 end
-    
-    -- Method 7: Attributes
-    local s7, r7 = pcall(function()
-        local myChar = LocalPlayer.Character
-        if not myChar then return nil end
-        
-        for _, attrName in ipairs({"Team", "team", "Side", "side", "TeamId", "teamId"}) do
-            local a1 = targetModel:GetAttribute(attrName)
-            local a2 = myChar:GetAttribute(attrName)
-            if a1 ~= nil and a2 ~= nil then
-                return a1 == a2
-            end
-            -- Also check player attributes
-            if targetPlayer then
-                a1 = targetPlayer:GetAttribute(attrName)
-            end
-            a2 = LocalPlayer:GetAttribute(attrName)
-            if a1 ~= nil and a2 ~= nil then
-                return a1 == a2
-            end
-        end
-        return nil
-    end)
-    if s7 and r7 ~= nil then return r7 end
-    
-    -- Cannot determine - assume ENEMY (safer for gameplay)
-    return false
-end
-
--- ============================================
--- GET ALL TARGETS
--- ============================================
-local function GetAllTargets()
-    local targets = {}
-    local Camera = Workspace.CurrentCamera
-    if not Camera then return targets end
-
-    for _, model in ipairs(Camera:GetChildren()) do
-        if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
-            local head = model:FindFirstChild("Head") or model:FindFirstChild("HeadHB")
-            local humanoid = model:FindFirstChildOfClass("Humanoid")
-            local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
-
-            if head and head:IsA("BasePart") and humanoid and humanoid.Health > 0 then
-                local player = Players:FindFirstChild(model.Name)
-                table.insert(targets, {
-                    Model = model,
-                    Player = player,
-                    Head = head,
-                    Root = hrp or head,
-                    Humanoid = humanoid
-                })
-            end
-        end
-    end
-
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            local head = char:FindFirstChild("Head")
-            local humanoid = char:FindFirstChildOfClass("Humanoid")
-            local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-
-            if head and humanoid and humanoid.Health > 0 then
-                local alreadyAdded = false
-                for _, t in ipairs(targets) do
-                    if t.Model == char or (t.Player and t.Player == player) then
-                        alreadyAdded = true
-                        break
-                    end
-                end
-                if not alreadyAdded then
-                    table.insert(targets, {
-                        Model = char,
-                        Player = player,
-                        Head = head,
-                        Root = hrp or head,
-                        Humanoid = humanoid
-                    })
-                end
-            end
-        end
+        if player == LocalPlayer then continue end
+        
+        local char = player.Character
+        if not char then continue end
+        
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        
+        local head = char:FindFirstChild("Head")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+            or char:FindFirstChild("Torso")
+            or char:FindFirstChild("UpperTorso")
+        
+        if not head and not hrp then continue end
+        
+        table.insert(enemies, {
+            Player = player,
+            Character = char,
+            Head = head,
+            Root = hrp or head,
+            Humanoid = humanoid
+        })
     end
-
-    local playersFolder = Workspace:FindFirstChild("Players") or Workspace:FindFirstChild("Characters")
-    if playersFolder then
-        for _, model in ipairs(playersFolder:GetChildren()) do
-            if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
-                local head = model:FindFirstChild("Head")
-                local humanoid = model:FindFirstChildOfClass("Humanoid")
-                local hrp = model:FindFirstChild("HumanoidRootPart")
-                if head and humanoid and humanoid.Health > 0 then
-                    local alreadyAdded = false
-                    for _, t in ipairs(targets) do
-                        if t.Model == model then alreadyAdded = true break end
-                    end
-                    if not alreadyAdded then
-                        local player = Players:FindFirstChild(model.Name)
-                        table.insert(targets, {
-                            Model = model,
-                            Player = player,
-                            Head = head,
-                            Root = hrp or head,
-                            Humanoid = humanoid
-                        })
-                    end
-                end
-            end
-        end
-    end
-
-    return targets
+    
+    return enemies
 end
 
 -- ============================================
 -- GET AIM PART
 -- ============================================
-local function GetAimPart(model)
-    if not model then return nil end
+local function GetAimPart(char)
+    if not char then return nil end
     local s = Config.Aimbot.TargetPart
-
+    
     if s == "Random" then
         local t = tick()
         if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
             local o = {}
-            for _, n in ipairs({"Head", "HeadHB", "HumanoidRootPart", "Torso", "UpperTorso"}) do
-                local p = model:FindFirstChild(n)
+            for _, n in ipairs({"Head", "HumanoidRootPart", "Torso", "UpperTorso"}) do
+                local p = char:FindFirstChild(n)
                 if p and p:IsA("BasePart") then table.insert(o, n) end
             end
             if #o > 0 then RandomPart = o[math.random(#o)] end
             LastRandomSwitch = t
         end
-        local p = model:FindFirstChild(RandomPart)
+        local p = char:FindFirstChild(RandomPart)
         if p and p:IsA("BasePart") then return p end
     end
-
+    
     if s == "Head" then
-        return model:FindFirstChild("Head") or model:FindFirstChild("HeadHB")
+        return char:FindFirstChild("Head")
     end
-
-    local p = model:FindFirstChild(s)
+    
+    local p = char:FindFirstChild(s)
     if p and p:IsA("BasePart") then return p end
+    
+    return char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+end
 
-    return model:FindFirstChild("Head")
-        or model:FindFirstChild("HeadHB")
-        or model:FindFirstChild("HumanoidRootPart")
+-- ============================================
+-- VISIBILITY CHECK
+-- ============================================
+local function CanSee(part, targetChar)
+    if not part then return false end
+    local myChar = LocalPlayer.Character
+    if not myChar then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {myChar, cam}
+    
+    local origin = cam.CFrame.Position
+    local dir = part.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
+    
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.5), params)
+    if not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(targetChar) then return true end
+    
+    return false
 end
 
 -- ============================================
 -- FIND AIMBOT TARGET
+-- No team check - BSX has no teams
 -- ============================================
 local function FindAimTarget()
-    local Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
-
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
+    
     local mousePos = UserInputService:GetMouseLocation()
-    local vp = Camera.ViewportSize
+    local vp = cam.ViewportSize
     local center = Vector2.new(vp.X / 2, vp.Y / 2)
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
     local fov = Config.Aimbot.FOVRadius or 150
-
-    if Config.Aimbot.Method == "Aimlock" and LockedModel then
-        local head = LockedModel:FindFirstChild("Head") or LockedModel:FindFirstChild("HeadHB")
-        local hum = LockedModel:FindFirstChildOfClass("Humanoid")
-        if head and hum and hum.Health > 0 then
-            local aimPart = GetAimPart(LockedModel)
-            if aimPart then
-                local sp, on = Camera:WorldToViewportPoint(aimPart.Position)
-                if on then return aimPart end
-            end
-        end
-        LockedModel = nil
-    end
-
-    local allTargets = GetAllTargets()
-    local bestPart, bestDist, bestModel = nil, fov, nil
-
-    for _, data in ipairs(allTargets) do
-        -- Team check
-        if Config.Aimbot.TeamCheck and IsAlly(data.Model, data.Player) then
-            continue
-        end
-
-        local aimPart = GetAimPart(data.Model)
-        if not aimPart then continue end
-
-        if Config.Aimbot.VisibleCheck then
-            local myChar = LocalPlayer.Character
-            if myChar then
-                local params = RaycastParams.new()
-                params.FilterType = Enum.RaycastFilterType.Exclude
-                params.FilterDescendantsInstances = {myChar, Camera}
-                local origin = Camera.CFrame.Position
-                local dir = aimPart.Position - origin
-                local result = Workspace:Raycast(origin, dir, params)
-                if result and not result.Instance:IsDescendantOf(data.Model) then
-                    continue
+    
+    -- Aimlock: keep locked
+    if Config.Aimbot.Method == "Aimlock" and LockedPlayer then
+        local char = LockedPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local aimPart = GetAimPart(char)
+                if aimPart then
+                    if not Config.Aimbot.VisibleCheck or CanSee(aimPart, char) then
+                        local sp, on = cam:WorldToViewportPoint(aimPart.Position)
+                        if on then return aimPart end
+                    end
                 end
             end
         end
-
-        local sp, on = Camera:WorldToViewportPoint(aimPart.Position)
+        LockedPlayer = nil
+    end
+    
+    local enemies = GetEnemies()
+    local bestPart, bestDist, bestPlayer = nil, fov, nil
+    
+    for _, data in ipairs(enemies) do
+        local aimPart = GetAimPart(data.Character)
+        if not aimPart then continue end
+        
+        if Config.Aimbot.VisibleCheck and not CanSee(aimPart, data.Character) then
+            continue
+        end
+        
+        local sp, on = cam:WorldToViewportPoint(aimPart.Position)
         if not on then continue end
-
+        
         local d = (ref - Vector2.new(sp.X, sp.Y)).Magnitude
         if d < bestDist then
             bestPart = aimPart
             bestDist = d
-            bestModel = data.Model
+            bestPlayer = data.Player
         end
     end
-
-    if Config.Aimbot.Method == "Aimlock" and bestModel then
-        LockedModel = bestModel
+    
+    if Config.Aimbot.Method == "Aimlock" and bestPlayer then
+        LockedPlayer = bestPlayer
     end
-
+    
     return bestPart
 end
 
 -- ============================================
--- ESP
+-- ESP CREATE / REMOVE / HIDE
+-- Keyed by Player object (stable reference)
 -- ============================================
-local function CreateESP(model)
-    if BSXESPObjects[model] then return end
+local function CreateESP(player)
+    if BSXESPObjects[player] then return end
+    
     local e = {}
     e.Box = Drawing.new("Square")
     e.Box.Thickness = 1
     e.Box.Filled = false
-    e.Box.Color = Color3.fromRGB(255, 255, 255)
+    e.Box.Color = Color3.fromRGB(255, 50, 50)
     e.Box.Visible = false
-
+    
     e.Outline = Drawing.new("Square")
     e.Outline.Thickness = 3
     e.Outline.Filled = false
     e.Outline.Color = Color3.fromRGB(0, 0, 0)
     e.Outline.Transparency = 0.5
     e.Outline.Visible = false
-
+    
     e.Name = Drawing.new("Text")
     e.Name.Size = 13
     e.Name.Center = true
     e.Name.Outline = true
     e.Name.Color = Color3.fromRGB(255, 255, 255)
     e.Name.Visible = false
-
+    
     e.Dist = Drawing.new("Text")
     e.Dist.Size = 13
     e.Dist.Center = true
     e.Dist.Outline = true
-    e.Dist.Color = Color3.fromRGB(255, 255, 255)
+    e.Dist.Color = Color3.fromRGB(200, 200, 200)
     e.Dist.Visible = false
-
-    BSXESPObjects[model] = e
+    
+    BSXESPObjects[player] = e
 end
 
-local function RemoveESP(model)
-    local e = BSXESPObjects[model]
+local function RemoveESP(player)
+    local e = BSXESPObjects[player]
     if not e then return end
     for _, d in pairs(e) do pcall(function() d:Remove() end) end
-    BSXESPObjects[model] = nil
+    BSXESPObjects[player] = nil
 end
 
-local function HideESP(model)
-    local e = BSXESPObjects[model]
+local function HideESP(player)
+    local e = BSXESPObjects[player]
     if not e then return end
     for _, d in pairs(e) do pcall(function() d.Visible = false end) end
 end
 
+-- ============================================
+-- ESP UPDATE
+-- ============================================
 local function UpdateBSXESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
-        for m in pairs(BSXESPObjects) do HideESP(m) end
+        for p in pairs(BSXESPObjects) do HideESP(p) end
         return
     end
-
+    
     local now = tick()
     if now - LastESPUpdate < 0.08 then return end
     LastESPUpdate = now
-
-    local Camera = Workspace.CurrentCamera
-    if not Camera then return end
-
-    local allTargets = GetAllTargets()
-    local activeModels = {}
-
-    for _, data in ipairs(allTargets) do
-        local model = data.Model
-        activeModels[model] = true
-
-        if not BSXESPObjects[model] then
-            CreateESP(model)
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    
+    local enemies = GetEnemies()
+    local activePlayers = {}
+    
+    for _, data in ipairs(enemies) do
+        local player = data.Player
+        activePlayers[player] = true
+        
+        if not BSXESPObjects[player] then
+            CreateESP(player)
         end
-
-        local esp = BSXESPObjects[model]
+        
+        local esp = BSXESPObjects[player]
         if not esp then continue end
-
-        -- Team check for ESP
-        if Config.ESP.TeamCheck and IsAlly(data.Model, data.Player) then
-            HideESP(model)
-            continue
-        end
-
+        
         local head = data.Head
         local root = data.Root
-
-        if root and head then
+        local humanoid = data.Humanoid
+        
+        if root then
             local rootPos = root.Position
-            local sp, on = Camera:WorldToViewportPoint(rootPos)
-
+            local sp, on = cam:WorldToViewportPoint(rootPos)
+            
             if on and sp.Z > 0 then
-                local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                local footPos = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
-
-                local height = math.abs(headPos.Y - footPos.Y)
-                local width = height / 2
-
-                local minX = sp.X - width / 2
-                local minY = headPos.Y
-                local boxWidth = width
-                local boxHeight = math.abs(footPos.Y - headPos.Y)
-
-                -- Color: use team color if available, else red for enemy, green for ally
-                local color = Color3.fromRGB(255, 50, 50)
-                local isAlly = IsAlly(data.Model, data.Player)
-                if isAlly then
-                    color = Color3.fromRGB(100, 255, 100)
+                -- Box sizing using head and feet positions
+                local headScreenPos = sp
+                local footScreenPos = sp
+                
+                if head then
+                    headScreenPos = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
                 end
-                pcall(function()
-                    if data.Player and data.Player.Team then
-                        color = data.Player.Team.TeamColor.Color
-                    end
-                end)
-
+                footScreenPos = cam:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
+                
+                local height = math.abs(headScreenPos.Y - footScreenPos.Y)
+                if height < 10 then height = 10 end
+                local width = height / 2
+                
+                local minX = sp.X - width / 2
+                local minY = headScreenPos.Y
+                local boxWidth = width
+                local boxHeight = height
+                
+                -- Boxes
                 if Config.ESP.Boxes then
                     esp.Outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
                     esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
                     esp.Outline.Visible = true
-
+                    
                     esp.Box.Size = Vector2.new(boxWidth, boxHeight)
                     esp.Box.Position = Vector2.new(minX, minY)
-                    esp.Box.Color = color
+                    esp.Box.Color = Color3.fromRGB(255, 50, 50)
                     esp.Box.Visible = true
                 else
                     esp.Box.Visible = false
                     esp.Outline.Visible = false
                 end
-
+                
+                -- Name
                 if Config.ESP.Names then
-                    local name = model.Name
-                    pcall(function()
-                        if data.Player then name = data.Player.DisplayName or data.Player.Name end
-                    end)
-                    esp.Name.Text = name
+                    esp.Name.Text = player.DisplayName or player.Name
                     esp.Name.Position = Vector2.new(minX + boxWidth / 2, minY - 16)
-                    esp.Name.Color = color
                     esp.Name.Visible = true
                 else
                     esp.Name.Visible = false
                 end
-
+                
+                -- Distance
                 if Config.ESP.Distance then
                     local myChar = LocalPlayer.Character
                     local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head"))
@@ -671,16 +344,17 @@ local function UpdateBSXESP()
                     esp.Dist.Visible = false
                 end
             else
-                HideESP(model)
+                HideESP(player)
             end
         else
-            HideESP(model)
+            HideESP(player)
         end
     end
-
-    for model in pairs(BSXESPObjects) do
-        if not activeModels[model] then
-            RemoveESP(model)
+    
+    -- Cleanup players who left or died
+    for player in pairs(BSXESPObjects) do
+        if not activePlayers[player] then
+            HideESP(player)
         end
     end
 end
@@ -689,58 +363,76 @@ end
 -- MAIN LOOP
 -- ============================================
 RunService.RenderStepped:Connect(function()
-    local Camera = Workspace.CurrentCamera
-    if not Camera then return end
-
+    -- Force no team check every frame
+    Config.Aimbot.TeamCheck = false
+    Config.ESP.TeamCheck = false
+    
+    -- AIMBOT
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
         local target = FindAimTarget()
-
+        
         if target then
-            local pos = target.Position
-            pcall(function()
-                if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-                    local v = target.AssemblyLinearVelocity
-                    if v and v.Magnitude > 0.1 then
-                        pos = pos + v * Config.Aimbot.Prediction
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local pos = target.Position
+                pcall(function()
+                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                        local v = target.AssemblyLinearVelocity
+                        if v and v.Magnitude > 0.1 then
+                            pos = pos + v * Config.Aimbot.Prediction
+                        end
                     end
-                end
-            end)
-
-            local targetPos, on = Camera:WorldToViewportPoint(pos)
-            if on then
-                local mousePos = UserInputService:GetMouseLocation()
-                local smoothing = 1 / math.max(Config.Aimbot.Smoothness or 5, 1)
-
-                local deltaX = (targetPos.X - mousePos.X) * smoothing
-                local deltaY = (targetPos.Y - mousePos.Y) * smoothing
-
-                deltaX = math.clamp(deltaX, -150, 150)
-                deltaY = math.clamp(deltaY, -150, 150)
-
-                if math.abs(deltaX) > 0.1 or math.abs(deltaY) > 0.1 then
-                    mousemoverel(deltaX, deltaY)
+                end)
+                
+                local targetPos, on = cam:WorldToViewportPoint(pos)
+                if on then
+                    local mousePos = UserInputService:GetMouseLocation()
+                    local smoothing = 1 / math.max(Config.Aimbot.Smoothness or 5, 1)
+                    
+                    local deltaX = (targetPos.X - mousePos.X) * smoothing
+                    local deltaY = (targetPos.Y - mousePos.Y) * smoothing
+                    
+                    deltaX = math.clamp(deltaX, -150, 150)
+                    deltaY = math.clamp(deltaY, -150, 150)
+                    
+                    if math.abs(deltaX) > 0.1 or math.abs(deltaY) > 0.1 then
+                        mousemoverel(deltaX, deltaY)
+                    end
                 end
             end
         end
     else
-        if not Config.Aimbot.Active then LockedModel = nil end
+        if not Config.Aimbot.Active then LockedPlayer = nil end
     end
-
+    
+    -- ESP
     UpdateBSXESP()
+end)
+
+-- ============================================
+-- INIT ESP for existing players
+-- ============================================
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        CreateESP(p)
+    end
+end
+
+Players.PlayerAdded:Connect(function(p)
+    CreateESP(p)
 end)
 
 -- ============================================
 -- CLEANUP
 -- ============================================
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    LockedModel = nil
+Players.PlayerRemoving:Connect(function(p)
+    if LockedPlayer == p then LockedPlayer = nil end
+    RemoveESP(p)
 end)
 
-Players.PlayerRemoving:Connect(function(p)
-    if LockedModel and LockedModel.Name == p.Name then
-        LockedModel = nil
-    end
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    LockedPlayer = nil
 end)
 
 -- ============================================
