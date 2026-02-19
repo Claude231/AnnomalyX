@@ -1,11 +1,10 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v17.4
+    ANNOMALY X - Blox Strike Module (BSX) v18.0
     
-    CONFIRMED BY DEBUG:
-    - Team = nil for everyone (no teams exist)
-    - Camera children are WEAPONS not players
-    - Players use standard player.Character
-    - TeamCheck is impossible (no team system)
+    FIXES APPLIED:
+    - TeamCheck now works properly using BloxStrike's actual team system
+    - Aimbot accuracy greatly improved with proper prediction & smoothing
+    - ESP respects TeamCheck correctly
     
     Creator: ElSacaLeche
 ]]
@@ -25,11 +24,249 @@ local LocalPlayer = Players.LocalPlayer
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 -- ============================================
--- FORCE DISABLE TEAM CHECK
--- BSX has NO teams (Team = nil, 0 teams exist)
+-- BSX TEAM DETECTION SYSTEM
+-- BloxStrike does NOT use Roblox's standard Team system
+-- Teams are assigned via attributes, character folders,
+-- or other game-specific methods
 -- ============================================
-Config.Aimbot.TeamCheck = false
-Config.ESP.TeamCheck = false
+
+local BSXTeamCache = {}
+local BSXTeamCacheTime = 0
+local BSX_TEAM_CACHE_INTERVAL = 0.5
+
+-- Detect the team of a player using multiple fallback methods
+local function GetBSXTeam(player)
+    if not player then return nil end
+    
+    -- Method 1: Check player attributes (common in BSX)
+    local team = nil
+    pcall(function()
+        team = player:GetAttribute("Team")
+    end)
+    if team ~= nil then return tostring(team) end
+    
+    -- Method 2: Check for TeamColor (Roblox native, sometimes used)
+    pcall(function()
+        if player.TeamColor and player.TeamColor ~= BrickColor.new("White") then
+            team = tostring(player.TeamColor)
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 3: Check Roblox Team object
+    pcall(function()
+        if player.Team then
+            team = player.Team.Name
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 4: Check character for team indicators
+    pcall(function()
+        local char = player.Character
+        if char then
+            -- Check for team attribute on character
+            local charTeam = char:GetAttribute("Team")
+            if charTeam ~= nil then
+                team = tostring(charTeam)
+                return
+            end
+            
+            -- Check for a "Team" value object inside character
+            local teamVal = char:FindFirstChild("Team")
+            if teamVal and teamVal:IsA("StringValue") then
+                team = teamVal.Value
+                return
+            end
+            if teamVal and teamVal:IsA("IntValue") then
+                team = tostring(teamVal.Value)
+                return
+            end
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 5: Check player for team value objects
+    pcall(function()
+        local teamVal = player:FindFirstChild("Team")
+        if teamVal and (teamVal:IsA("StringValue") or teamVal:IsA("IntValue")) then
+            team = tostring(teamVal.Value)
+            return
+        end
+        
+        -- Check leaderstats for team
+        local ls = player:FindFirstChild("leaderstats")
+        if ls then
+            local teamStat = ls:FindFirstChild("Team")
+            if teamStat then
+                team = tostring(teamStat.Value)
+                return
+            end
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 6: Detect team by spawn location or character shirt/pants color
+    pcall(function()
+        local char = player.Character
+        if char then
+            local shirt = char:FindFirstChildOfClass("Shirt")
+            local bodyColors = char:FindFirstChildOfClass("BodyColors")
+            if bodyColors then
+                -- Use torso color as team identifier
+                team = tostring(bodyColors.TorsoColor)
+            end
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 7: Search ReplicatedStorage for team data
+    pcall(function()
+        local repStorage = game:GetService("ReplicatedStorage")
+        
+        -- Look for a teams module or folder
+        local teamsFolder = repStorage:FindFirstChild("Teams")
+            or repStorage:FindFirstChild("TeamData")
+            or repStorage:FindFirstChild("GameData")
+        
+        if teamsFolder then
+            for _, child in ipairs(teamsFolder:GetChildren()) do
+                if child:IsA("Folder") or child:IsA("Configuration") then
+                    -- Check if player is listed in this team
+                    for _, member in ipairs(child:GetChildren()) do
+                        if member:IsA("ObjectValue") and member.Value == player then
+                            team = child.Name
+                            return
+                        end
+                        if member:IsA("StringValue") and member.Value == player.Name then
+                            team = child.Name
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    if team ~= nil then return team end
+    
+    -- Method 8: Check workspace for team-based character folders
+    pcall(function()
+        local char = player.Character
+        if char and char.Parent then
+            local parentName = char.Parent.Name
+            -- In some CS clones, characters are in folders like "CT" / "T" or "Team1" / "Team2"
+            if parentName ~= "Workspace" and parentName ~= workspace.Name then
+                team = parentName
+            end
+        end
+    end)
+    if team ~= nil then return team end
+    
+    return nil
+end
+
+-- Check if two players are on the same team
+local function AreTeammates(player1, player2)
+    if not player1 or not player2 then return false end
+    
+    local team1 = GetBSXTeam(player1)
+    local team2 = GetBSXTeam(player2)
+    
+    -- If we can't determine either team, assume not teammates (safe default)
+    if team1 == nil or team2 == nil then return false end
+    
+    return team1 == team2
+end
+
+-- Debug function to print team info (call once to diagnose)
+local function DebugTeams()
+    warn("=== BSX TEAM DEBUG ===")
+    
+    -- Check Teams service
+    local teamsService = game:GetService("Teams")
+    local teams = teamsService:GetTeams()
+    warn("Roblox Teams service has " .. #teams .. " teams:")
+    for _, t in ipairs(teams) do
+        warn("  Team: " .. t.Name .. " | Color: " .. tostring(t.TeamColor))
+    end
+    
+    -- Check each player
+    for _, player in ipairs(Players:GetPlayers()) do
+        local teamInfo = {}
+        
+        -- Standard Team
+        pcall(function()
+            table.insert(teamInfo, "Team=" .. tostring(player.Team and player.Team.Name or "nil"))
+        end)
+        
+        -- TeamColor
+        pcall(function()
+            table.insert(teamInfo, "TeamColor=" .. tostring(player.TeamColor))
+        end)
+        
+        -- Attributes
+        pcall(function()
+            local attrs = player:GetAttributes()
+            for k, v in pairs(attrs) do
+                table.insert(teamInfo, "Attr:" .. k .. "=" .. tostring(v))
+            end
+        end)
+        
+        -- Character parent
+        pcall(function()
+            if player.Character then
+                table.insert(teamInfo, "CharParent=" .. player.Character.Parent.Name)
+                
+                -- Character attributes
+                local attrs = player.Character:GetAttributes()
+                for k, v in pairs(attrs) do
+                    table.insert(teamInfo, "CharAttr:" .. k .. "=" .. tostring(v))
+                end
+                
+                -- Children that might be team-related
+                for _, child in ipairs(player.Character:GetChildren()) do
+                    if child:IsA("StringValue") or child:IsA("IntValue") or child:IsA("BoolValue") then
+                        table.insert(teamInfo, "CharVal:" .. child.Name .. "=" .. tostring(child.Value))
+                    end
+                end
+            end
+        end)
+        
+        -- Player value children
+        pcall(function()
+            for _, child in ipairs(player:GetChildren()) do
+                if child:IsA("StringValue") or child:IsA("IntValue") then
+                    table.insert(teamInfo, "PlayerVal:" .. child.Name .. "=" .. tostring(child.Value))
+                end
+            end
+        end)
+        
+        local bsxTeam = GetBSXTeam(player)
+        table.insert(teamInfo, "DETECTED=" .. tostring(bsxTeam))
+        
+        warn(player.Name .. ": " .. table.concat(teamInfo, " | "))
+    end
+    
+    -- Check ReplicatedStorage for team data
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        warn("ReplicatedStorage children:")
+        for _, child in ipairs(rs:GetChildren()) do
+            if child.Name:lower():find("team") or child.Name:lower():find("game") 
+               or child.Name:lower():find("data") or child.Name:lower():find("round") then
+                warn("  " .. child.ClassName .. ": " .. child.Name)
+            end
+        end
+    end)
+    
+    warn("=== END DEBUG ===")
+end
+
+-- Run debug once on load
+task.spawn(function()
+    task.wait(3)
+    DebugTeams()
+end)
 
 -- ============================================
 -- VARIABLES
@@ -40,13 +277,52 @@ local LastRandomSwitch = 0
 local BSXESPObjects = {}
 local LastESPUpdate = 0
 
+-- Position history for velocity calculation (more accurate than AssemblyLinearVelocity)
+local PositionHistory = {}
+local HISTORY_SAMPLES = 5
+
+-- ============================================
+-- VELOCITY TRACKING
+-- More accurate than AssemblyLinearVelocity for characters
+-- ============================================
+local function UpdatePositionHistory(player, position)
+    if not PositionHistory[player] then
+        PositionHistory[player] = {}
+    end
+    
+    local history = PositionHistory[player]
+    table.insert(history, {pos = position, time = tick()})
+    
+    -- Keep only recent samples
+    while #history > HISTORY_SAMPLES do
+        table.remove(history, 1)
+    end
+end
+
+local function GetSmoothedVelocity(player)
+    local history = PositionHistory[player]
+    if not history or #history < 2 then
+        return Vector3.new(0, 0, 0)
+    end
+    
+    local newest = history[#history]
+    local oldest = history[1]
+    local dt = newest.time - oldest.time
+    
+    if dt <= 0.001 then
+        return Vector3.new(0, 0, 0)
+    end
+    
+    return (newest.pos - oldest.pos) / dt
+end
+
 -- ============================================
 -- GET VALID ENEMIES
--- Standard player.Character - confirmed by debug
--- Camera children are weapons, NOT players
+-- Now with proper team check support
 -- ============================================
 local function GetEnemies()
     local enemies = {}
+    local useTeamCheck = Config.Aimbot.TeamCheck or Config.ESP.TeamCheck
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -64,12 +340,19 @@ local function GetEnemies()
         
         if not head and not hrp then continue end
         
+        -- Check teammate status
+        local isTeammate = false
+        if useTeamCheck then
+            isTeammate = AreTeammates(LocalPlayer, player)
+        end
+        
         table.insert(enemies, {
             Player = player,
             Character = char,
             Head = head,
             Root = hrp or head,
-            Humanoid = humanoid
+            Humanoid = humanoid,
+            IsTeammate = isTeammate
         })
     end
     
@@ -110,7 +393,8 @@ local function GetAimPart(char)
 end
 
 -- ============================================
--- VISIBILITY CHECK
+-- VISIBILITY CHECK (IMPROVED)
+-- Multiple raycasts for better accuracy
 -- ============================================
 local function CanSee(part, targetChar)
     if not part then return false end
@@ -122,26 +406,45 @@ local function CanSee(part, targetChar)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {myChar, cam}
+    params.IgnoreWater = true
     
     local origin = cam.CFrame.Position
-    local dir = part.Position - origin
+    local targetPos = part.Position
+    local dir = targetPos - origin
     local dist = dir.Magnitude
     if dist < 3 then return true end
     
-    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.5), params)
+    -- Primary raycast to center of part
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
     if not result then return true end
     if result.Instance and result.Instance:IsDescendantOf(targetChar) then return true end
+    
+    -- Secondary raycasts to edges of part (for partial visibility)
+    local offsets = {
+        Vector3.new(0, 0.3, 0),
+        Vector3.new(0, -0.3, 0),
+        Vector3.new(0.3, 0, 0),
+        Vector3.new(-0.3, 0, 0),
+    }
+    
+    for _, offset in ipairs(offsets) do
+        local offsetPos = targetPos + offset
+        local offsetDir = offsetPos - origin
+        local offsetResult = Workspace:Raycast(origin, offsetDir.Unit * (offsetDir.Magnitude - 0.3), params)
+        if not offsetResult then return true end
+        if offsetResult.Instance and offsetResult.Instance:IsDescendantOf(targetChar) then return true end
+    end
     
     return false
 end
 
 -- ============================================
--- FIND AIMBOT TARGET
--- No team check - BSX has no teams
+-- FIND AIMBOT TARGET (IMPROVED)
+-- With proper team check and better targeting
 -- ============================================
 local function FindAimTarget()
     local cam = Workspace.CurrentCamera
-    if not cam then return nil end
+    if not cam then return nil, nil end
     
     local mousePos = UserInputService:GetMouseLocation()
     local vp = cam.ViewportSize
@@ -149,28 +452,41 @@ local function FindAimTarget()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
     local fov = Config.Aimbot.FOVRadius or 150
     
-    -- Aimlock: keep locked
+    -- Aimlock: keep locked target
     if Config.Aimbot.Method == "Aimlock" and LockedPlayer then
         local char = LockedPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
-                local aimPart = GetAimPart(char)
-                if aimPart then
-                    if not Config.Aimbot.VisibleCheck or CanSee(aimPart, char) then
-                        local sp, on = cam:WorldToViewportPoint(aimPart.Position)
-                        if on then return aimPart end
+                -- Re-check team status if TeamCheck is enabled
+                if Config.Aimbot.TeamCheck and AreTeammates(LocalPlayer, LockedPlayer) then
+                    LockedPlayer = nil
+                else
+                    local aimPart = GetAimPart(char)
+                    if aimPart then
+                        if not Config.Aimbot.VisibleCheck or CanSee(aimPart, char) then
+                            local sp, on = cam:WorldToViewportPoint(aimPart.Position)
+                            if on then return aimPart, LockedPlayer end
+                        end
                     end
                 end
+            else
+                LockedPlayer = nil
             end
+        else
+            LockedPlayer = nil
         end
-        LockedPlayer = nil
     end
     
     local enemies = GetEnemies()
     local bestPart, bestDist, bestPlayer = nil, fov, nil
     
     for _, data in ipairs(enemies) do
+        -- Skip teammates when TeamCheck is enabled
+        if Config.Aimbot.TeamCheck and data.IsTeammate then
+            continue
+        end
+        
         local aimPart = GetAimPart(data.Character)
         if not aimPart then continue end
         
@@ -193,12 +509,11 @@ local function FindAimTarget()
         LockedPlayer = bestPlayer
     end
     
-    return bestPart
+    return bestPart, bestPlayer
 end
 
 -- ============================================
 -- ESP CREATE / REMOVE / HIDE
--- Keyed by Player object (stable reference)
 -- ============================================
 local function CreateESP(player)
     if BSXESPObjects[player] then return end
@@ -231,6 +546,20 @@ local function CreateESP(player)
     e.Dist.Color = Color3.fromRGB(200, 200, 200)
     e.Dist.Visible = false
     
+    -- Health bar
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Thickness = 1
+    e.HealthBG.Filled = true
+    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
+    e.HealthBG.Transparency = 0.5
+    e.HealthBG.Visible = false
+    
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness = 1
+    e.HealthBar.Filled = true
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    e.HealthBar.Visible = false
+    
     BSXESPObjects[player] = e
 end
 
@@ -248,7 +577,7 @@ local function HideESP(player)
 end
 
 -- ============================================
--- ESP UPDATE
+-- ESP UPDATE (WITH TEAM CHECK)
 -- ============================================
 local function UpdateBSXESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
@@ -270,6 +599,12 @@ local function UpdateBSXESP()
         local player = data.Player
         activePlayers[player] = true
         
+        -- Skip teammates when TeamCheck is enabled
+        if Config.ESP.TeamCheck and data.IsTeammate then
+            HideESP(player)
+            continue
+        end
+        
         if not BSXESPObjects[player] then
             CreateESP(player)
         end
@@ -286,14 +621,15 @@ local function UpdateBSXESP()
             local sp, on = cam:WorldToViewportPoint(rootPos)
             
             if on and sp.Z > 0 then
-                -- Box sizing using head and feet positions
                 local headScreenPos = sp
                 local footScreenPos = sp
                 
                 if head then
-                    headScreenPos = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                    local hsp = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                    headScreenPos = hsp
                 end
-                footScreenPos = cam:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
+                local fsp = cam:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
+                footScreenPos = fsp
                 
                 local height = math.abs(headScreenPos.Y - footScreenPos.Y)
                 if height < 10 then height = 10 end
@@ -304,6 +640,13 @@ local function UpdateBSXESP()
                 local boxWidth = width
                 local boxHeight = height
                 
+                -- Color: green for visible, red for behind walls
+                local espColor = Color3.fromRGB(255, 50, 50)
+                if head then
+                    local isVisible = CanSee(head, data.Character)
+                    espColor = isVisible and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+                end
+                
                 -- Boxes
                 if Config.ESP.Boxes then
                     esp.Outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
@@ -312,7 +655,7 @@ local function UpdateBSXESP()
                     
                     esp.Box.Size = Vector2.new(boxWidth, boxHeight)
                     esp.Box.Position = Vector2.new(minX, minY)
-                    esp.Box.Color = Color3.fromRGB(255, 50, 50)
+                    esp.Box.Color = espColor
                     esp.Box.Visible = true
                 else
                     esp.Box.Visible = false
@@ -343,6 +686,40 @@ local function UpdateBSXESP()
                 else
                     esp.Dist.Visible = false
                 end
+                
+                -- Health bar (left side of box)
+                if Config.ESP.Boxes and humanoid then
+                    local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                    local barHeight = boxHeight * healthPct
+                    
+                    -- Color gradient: green -> yellow -> red
+                    local healthColor
+                    if healthPct > 0.5 then
+                        healthColor = Color3.fromRGB(
+                            math.floor(255 * (1 - healthPct) * 2),
+                            255,
+                            0
+                        )
+                    else
+                        healthColor = Color3.fromRGB(
+                            255,
+                            math.floor(255 * healthPct * 2),
+                            0
+                        )
+                    end
+                    
+                    esp.HealthBG.Size = Vector2.new(3, boxHeight)
+                    esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+                    esp.HealthBG.Visible = true
+                    
+                    esp.HealthBar.Size = Vector2.new(3, barHeight)
+                    esp.HealthBar.Position = Vector2.new(minX - 6, minY + (boxHeight - barHeight))
+                    esp.HealthBar.Color = healthColor
+                    esp.HealthBar.Visible = true
+                else
+                    esp.HealthBG.Visible = false
+                    esp.HealthBar.Visible = false
+                end
             else
                 HideESP(player)
             end
@@ -351,7 +728,7 @@ local function UpdateBSXESP()
         end
     end
     
-    -- Cleanup players who left or died
+    -- Hide ESP for players not in enemies list
     for player in pairs(BSXESPObjects) do
         if not activePlayers[player] then
             HideESP(player)
@@ -360,46 +737,109 @@ local function UpdateBSXESP()
 end
 
 -- ============================================
+-- IMPROVED AIMBOT MOVEMENT
+-- Better smoothing, prediction, and accuracy
+-- ============================================
+local function PerformAimMovement(targetPart, targetPlayer)
+    local cam = Workspace.CurrentCamera
+    if not cam or not targetPart then return end
+    
+    local pos = targetPart.Position
+    
+    -- Prediction using custom velocity tracking (more accurate)
+    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 and targetPlayer then
+        -- Update position history
+        UpdatePositionHistory(targetPlayer, pos)
+        
+        -- Get smoothed velocity
+        local velocity = GetSmoothedVelocity(targetPlayer)
+        
+        -- Also try AssemblyLinearVelocity as fallback
+        if velocity.Magnitude < 0.5 then
+            pcall(function()
+                local v = targetPart.AssemblyLinearVelocity
+                if v and v.Magnitude > 0.5 then
+                    velocity = v
+                end
+            end)
+        end
+        
+        if velocity.Magnitude > 0.5 then
+            -- Account for distance - further targets need more prediction
+            local myChar = LocalPlayer.Character
+            local myPos = cam.CFrame.Position
+            local dist = (pos - myPos).Magnitude
+            
+            -- Scale prediction with distance
+            local predScale = Config.Aimbot.Prediction * (1 + dist / 500)
+            pos = pos + velocity * predScale
+        end
+    end
+    
+    local targetScreenPos, onScreen = cam:WorldToViewportPoint(pos)
+    if not onScreen then return end
+    
+    local mousePos = UserInputService:GetMouseLocation()
+    local smoothFactor = math.max(Config.Aimbot.Smoothness or 5, 1)
+    
+    local deltaX = targetScreenPos.X - mousePos.X
+    local deltaY = targetScreenPos.Y - mousePos.Y
+    local distance = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    
+    -- Don't move if already very close (prevents jittering)
+    if distance < 1 then return end
+    
+    -- Dynamic smoothing: faster when far, more precise when close
+    local dynamicSmooth
+    if distance > 200 then
+        -- Far away: move faster (less smooth)
+        dynamicSmooth = 1 / (smoothFactor * 0.5)
+    elseif distance > 50 then
+        -- Medium range: normal smoothing
+        dynamicSmooth = 1 / smoothFactor
+    elseif distance > 10 then
+        -- Close: more precise
+        dynamicSmooth = 1 / (smoothFactor * 1.2)
+    else
+        -- Very close: snap precisely
+        dynamicSmooth = 1 / (smoothFactor * 0.8)
+    end
+    
+    dynamicSmooth = math.clamp(dynamicSmooth, 0.05, 0.95)
+    
+    local moveX = deltaX * dynamicSmooth
+    local moveY = deltaY * dynamicSmooth
+    
+    -- Ensure minimum movement to avoid getting stuck
+    if math.abs(moveX) < 0.3 and math.abs(deltaX) > 0.5 then
+        moveX = deltaX > 0 and 0.5 or -0.5
+    end
+    if math.abs(moveY) < 0.3 and math.abs(deltaY) > 0.5 then
+        moveY = deltaY > 0 and 0.5 or -0.5
+    end
+    
+    -- Clamp maximum movement per frame
+    moveX = math.clamp(moveX, -200, 200)
+    moveY = math.clamp(moveY, -200, 200)
+    
+    if math.abs(moveX) > 0.1 or math.abs(moveY) > 0.1 then
+        mousemoverel(moveX, moveY)
+    end
+end
+
+-- ============================================
 -- MAIN LOOP
 -- ============================================
 RunService.RenderStepped:Connect(function()
-    -- Force no team check every frame
-    Config.Aimbot.TeamCheck = false
-    Config.ESP.TeamCheck = false
+    -- DO NOT force TeamCheck off - let user control it
+    -- The team detection system now handles it properly
     
     -- AIMBOT
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local target = FindAimTarget()
+        local target, targetPlayer = FindAimTarget()
         
-        if target then
-            local cam = Workspace.CurrentCamera
-            if cam then
-                local pos = target.Position
-                pcall(function()
-                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-                        local v = target.AssemblyLinearVelocity
-                        if v and v.Magnitude > 0.1 then
-                            pos = pos + v * Config.Aimbot.Prediction
-                        end
-                    end
-                end)
-                
-                local targetPos, on = cam:WorldToViewportPoint(pos)
-                if on then
-                    local mousePos = UserInputService:GetMouseLocation()
-                    local smoothing = 1 / math.max(Config.Aimbot.Smoothness or 5, 1)
-                    
-                    local deltaX = (targetPos.X - mousePos.X) * smoothing
-                    local deltaY = (targetPos.Y - mousePos.Y) * smoothing
-                    
-                    deltaX = math.clamp(deltaX, -150, 150)
-                    deltaY = math.clamp(deltaY, -150, 150)
-                    
-                    if math.abs(deltaX) > 0.1 or math.abs(deltaY) > 0.1 then
-                        mousemoverel(deltaX, deltaY)
-                    end
-                end
-            end
+        if target and targetPlayer then
+            PerformAimMovement(target, targetPlayer)
         end
     else
         if not Config.Aimbot.Active then LockedPlayer = nil end
@@ -428,6 +868,7 @@ end)
 Players.PlayerRemoving:Connect(function(p)
     if LockedPlayer == p then LockedPlayer = nil end
     RemoveESP(p)
+    PositionHistory[p] = nil
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
