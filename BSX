@@ -1,10 +1,6 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v17.0
-    
-    KEY DISCOVERY: BloxStrike stores player models as
-    children of workspace.CurrentCamera, NOT as standard
-    player.Character objects.
-    
+    ANNOMALY X - Blox Strike Module (BSX) v17.1
+    Fixed: TeamCheck with multiple detection methods
     Creator: ElSacaLeche
 ]]
 
@@ -17,6 +13,7 @@ local Config = getgenv().AX_Config
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Teams = game:GetService("Teams")
 local Workspace = workspace
 local LocalPlayer = Players.LocalPlayer
 
@@ -25,7 +22,6 @@ local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() e
 -- ============================================
 -- VARIABLES
 -- ============================================
-local LockedPlayer = nil
 local LockedModel = nil
 local RandomPart = "Head"
 local LastRandomSwitch = 0
@@ -33,16 +29,231 @@ local BSXESPObjects = {}
 local LastESPUpdate = 0
 
 -- ============================================
--- GET ALL ENEMY MODELS
--- BloxStrike stores player models in Camera
--- AND also as standard player characters
+-- TEAM DETECTION DEBUG
+-- Run once to find how BSX handles teams
+-- Check F9 console for output
+-- ============================================
+task.spawn(function()
+    task.wait(8)
+    
+    -- Debug local player team info
+    local myInfo = "[AX BSX] === LOCAL PLAYER TEAM DEBUG ==="
+    warn(myInfo)
+    
+    pcall(function() warn("[AX BSX] LocalPlayer.Team = " .. tostring(LocalPlayer.Team)) end)
+    pcall(function() warn("[AX BSX] LocalPlayer.Team.Name = " .. tostring(LocalPlayer.Team.Name)) end)
+    pcall(function() warn("[AX BSX] LocalPlayer.TeamColor = " .. tostring(LocalPlayer.TeamColor)) end)
+    pcall(function() warn("[AX BSX] LocalPlayer.Neutral = " .. tostring(LocalPlayer.Neutral)) end)
+    
+    -- Check Teams service
+    pcall(function()
+        local teamsList = Teams:GetTeams()
+        warn("[AX BSX] Teams in game: " .. #teamsList)
+        for _, team in ipairs(teamsList) do
+            warn("[AX BSX]   Team: " .. team.Name .. " | Color: " .. tostring(team.TeamColor))
+        end
+    end)
+    
+    -- Debug other players
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            pcall(function() warn("[AX BSX] Player " .. p.Name .. " Team = " .. tostring(p.Team) .. " | TeamColor = " .. tostring(p.TeamColor)) end)
+            break
+        end
+    end
+    
+    -- Check Camera children for team info
+    local cam = Workspace.CurrentCamera
+    if cam then
+        for _, model in ipairs(cam:GetChildren()) do
+            if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
+                local teamVal = model:FindFirstChild("TeamColor")
+                local teamAttr = nil
+                pcall(function() teamAttr = model:GetAttribute("Team") end)
+                warn("[AX BSX] Camera Model: " .. model.Name .. " | TeamColor child: " .. tostring(teamVal) .. " | Team attr: " .. tostring(teamAttr))
+                
+                -- List all ValueBase children
+                for _, child in ipairs(model:GetChildren()) do
+                    if child:IsA("ValueBase") then
+                        warn("[AX BSX]   Value: " .. child.Name .. " = " .. tostring(child.Value) .. " [" .. child.ClassName .. "]")
+                    end
+                end
+                break
+            end
+        end
+    end
+    
+    warn("[AX BSX] === END DEBUG ===")
+end)
+
+-- ============================================
+-- TEAM CHECK - ALL METHODS
+-- ============================================
+local function IsOnMyTeam(targetModel, targetPlayer)
+    -- Get player object if not provided
+    if not targetPlayer then
+        targetPlayer = Players:FindFirstChild(targetModel.Name)
+    end
+    
+    -- Method 1: Direct Team object comparison
+    if targetPlayer then
+        local s, r = pcall(function()
+            if targetPlayer.Team ~= nil and LocalPlayer.Team ~= nil then
+                return targetPlayer.Team == LocalPlayer.Team
+            end
+            return nil
+        end)
+        if s and r == true then return true end
+        if s and r == false then return false end
+    end
+    
+    -- Method 2: Team Name comparison
+    if targetPlayer then
+        local s, r = pcall(function()
+            if targetPlayer.Team and LocalPlayer.Team then
+                return targetPlayer.Team.Name == LocalPlayer.Team.Name
+            end
+            return nil
+        end)
+        if s and r == true then return true end
+        if s and r == false then return false end
+    end
+    
+    -- Method 3: TeamColor comparison
+    if targetPlayer then
+        local s, r = pcall(function()
+            if targetPlayer.TeamColor and LocalPlayer.TeamColor then
+                return targetPlayer.TeamColor == LocalPlayer.TeamColor
+            end
+            return nil
+        end)
+        if s and r == true then return true end
+        if s and r == false then return false end
+    end
+    
+    -- Method 4: TeamColor BrickColor name comparison
+    if targetPlayer then
+        local s, r = pcall(function()
+            return tostring(targetPlayer.TeamColor) == tostring(LocalPlayer.TeamColor)
+        end)
+        if s and r == true then return true end
+    end
+    
+    -- Method 5: TeamColor value inside model (BloxStrike specific)
+    local s5, r5 = pcall(function()
+        local targetTC = targetModel:FindFirstChild("TeamColor")
+        local myChar = LocalPlayer.Character
+        if not myChar then return nil end
+        local myTC = myChar:FindFirstChild("TeamColor")
+        if targetTC and myTC then
+            return targetTC.Value == myTC.Value
+        end
+        return nil
+    end)
+    if s5 and r5 == true then return true end
+    if s5 and r5 == false then return false end
+    
+    -- Method 6: Attribute "Team" on model
+    local s6, r6 = pcall(function()
+        local t1 = targetModel:GetAttribute("Team")
+        local myChar = LocalPlayer.Character
+        local t2 = myChar and myChar:GetAttribute("Team")
+        if t1 ~= nil and t2 ~= nil then
+            return t1 == t2
+        end
+        -- Also check player attributes
+        if targetPlayer then
+            t1 = targetPlayer:GetAttribute("Team")
+        end
+        t2 = LocalPlayer:GetAttribute("Team")
+        if t1 ~= nil and t2 ~= nil then
+            return t1 == t2
+        end
+        return nil
+    end)
+    if s6 and r6 == true then return true end
+    if s6 and r6 == false then return false end
+    
+    -- Method 7: Check "Team" StringValue/IntValue in model
+    local s7, r7 = pcall(function()
+        for _, valName in ipairs({"Team", "TeamValue", "Side", "PlayerTeam"}) do
+            local v1 = targetModel:FindFirstChild(valName)
+            local myChar = LocalPlayer.Character
+            local v2 = myChar and myChar:FindFirstChild(valName)
+            if v1 and v2 and (v1:IsA("StringValue") or v1:IsA("IntValue") or v1:IsA("NumberValue")) then
+                return v1.Value == v2.Value
+            end
+        end
+        return nil
+    end)
+    if s7 and r7 == true then return true end
+    if s7 and r7 == false then return false end
+    
+    -- Method 8: Body colors comparison (same uniform = same team)
+    local s8, r8 = pcall(function()
+        local myChar = LocalPlayer.Character
+        if not myChar then return nil end
+        local bc1 = targetModel:FindFirstChildOfClass("BodyColors")
+        local bc2 = myChar:FindFirstChildOfClass("BodyColors")
+        if bc1 and bc2 then
+            return bc1.TorsoColor3 == bc2.TorsoColor3
+        end
+        return nil
+    end)
+    if s8 and r8 == true then return true end
+    if s8 and r8 == false then return false end
+    
+    -- Method 9: Shirt comparison
+    local s9, r9 = pcall(function()
+        local myChar = LocalPlayer.Character
+        if not myChar then return nil end
+        local sh1 = targetModel:FindFirstChildOfClass("Shirt")
+        local sh2 = myChar:FindFirstChildOfClass("Shirt")
+        if sh1 and sh2 then
+            return sh1.ShirtTemplate == sh2.ShirtTemplate
+        end
+        return nil
+    end)
+    if s9 and r9 == true then return true end
+    if s9 and r9 == false then return false end
+    
+    -- Method 10: Check if player objects are on the same Team service team
+    if targetPlayer then
+        local s10, r10 = pcall(function()
+            local allTeams = Teams:GetTeams()
+            if #allTeams >= 2 then
+                local myTeam = nil
+                local theirTeam = nil
+                for _, team in ipairs(allTeams) do
+                    local players = team:GetPlayers()
+                    for _, tp in ipairs(players) do
+                        if tp == LocalPlayer then myTeam = team end
+                        if tp == targetPlayer then theirTeam = team end
+                    end
+                end
+                if myTeam and theirTeam then
+                    return myTeam == theirTeam
+                end
+            end
+            return nil
+        end)
+        if s10 and r10 == true then return true end
+        if s10 and r10 == false then return false end
+    end
+    
+    -- Could not determine team - assume enemy
+    return false
+end
+
+-- ============================================
+-- GET ALL TARGETS
 -- ============================================
 local function GetAllTargets()
     local targets = {}
     local Camera = Workspace.CurrentCamera
     if not Camera then return targets end
     
-    -- Method 1: Camera children (BloxStrike's main method)
+    -- Camera children (BloxStrike main method)
     for _, model in ipairs(Camera:GetChildren()) do
         if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
             local head = model:FindFirstChild("Head") or model:FindFirstChild("HeadHB")
@@ -62,7 +273,7 @@ local function GetAllTargets()
         end
     end
     
-    -- Method 2: Standard player characters (fallback)
+    -- Standard player characters
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local char = player.Character
@@ -71,7 +282,6 @@ local function GetAllTargets()
             local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
             
             if head and humanoid and humanoid.Health > 0 then
-                -- Check not already added from Camera
                 local alreadyAdded = false
                 for _, t in ipairs(targets) do
                     if t.Model == char or (t.Player and t.Player == player) then
@@ -93,7 +303,7 @@ local function GetAllTargets()
         end
     end
     
-    -- Method 3: Workspace Players/Characters folder
+    -- Workspace folders
     local playersFolder = Workspace:FindFirstChild("Players") or Workspace:FindFirstChild("Characters")
     if playersFolder then
         for _, model in ipairs(playersFolder:GetChildren()) do
@@ -107,7 +317,6 @@ local function GetAllTargets()
                     for _, t in ipairs(targets) do
                         if t.Model == model then alreadyAdded = true break end
                     end
-                    
                     if not alreadyAdded then
                         local player = Players:FindFirstChild(model.Name)
                         table.insert(targets, {
@@ -124,44 +333,6 @@ local function GetAllTargets()
     end
     
     return targets
-end
-
--- ============================================
--- TEAM CHECK
--- BloxStrike method: find player by model name
--- then compare Team objects
--- ============================================
-local function IsTeammate(targetData)
-    if not Config.Aimbot.TeamCheck and not Config.ESP.TeamCheck then return false end
-    
-    local player = targetData.Player
-    if not player then
-        player = Players:FindFirstChild(targetData.Model.Name)
-    end
-    
-    if player and player.Team and LocalPlayer.Team then
-        return player.Team == LocalPlayer.Team
-    end
-    
-    -- Fallback: TeamColor value in model
-    local targetTC = targetData.Model:FindFirstChild("TeamColor")
-    local myChar = LocalPlayer.Character
-    local myTC = myChar and myChar:FindFirstChild("TeamColor")
-    if targetTC and myTC then
-        return targetTC.Value == myTC.Value
-    end
-    
-    return false
-end
-
-local function IsTeammateForAimbot(targetData)
-    if not Config.Aimbot.TeamCheck then return false end
-    return IsTeammate(targetData)
-end
-
-local function IsTeammateForESP(targetData)
-    if not Config.ESP.TeamCheck then return false end
-    return IsTeammate(targetData)
 end
 
 -- ============================================
@@ -200,12 +371,10 @@ end
 
 -- ============================================
 -- FIND AIMBOT TARGET
--- Same method as working BloxStrike scripts:
--- Check Camera children first, then fallback
 -- ============================================
 local function FindAimTarget()
     local Camera = Workspace.CurrentCamera
-    if not Camera then return nil, nil end
+    if not Camera then return nil end
     
     local mousePos = UserInputService:GetMouseLocation()
     local vp = Camera.ViewportSize
@@ -221,7 +390,7 @@ local function FindAimTarget()
             local aimPart = GetAimPart(LockedModel)
             if aimPart then
                 local sp, on = Camera:WorldToViewportPoint(aimPart.Position)
-                if on then return aimPart, LockedModel end
+                if on then return aimPart end
             end
         end
         LockedModel = nil
@@ -231,8 +400,10 @@ local function FindAimTarget()
     local bestPart, bestDist, bestModel = nil, fov, nil
     
     for _, data in ipairs(allTargets) do
-        -- Team check
-        if IsTeammateForAimbot(data) then continue end
+        -- Team check for aimbot
+        if Config.Aimbot.TeamCheck and IsOnMyTeam(data.Model, data.Player) then
+            continue
+        end
         
         local aimPart = GetAimPart(data.Model)
         if not aimPart then continue end
@@ -268,15 +439,14 @@ local function FindAimTarget()
         LockedModel = bestModel
     end
     
-    return bestPart, bestModel
+    return bestPart
 end
 
 -- ============================================
--- ESP CREATE / REMOVE / HIDE
+-- ESP
 -- ============================================
 local function CreateESP(model)
     if BSXESPObjects[model] then return end
-    
     local e = {}
     e.Box = Drawing.new("Square")
     e.Box.Thickness = 1
@@ -321,10 +491,6 @@ local function HideESP(model)
     for _, d in pairs(e) do pcall(function() d.Visible = false end) end
 end
 
--- ============================================
--- ESP UPDATE
--- Uses same method as working BloxStrike scripts
--- ============================================
 local function UpdateBSXESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
         for m in pairs(BSXESPObjects) do HideESP(m) end
@@ -353,7 +519,7 @@ local function UpdateBSXESP()
         if not esp then continue end
         
         -- Team check for ESP
-        if IsTeammateForESP(data) then
+        if Config.ESP.TeamCheck and IsOnMyTeam(data.Model, data.Player) then
             HideESP(model)
             continue
         end
@@ -367,7 +533,6 @@ local function UpdateBSXESP()
             local sp, on = Camera:WorldToViewportPoint(rootPos)
             
             if on and sp.Z > 0 then
-                -- Box calculation (same as working scripts)
                 local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
                 local footPos = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
                 
@@ -379,13 +544,13 @@ local function UpdateBSXESP()
                 local boxWidth = width
                 local boxHeight = math.abs(footPos.Y - headPos.Y)
                 
-                -- Team color
-                local color = Color3.fromRGB(255, 50, 50) -- Red for enemies
-                if data.Player and data.Player.Team then
-                    color = data.Player.Team.TeamColor.Color
-                end
+                local color = Color3.fromRGB(255, 50, 50)
+                pcall(function()
+                    if data.Player and data.Player.Team then
+                        color = data.Player.Team.TeamColor.Color
+                    end
+                end)
                 
-                -- Box outline
                 if Config.ESP.Boxes then
                     esp.Outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
                     esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
@@ -400,10 +565,11 @@ local function UpdateBSXESP()
                     esp.Outline.Visible = false
                 end
                 
-                -- Name
                 if Config.ESP.Names then
                     local name = model.Name
-                    if data.Player then name = data.Player.DisplayName or data.Player.Name end
+                    pcall(function()
+                        if data.Player then name = data.Player.DisplayName or data.Player.Name end
+                    end)
                     esp.Name.Text = name
                     esp.Name.Position = Vector2.new(minX + boxWidth / 2, minY - 16)
                     esp.Name.Color = color
@@ -412,7 +578,6 @@ local function UpdateBSXESP()
                     esp.Name.Visible = false
                 end
                 
-                -- Distance
                 if Config.ESP.Distance then
                     local myChar = LocalPlayer.Character
                     local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head"))
@@ -435,7 +600,6 @@ local function UpdateBSXESP()
         end
     end
     
-    -- Cleanup old ESP objects
     for model in pairs(BSXESPObjects) do
         if not activeModels[model] then
             RemoveESP(model)
@@ -445,22 +609,16 @@ end
 
 -- ============================================
 -- MAIN LOOP
--- Aimbot: exact same delta method as working scripts
--- deltaX = (targetPos.X - mousePos.X) * smoothing
--- NO GuiInset correction needed
 -- ============================================
 RunService.RenderStepped:Connect(function()
     local Camera = Workspace.CurrentCamera
     if not Camera then return end
     
-    -- === AIMBOT ===
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
         local target = FindAimTarget()
         
         if target then
             local pos = target.Position
-            
-            -- Prediction
             pcall(function()
                 if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
                     local v = target.AssemblyLinearVelocity
@@ -471,18 +629,13 @@ RunService.RenderStepped:Connect(function()
             end)
             
             local targetPos, on = Camera:WorldToViewportPoint(pos)
-            
             if on then
                 local mousePos = UserInputService:GetMouseLocation()
-                
-                -- EXACT same method as working BloxStrike scripts:
-                -- Simple delta * smoothing, NO offset corrections
                 local smoothing = 1 / math.max(Config.Aimbot.Smoothness or 5, 1)
                 
                 local deltaX = (targetPos.X - mousePos.X) * smoothing
                 local deltaY = (targetPos.Y - mousePos.Y) * smoothing
                 
-                -- Clamp to prevent huge jumps
                 deltaX = math.clamp(deltaX, -150, 150)
                 deltaY = math.clamp(deltaY, -150, 150)
                 
@@ -492,12 +645,9 @@ RunService.RenderStepped:Connect(function()
             end
         end
     else
-        if not Config.Aimbot.Active then
-            LockedModel = nil
-        end
+        if not Config.Aimbot.Active then LockedModel = nil end
     end
     
-    -- === ESP ===
     UpdateBSXESP()
 end)
 
