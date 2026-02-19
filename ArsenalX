@@ -1,9 +1,27 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║           ANNOMALY X - Arsenal Module v9                  ║
-    ║           Silent Aim disabled - Use DHE instead           ║
-    ║           Creator: ElSacaLeche                            ║
+    ║          ANNOMALY X - Arsenal Module v2.0                 ║
+    ║                                                           ║
+    ║  Silent Aim: DISABLED (Arsenal detects raycast hooks)     ║
+    ║  Use DHE (H key) + Aimbot (Q key) instead                ║
+    ║  ESP: Custom with health bar + visibility colors          ║
+    ║  Aimbot: Custom with Arsenal-specific hitbox parts        ║
+    ║                                                           ║
+    ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
+    
+    ARSENAL ARCHITECTURE:
+    - Characters use R15 with additional Hitbox parts
+    - Has HeadHB, Hitbox, RightUpperLeg, LeftUpperLeg as extra parts
+    - Standard Roblox Teams (changes every round in gun rotation)
+    - Silent Aim is detected - use DHE for hitbox expansion instead
+    
+    CHANGES v2.0:
+    - Added custom Aimbot with Arsenal hitbox part detection
+    - Added custom ESP with health bar + visibility
+    - Proper kick protection + error suppression
+    - Continuous silent aim blocker
+    - Memory cleanup
 ]]
 
 if not getgenv().AX_Config then
@@ -15,17 +33,20 @@ local Config = getgenv().AX_Config
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookfunction = hookfunction or replaceclosure or detour_function
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local Workspace = cloneref(game:GetService("Workspace"))
 local StarterGui = cloneref(game:GetService("StarterGui"))
+local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
--- KICK PROTECTION
+-- PROTECTION
 -- ============================================
-
 pcall(function()
     local oldKick = LocalPlayer.Kick
     if typeof(oldKick) == "function" then
@@ -45,11 +66,27 @@ pcall(function()
     end
 end)
 
--- ============================================
--- DISABLE SILENT AIM FOR ARSENAL
--- Force it off and notify user
--- ============================================
+-- Memory cleanup loop
+task.spawn(function()
+    while task.wait(15) do
+        pcall(function()
+            if getgc then
+                for _, obj in ipairs(getgc(true)) do
+                    if type(obj) == "table" then
+                        pcall(function()
+                            if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
+                            if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
+                        end)
+                    end
+                end
+            end
+        end)
+    end
+end)
 
+-- ============================================
+-- DISABLE SILENT AIM
+-- ============================================
 Config.Silent.Enabled = false
 Config.Silent.Active = false
 
@@ -58,34 +95,288 @@ task.spawn(function()
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "⚡ ANNOMALY X - Arsenal",
-            Text = "Silent Aim is not available for Arsenal. Use DHE (H key) + Aimbot (Q key) instead!",
-            Duration = 10
+            Text = "Silent Aim disabled. Use DHE (H) + Aimbot (Q)!",
+            Duration = 8
         })
     end)
 end)
 
--- Block user from enabling Silent Aim
 task.spawn(function()
     while task.wait(1) do
         if Config.Silent.Enabled or Config.Silent.Active then
             Config.Silent.Enabled = false
             Config.Silent.Active = false
-            pcall(function()
-                StarterGui:SetCore("SendNotification", {
-                    Title = "⚠ Arsenal",
-                    Text = "Silent Aim not available. Use DHE (H key) for hitbox expansion!",
-                    Duration = 5
-                })
-            end)
         end
     end
 end)
 
 -- ============================================
--- SIGNAL
+-- TEAM CHECK
+-- ============================================
+local function ShouldSkipArsenalPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    local ok, result = pcall(function()
+        return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+    end)
+    if ok and result then return true end
+    return false
+end
+
+-- ============================================
+-- VISIBILITY CHECK
+-- ============================================
+local function IsArsenalVisible(targetPart)
+    if not targetPart then return false end
+    local character = LocalPlayer.Character
+    if not character then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+    params.IgnoreWater = true
+    local origin = cam.CFrame.Position
+    local dir = targetPart.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
+    if not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    return false
+end
+
+-- ============================================
+-- TARGET PART (Arsenal specific parts)
+-- ============================================
+local ARSENAL_PARTS = {"HeadHB", "Head", "Hitbox", "HumanoidRootPart", "UpperTorso", "Torso"}
+
+local arsenalAimbotRandomPart = "Head"
+local arsenalAimbotLastSwitch = 0
+local arsenalAimbotLockedPlayer = nil
+
+local function GetArsenalAimbotPart(character)
+    if not character then return nil end
+    local setting = Config.Aimbot.TargetPart
+    if setting == "Random" then
+        local t = tick()
+        if t - arsenalAimbotLastSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local valid = {}
+            for _, n in ipairs(ARSENAL_PARTS) do
+                local p = character:FindFirstChild(n)
+                if p and p:IsA("BasePart") then table.insert(valid, n) end
+            end
+            if #valid > 0 then arsenalAimbotRandomPart = valid[math.random(1, #valid)] end
+            arsenalAimbotLastSwitch = t
+        end
+        local p = character:FindFirstChild(arsenalAimbotRandomPart)
+        if p and p:IsA("BasePart") then return p end
+    end
+    if setting == "Head" then
+        return character:FindFirstChild("HeadHB") or character:FindFirstChild("Head")
+    end
+    return character:FindFirstChild(setting)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsArsenalPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipArsenalPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c then return false end
+    if c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetArsenalAimbotTarget()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    local fov = Config.Aimbot.FOVRadius or 150
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    
+    if Config.Aimbot.Method == "Aimlock" and arsenalAimbotLockedPlayer then
+        if IsArsenalPlayerValid(arsenalAimbotLockedPlayer) then
+            local tp = GetArsenalAimbotPart(arsenalAimbotLockedPlayer.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsArsenalVisible(tp)) then
+                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+        end
+        arsenalAimbotLockedPlayer = nil
+    end
+    
+    local best, bestDist, bestPlayer = nil, fov, nil
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsArsenalPlayerValid(player) then continue end
+        local tp = GetArsenalAimbotPart(player.Character)
+        if not tp then continue end
+        if Config.Aimbot.VisibleCheck and not IsArsenalVisible(tp) then continue end
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < bestDist then bestDist = d best = tp bestPlayer = player end
+    end
+    if Config.Aimbot.Method == "Aimlock" and bestPlayer then
+        arsenalAimbotLockedPlayer = bestPlayer
+    end
+    return best
+end
+
+-- ============================================
+-- ESP
+-- ============================================
+local ArsenalESP = {}
+local ArsenalLastESP = 0
+
+local function CreateArsenalESP(player)
+    if ArsenalESP[player] then return end
+    local e = {}
+    e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Visible = false
+    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0,0,0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255,255,255) e.Name.Visible = false
+    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
+    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0,0,0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+    ArsenalESP[player] = e
+end
+
+local function RemoveArsenalESP(player)
+    local e = ArsenalESP[player] if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    ArsenalESP[player] = nil
+end
+
+local function HideArsenalESP(player)
+    local e = ArsenalESP[player] if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+local function UpdateArsenalESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(ArsenalESP) do HideArsenalESP(p) end return
+    end
+    local now = tick() if now - ArsenalLastESP < 0.08 then return end ArsenalLastESP = now
+    Camera = Workspace.CurrentCamera if not Camera then return end
+    local active = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        active[player] = true
+        local isTeammate = false
+        pcall(function() isTeammate = player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team end)
+        if Config.ESP.TeamCheck and isTeammate then HideArsenalESP(player) continue end
+        if not ArsenalESP[player] then CreateArsenalESP(player) end
+        local esp = ArsenalESP[player] if not esp then continue end
+        local c = player.Character
+        if not c then HideArsenalESP(player) continue end
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if not h or h.Health <= 0 then HideArsenalESP(player) continue end
+        if c:FindFirstChildOfClass("ForceField") then HideArsenalESP(player) continue end
+        local rp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
+        local head = c:FindFirstChild("Head")
+        if not rp then HideArsenalESP(player) continue end
+        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideArsenalESP(player) continue end
+        local sp, on = Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideArsenalESP(player) continue end
+        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0)) or sp
+        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0))
+        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
+        local width = height / 2
+        local minX, minY = sp.X - width/2, hSP.Y
+        local col
+        if isTeammate then col = Color3.fromRGB(80,150,255)
+        else
+            local hp = c:FindFirstChild("HeadHB") or head
+            col = (hp and IsArsenalVisible(hp)) and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50)
+        end
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width+2, height+2) esp.Outline.Position = Vector2.new(minX-1, minY-1) esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height) esp.Box.Position = Vector2.new(minX, minY) esp.Box.Color = col esp.Box.Visible = true
+        else esp.Box.Visible = false esp.Outline.Visible = false end
+        if Config.ESP.Names then
+            esp.Name.Text = player.DisplayName or player.Name esp.Name.Position = Vector2.new(minX+width/2, minY-16) esp.Name.Color = col esp.Name.Visible = true
+        else esp.Name.Visible = false end
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist).."m" esp.Distance.Position = Vector2.new(minX+width/2, minY+height+2) esp.Distance.Visible = true
+        else esp.Distance.Visible = false end
+        if Config.ESP.Boxes and h then
+            local pct = math.clamp(h.Health/h.MaxHealth,0,1) local bh = height*pct
+            local hc = pct > 0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
+            esp.HealthBG.Size = Vector2.new(3,height) esp.HealthBG.Position = Vector2.new(minX-6,minY) esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3,bh) esp.HealthBar.Position = Vector2.new(minX-6,minY+(height-bh)) esp.HealthBar.Color = hc esp.HealthBar.Visible = true
+        else esp.HealthBG.Visible = false esp.HealthBar.Visible = false end
+    end
+    for p in pairs(ArsenalESP) do
+        if not active[p] then if not p.Parent then RemoveArsenalESP(p) else HideArsenalESP(p) end end
+    end
+end
+
+-- ============================================
+-- LOOPS
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local t = GetArsenalAimbotTarget()
+        if t then
+            local pos = t.Position
+            pcall(function()
+                if Config.Aimbot.Prediction > 0 then
+                    local v = t.AssemblyLinearVelocity
+                    if v and v.Magnitude > 0.5 then pos = pos + v * Config.Aimbot.Prediction end
+                end
+            end)
+            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+            if Config.Aimbot.Method == "Aimbot" then
+                local cur = Camera.CFrame
+                local tgt = CFrame.lookAt(cur.Position, pos)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+            else
+                local sp, on = Camera:WorldToViewportPoint(pos)
+                if on then
+                    local mp = UserInputService:GetMouseLocation()
+                    local dx, dy = sp.X-mp.X, sp.Y-mp.Y
+                    local d = math.sqrt(dx*dx+dy*dy)
+                    if d > 1 then
+                        local spd = math.clamp(1/sm, 0.05, 0.8)
+                        local mx, my = math.clamp(dx*spd,-150,150), math.clamp(dy*spd,-150,150)
+                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then mousemoverel(mx, my) end
+                    end
+                end
+            end
+        else
+            if not Config.Aimbot.Active then arsenalAimbotLockedPlayer = nil end
+        end
+    else
+        if not Config.Aimbot.Active then arsenalAimbotLockedPlayer = nil end
+    end
+end)
+
+RunService.Heartbeat:Connect(function() UpdateArsenalESP() end)
+
+-- ============================================
+-- SIGNALS + INIT
 -- ============================================
 getgenv().AX_ArsenalLoaded = true
+getgenv().AX_ArsenalHandlesAimbot = true
+getgenv().AX_ArsenalHandlesESP = true
 
-print("  ✅ ARSENAL MODULE v9 loaded")
-print("  ⚠ Silent Aim: Disabled for Arsenal")
-print("  ✅ Use DHE (H key) + Aimbot (Q key)")
+for _, p in ipairs(Players:GetPlayers()) do if p ~= LocalPlayer then CreateArsenalESP(p) end end
+Players.PlayerAdded:Connect(function(p) CreateArsenalESP(p) end)
+Players.PlayerRemoving:Connect(function(p)
+    if arsenalAimbotLockedPlayer == p then arsenalAimbotLockedPlayer = nil end
+    RemoveArsenalESP(p)
+end)
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1) Camera = Workspace.CurrentCamera arsenalAimbotLockedPlayer = nil
+end)
+
+print("  ✅ ARSENAL MODULE v2.0 - Custom Aimbot + ESP")
+print("  ⚠ Silent Aim: Disabled (use DHE + Aimbot)")
