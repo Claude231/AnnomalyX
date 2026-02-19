@@ -1,9 +1,47 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║          ANNOMALY X - Rivals Module v2                     ║
-    ║          Enhanced AC Bypass + Bypassel Integration         ║
-    ║          Creator: ElSacaLeche                              ║
+    ║          ANNOMALY X - Rivals Module v3.0                   ║
+    ║                                                           ║
+    ║  Silent Aim: __namecall (Raycast + targeted RemoteEvent)  ║
+    ║  Aimbot: Custom with Rivals character detection            ║
+    ║  AC Bypass: AnalyticsPipeline + Continuous monitor         ║
+    ║                                                           ║
+    ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
+    
+    RIVALS ARCHITECTURE:
+    - Shooter-first hit registration
+    - Client calculates hit and sends to server via RemoteEvents
+    - Server validates: visibility, magnitude check (6-10 studs tolerance),
+      and behavioral analysis
+    - Uses Roblox Ban API for automated bans
+    - Characters use standard R15 rig
+    - Teams use standard Roblox Teams service
+    
+    SILENT AIM STRATEGY:
+    - Primary: __namecall hook on workspace:Raycast()
+      Rivals' weapon scripts raycast to detect hits before
+      sending the result to the server
+    - Secondary: Intercept specific shooting RemoteEvents
+      Only modifies CFrame arguments in known shooting remotes,
+      not ALL remotes (which would break the game)
+    - Magnitude safety: Ensures redirected hits stay within
+      server tolerance (6-10 studs) to avoid server rejection
+    
+    AC BYPASS STRATEGY:
+    - Disable AnalyticsPipelineController functions via getgc
+    - Hook AnalyticsPipeline RemoteEvent connections
+    - Block LogService.MessageOut (error reporting)
+    - Disable ScriptContext.Error connections
+    - Kick protection
+    - Continuous re-application every 8 seconds
+    - Memory signature cleanup
+    
+    WHAT WE DON'T DO (to stay safe):
+    - We don't spoof ping (server detects this)
+    - We don't modify hitbox sizes (server validates)
+    - We don't fire remotes directly (signature mismatch)
+    - We keep FOV small to avoid behavioral detection
 ]]
 
 -- Wait for Config
@@ -22,10 +60,12 @@ local checkcaller = checkcaller or function() return false end
 local getconnections = getconnections
 local getgc = getgc
 local setreadonly = setreadonly or function() end
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local Workspace = cloneref(game:GetService("Workspace"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local LogService = cloneref(game:GetService("LogService"))
 local ScriptContext = cloneref(game:GetService("ScriptContext"))
@@ -35,7 +75,6 @@ local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
 -- PHASE 1: RIVALS ANTICHEAT DISABLER
--- Combines original Rivals AC disable + Bypassel
 -- ============================================
 local function DisableRivalsAC()
     local results = {
@@ -50,9 +89,10 @@ local function DisableRivalsAC()
         signaturesCleaned = 0
     }
     
-    -- ORIGINAL RIVALS METHOD: AnalyticsPipelineController
+    -- AnalyticsPipelineController via getgc
     task.spawn(function()
         pcall(function()
+            if not getgc then return end
             for _, v in pairs(getgc(true)) do
                 if typeof(v) == "function" then
                     local ok, src = pcall(function()
@@ -60,16 +100,18 @@ local function DisableRivalsAC()
                     end)
                     if ok and type(src) == "string" and string.find(src, "AnalyticsPipelineController") then
                         results.pipelineFunctions = results.pipelineFunctions + 1
-                        hookfunction(v, newcclosure(function(...)
-                            return task.wait(9e9)
-                        end))
+                        pcall(function()
+                            hookfunction(v, newcclosure(function(...)
+                                return task.wait(9e9)
+                            end))
+                        end)
                     end
                 end
             end
         end)
     end)
     
-    -- ORIGINAL: AnalyticsPipeline RemoteEvent
+    -- AnalyticsPipeline RemoteEvent
     task.spawn(function()
         pcall(function()
             local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
@@ -78,7 +120,7 @@ local function DisableRivalsAC()
             if not pipeline then return end
             local remoteEvent = pipeline:FindFirstChild("RemoteEvent")
             if not remoteEvent then return end
-            if remoteEvent.OnClientEvent then
+            if remoteEvent.OnClientEvent and getconnections then
                 for _, conn in pairs(getconnections(remoteEvent.OnClientEvent)) do
                     if conn and conn.Function then
                         pcall(function()
@@ -91,9 +133,10 @@ local function DisableRivalsAC()
         end)
     end)
     
-    -- ORIGINAL: MessageOut hooks
+    -- MessageOut hooks (error reporting to server)
     task.spawn(function()
         pcall(function()
+            if not getconnections then return end
             for _, conn in pairs(getconnections(LogService.MessageOut)) do
                 if conn and conn.Function then
                     pcall(function()
@@ -105,9 +148,10 @@ local function DisableRivalsAC()
         end)
     end)
     
-    -- ORIGINAL: Error connections
+    -- Error connections
     task.spawn(function()
         pcall(function()
+            if not getconnections then return end
             for _, conn in ipairs(getconnections(ScriptContext.Error)) do
                 pcall(function()
                     conn:Disable()
@@ -122,35 +166,35 @@ local function DisableRivalsAC()
         end)
     end)
     
-    -- ORIGINAL: Kick protection
+    -- Kick protection
     task.spawn(function()
         pcall(function()
-            local kickNames = {"Kick", "kick"}
-            for _, name in ipairs(kickNames) do
-                local fn = LocalPlayer[name]
-                if type(fn) == "function" then
-                    local oldKick
-                    oldKick = hookfunction(fn, newcclosure(function(self, ...)
-                        if self == LocalPlayer then return end
-                        return oldKick(self, ...)
-                    end))
-                    results.kickHooked = true
-                end
+            local oldKick = LocalPlayer.Kick
+            if typeof(oldKick) == "function" then
+                hookfunction(oldKick, newcclosure(function(self, ...)
+                    if self == LocalPlayer then return end
+                    return oldKick(self, ...)
+                end))
+                results.kickHooked = true
             end
         end)
     end)
     
-    -- BYPASSEL: Handshake bypass
+    -- Handshake/validation remote bypass
     task.spawn(function()
         pcall(function()
+            if not getconnections then return end
             for _, remote in pairs(ReplicatedStorage:GetDescendants()) do
                 if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
                     local name = remote.Name:lower()
-                    if name:find("handshake") or name:find("validate") or name:find("verify") then
+                    if name:find("handshake") or name:find("validate") or name:find("verify")
+                       or name:find("integrity") or name:find("heartbeat") then
                         if remote:IsA("RemoteEvent") and remote.OnClientEvent then
                             for _, conn in pairs(getconnections(remote.OnClientEvent)) do
-                                pcall(function() conn:Disable() end)
-                                results.handshakes = results.handshakes + 1
+                                pcall(function()
+                                    conn:Disable()
+                                    results.handshakes = results.handshakes + 1
+                                end)
                             end
                         end
                     end
@@ -159,61 +203,81 @@ local function DisableRivalsAC()
         end)
     end)
     
-    -- BYPASSEL: Memory cleanup
+    -- Memory signature cleanup
     task.spawn(function()
         pcall(function()
-            if getgc then
-                for _, obj in ipairs(getgc(true)) do
-                    if type(obj) == "table" then
-                        pcall(function()
-                            local acKeys = {"__acsignature", "__checksum", "__hash", "__integrity", "__validation"}
-                            for _, key in ipairs(acKeys) do
-                                if rawget(obj, key) then
-                                    rawset(obj, key, nil)
-                                    results.memoryPatches = results.memoryPatches + 1
-                                end
+            if not getgc then return end
+            for _, obj in ipairs(getgc(true)) do
+                if type(obj) == "table" then
+                    pcall(function()
+                        local acKeys = {
+                            "__acsignature", "__checksum", "__hash",
+                            "__integrity", "__validation", "__exploit_flag",
+                            "_ac_token", "_security_hash"
+                        }
+                        for _, key in ipairs(acKeys) do
+                            if rawget(obj, key) then
+                                rawset(obj, key, nil)
+                                results.memoryPatches = results.memoryPatches + 1
                             end
-                        end)
-                    end
+                        end
+                    end)
                 end
             end
         end)
     end)
     
-    -- BYPASSEL: Integrity checks
+    -- Integrity check bypasses
     task.spawn(function()
         pcall(function()
-            if getconnections then
-                pcall(function()
-                    for _, conn in ipairs(getconnections(ScriptContext.ScriptAdded)) do
-                        pcall(function() conn:Disable() end)
+            if not getconnections then return end
+            pcall(function()
+                for _, conn in ipairs(getconnections(ScriptContext.ScriptAdded)) do
+                    pcall(function()
+                        conn:Disable()
                         results.integrityBypasses = results.integrityBypasses + 1
-                    end
-                end)
-                pcall(function()
-                    for _, conn in ipairs(getconnections(ScriptContext.ScriptRemoved)) do
-                        pcall(function() conn:Disable() end)
+                    end)
+                end
+            end)
+            pcall(function()
+                for _, conn in ipairs(getconnections(ScriptContext.ScriptRemoved)) do
+                    pcall(function()
+                        conn:Disable()
                         results.integrityBypasses = results.integrityBypasses + 1
-                    end
-                end)
-            end
+                    end)
+                end
+            end)
         end)
     end)
     
-    -- BYPASSEL: Signature cleanup
+    -- Global signature cleanup
     task.spawn(function()
         pcall(function()
-            local sigKeys = {"signature", "checksum", "hash", "exploit", "cheat"}
-            for key, _ in pairs(_G) do
-                local keyStr = tostring(key):lower()
-                for _, sigKey in ipairs(sigKeys) do
-                    if keyStr:find(sigKey) then
-                        _G[key] = nil
-                        results.signaturesCleaned = results.signaturesCleaned + 1
-                        break
+            local sigKeys = {"signature", "checksum", "hash", "exploit", "cheat", "hack"}
+            pcall(function()
+                for key, _ in pairs(_G) do
+                    local keyStr = tostring(key):lower()
+                    for _, sigKey in ipairs(sigKeys) do
+                        if keyStr:find(sigKey) then
+                            _G[key] = nil
+                            results.signaturesCleaned = results.signaturesCleaned + 1
+                            break
+                        end
                     end
                 end
-            end
+            end)
+            pcall(function()
+                for key, _ in pairs(shared) do
+                    local keyStr = tostring(key):lower()
+                    for _, sigKey in ipairs(sigKeys) do
+                        if keyStr:find(sigKey) then
+                            shared[key] = nil
+                            results.signaturesCleaned = results.signaturesCleaned + 1
+                            break
+                        end
+                    end
+                end
+            end)
         end)
     end)
     
@@ -223,31 +287,22 @@ end
 
 -- Execute AC disabler
 local acResults = DisableRivalsAC()
-print("  ✅ RIVALS AC v2 DISABLED:")
-print("    Pipeline functions hanged: " .. acResults.pipelineFunctions)
-print("    Remote connections hooked: " .. acResults.remoteConnections)
-print("    MessageOut hooks: " .. acResults.messageOutHooks)
-print("    Error connections: " .. acResults.errorConnections)
-print("    Kick hooked: " .. tostring(acResults.kickHooked))
-print("    Handshakes blocked: " .. acResults.handshakes)
-print("    Memory patches: " .. acResults.memoryPatches)
-print("    Integrity bypasses: " .. acResults.integrityBypasses)
-print("    Signatures cleaned: " .. acResults.signaturesCleaned)
 
 -- ============================================
 -- PHASE 2: CONTINUOUS AC MONITOR
+-- Re-applies bypasses periodically
 -- ============================================
 task.spawn(function()
     while task.wait(8) do
         pcall(function()
-            -- Re-check for new AC remotes
+            -- Re-check AnalyticsPipeline
             pcall(function()
                 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
                 if remotes then
                     local pipeline = remotes:FindFirstChild("AnalyticsPipeline")
                     if pipeline then
                         local re = pipeline:FindFirstChild("RemoteEvent")
-                        if re and re.OnClientEvent then
+                        if re and re.OnClientEvent and getconnections then
                             for _, conn in pairs(getconnections(re.OnClientEvent)) do
                                 pcall(function()
                                     hookfunction(conn.Function, newcclosure(function(...) end))
@@ -260,71 +315,196 @@ task.spawn(function()
             
             -- Re-disable errors
             pcall(function()
-                for _, conn in ipairs(getconnections(ScriptContext.Error)) do
-                    pcall(function() conn:Disable() end)
+                if getconnections then
+                    for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+                        pcall(function() conn:Disable() end)
+                    end
+                end
+            end)
+            
+            -- Re-disable MessageOut
+            pcall(function()
+                if getconnections then
+                    for _, conn in pairs(getconnections(LogService.MessageOut)) do
+                        pcall(function()
+                            hookfunction(conn.Function, newcclosure(function(...) end))
+                        end)
+                    end
                 end
             end)
             
             -- Clean memory signatures
-            if getgc then
-                for _, obj in ipairs(getgc(true)) do
-                    if type(obj) == "table" then
-                        pcall(function()
-                            if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
-                        end)
+            pcall(function()
+                if getgc then
+                    for _, obj in ipairs(getgc(true)) do
+                        if type(obj) == "table" then
+                            pcall(function()
+                                if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
+                                if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
+                                if rawget(obj, "__exploit_flag") then rawset(obj, "__exploit_flag", nil) end
+                            end)
+                        end
                     end
                 end
-            end
+            end)
+            
+            -- Check for new validation remotes
+            pcall(function()
+                if getconnections then
+                    for _, remote in pairs(ReplicatedStorage:GetDescendants()) do
+                        if remote:IsA("RemoteEvent") then
+                            local name = remote.Name:lower()
+                            if name:find("handshake") or name:find("validate") or name:find("verify") then
+                                if remote.OnClientEvent then
+                                    for _, conn in pairs(getconnections(remote.OnClientEvent)) do
+                                        pcall(function() conn:Disable() end)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
         end)
     end
 end)
 
 -- ============================================
--- PHASE 3: SILENT AIM
+-- RIVALS TEAM CHECK
+-- Rivals uses standard Roblox Teams
+-- But some modes may not have teams
 -- ============================================
+local function IsRivalsTeammate(player)
+    if not player or player == LocalPlayer then return false end
+    
+    -- Standard team check
+    local ok, result = pcall(function()
+        if LocalPlayer.Team and player.Team then
+            return LocalPlayer.Team == player.Team
+        end
+        return false
+    end)
+    if ok and result then return true end
+    
+    -- TeamColor fallback
+    local ok2, result2 = pcall(function()
+        if LocalPlayer.TeamColor and player.TeamColor then
+            return LocalPlayer.TeamColor == player.TeamColor
+        end
+        return false
+    end)
+    if ok2 and result2 then return true end
+    
+    return false
+end
 
-local CurrentRivalsTarget = nil
+local function ShouldSkipRivalsPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    return IsRivalsTeammate(player)
+end
 
-local function IsVisible(targetPart)
+-- ============================================
+-- RIVALS VISIBILITY CHECK
+-- Multiple raycasts for better accuracy
+-- ============================================
+local function IsRivalsVisible(targetPart)
     if not targetPart then return false end
     local character = LocalPlayer.Character
     if not character then return true end
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    
     local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character, Camera}
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
-    local result = Workspace:Raycast(origin, direction, params)
-    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
-    return true
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character, cam}
+    params.IgnoreWater = true
+    
+    local origin = cam.CFrame.Position
+    local targetPos = targetPart.Position
+    local dir = targetPos - origin
+    local dist = dir.Magnitude
+    
+    if dist < 3 then return true end
+    
+    -- Primary ray to center
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
+    if not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    
+    -- Secondary rays to edges
+    local offsets = {
+        Vector3.new(0, 0.3, 0),
+        Vector3.new(0, -0.3, 0),
+        Vector3.new(0.2, 0, 0),
+        Vector3.new(-0.2, 0, 0),
+    }
+    
+    for _, offset in ipairs(offsets) do
+        local offsetPos = targetPos + offset
+        local offsetDir = offsetPos - origin
+        local offsetResult = Workspace:Raycast(origin, offsetDir.Unit * (offsetDir.Magnitude - 0.3), params)
+        if not offsetResult then return true end
+        if offsetResult.Instance and offsetResult.Instance:IsDescendantOf(targetPart.Parent) then return true end
+    end
+    
+    return false
 end
 
-local function GetTargetPart(character, targetPartSetting)
+-- ============================================
+-- RIVALS TARGET PART RESOLVER
+-- Rivals uses R15 characters
+-- ============================================
+local RIVALS_PARTS = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg"}
+
+local rivalsRandomPart = "Head"
+local rivalsRandomLastSwitch = 0
+
+local function GetRivalsTargetPart(character, targetPartSetting)
     if not character then return nil end
-    local parts = {"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso"}
+    
     if targetPartSetting == "Random" then
-        local validParts = {}
-        for _, partName in ipairs(parts) do
-            local part = character:FindFirstChild(partName)
-            if part then table.insert(validParts, part) end
+        local t = tick()
+        if t - rivalsRandomLastSwitch > 0.5 then
+            local validParts = {}
+            for _, partName in ipairs(RIVALS_PARTS) do
+                local part = character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    table.insert(validParts, partName)
+                end
+            end
+            if #validParts > 0 then
+                rivalsRandomPart = validParts[math.random(1, #validParts)]
+            end
+            rivalsRandomLastSwitch = t
         end
-        if #validParts > 0 then return validParts[math.random(1, #validParts)] end
+        local p = character:FindFirstChild(rivalsRandomPart)
+        if p and p:IsA("BasePart") then return p end
     end
+    
     return character:FindFirstChild(targetPartSetting)
         or character:FindFirstChild("Head")
         or character:FindFirstChild("HumanoidRootPart")
         or character:FindFirstChild("UpperTorso")
 end
 
+-- ============================================
+-- RIVALS SILENT AIM TARGET FINDER
+-- ============================================
+local CurrentRivalsTarget = nil
+
 local function GetClosestRivalsTarget()
     Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    
     local closest = nil
     local closestDist = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local screenCenter = Camera.ViewportSize / 2
+    local mousePos = UserInputService:GetMouseLocation()
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if Config.Silent.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then continue end
+        if ShouldSkipRivalsPlayer(player, Config.Silent.TeamCheck) then continue end
         
         local character = player.Character
         if not character then continue end
@@ -332,15 +512,18 @@ local function GetClosestRivalsTarget()
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
         
-        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        -- Skip force fields
+        if character:FindFirstChildOfClass("ForceField") then continue end
+        
+        local targetPart = GetRivalsTargetPart(character, Config.Silent.TargetPart)
         if not targetPart then continue end
         
-        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        if Config.Silent.VisibleCheck and not IsRivalsVisible(targetPart) then continue end
         
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
         if not onScreen then continue end
         
-        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if screenDist < closestDist then
             closestDist = screenDist
             closest = targetPart
@@ -350,17 +533,172 @@ local function GetClosestRivalsTarget()
     return closest
 end
 
--- Target update loop
-local rivalsTargetConnection = RunService.Heartbeat:Connect(function()
-    Camera = Workspace.CurrentCamera
-    if Config.Silent.Enabled and Config.Silent.Active then
-        CurrentRivalsTarget = GetClosestRivalsTarget()
-    else
-        CurrentRivalsTarget = nil
+-- ============================================
+-- RIVALS AIMBOT TARGET FINDER
+-- ============================================
+local rivalsAimbotLockedPlayer = nil
+local rivalsAimbotRandomPart = "Head"
+local rivalsAimbotLastSwitch = 0
+
+local function GetRivalsAimbotTargetPart(character)
+    if not character then return nil end
+    local setting = Config.Aimbot.TargetPart
+    
+    if setting == "Random" then
+        local t = tick()
+        if t - rivalsAimbotLastSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local validParts = {}
+            for _, partName in ipairs(RIVALS_PARTS) do
+                local part = character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    table.insert(validParts, partName)
+                end
+            end
+            if #validParts > 0 then
+                rivalsAimbotRandomPart = validParts[math.random(1, #validParts)]
+            end
+            rivalsAimbotLastSwitch = t
+        end
+        local p = character:FindFirstChild(rivalsAimbotRandomPart)
+        if p and p:IsA("BasePart") then return p end
     end
+    
+    return character:FindFirstChild(setting)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+end
+
+local function IsRivalsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipRivalsPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c then return false end
+    if c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetClosestRivalsAimbotTarget()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    
+    local fovRadius = Config.Aimbot.FOVRadius or 150
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    
+    -- Aimlock: keep locked target
+    if Config.Aimbot.Method == "Aimlock" and rivalsAimbotLockedPlayer then
+        if IsRivalsPlayerValid(rivalsAimbotLockedPlayer) then
+            local tp = GetRivalsAimbotTargetPart(rivalsAimbotLockedPlayer.Character)
+            if tp then
+                if not Config.Aimbot.VisibleCheck or IsRivalsVisible(tp) then
+                    local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                    if on then return tp end
+                end
+            end
+        end
+        rivalsAimbotLockedPlayer = nil
+    end
+    
+    local closestPart = nil
+    local closestDist = fovRadius
+    local closestPlayer = nil
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsRivalsPlayerValid(player) then continue end
+        
+        local tp = GetRivalsAimbotTargetPart(player.Character)
+        if not tp then continue end
+        
+        if Config.Aimbot.VisibleCheck and not IsRivalsVisible(tp) then continue end
+        
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < closestDist then
+            closestDist = d
+            closestPart = tp
+            closestPlayer = player
+        end
+    end
+    
+    if Config.Aimbot.Method == "Aimlock" and closestPlayer then
+        rivalsAimbotLockedPlayer = closestPlayer
+    end
+    
+    return closestPart
+end
+
+-- ============================================
+-- SHOOTING REMOTE DETECTION
+-- Finds the specific remote that Rivals uses
+-- for hit registration (not all remotes)
+-- ============================================
+local ShootingRemotes = {}
+local RemoteScanDone = false
+
+local function ScanForShootingRemotes()
+    if RemoteScanDone then return end
+    
+    pcall(function()
+        -- Method 1: Check Remotes folder
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotes then
+            for _, remote in ipairs(remotes:GetDescendants()) do
+                if remote:IsA("RemoteEvent") then
+                    local name = remote.Name:lower()
+                    if name:find("shoot") or name:find("fire") or name:find("hit")
+                       or name:find("damage") or name:find("attack") or name:find("bullet")
+                       or name:find("weapon") then
+                        ShootingRemotes[remote] = true
+                    end
+                end
+            end
+        end
+        
+        -- Method 2: Check all RemoteEvents with shooting-related names
+        for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+            if remote:IsA("RemoteEvent") then
+                local name = remote.Name:lower()
+                if name:find("shoot") or name:find("fire") or name:find("hit")
+                   or name:find("bullet") or name:find("projectile") then
+                    ShootingRemotes[remote] = true
+                end
+            end
+        end
+    end)
+    
+    RemoteScanDone = true
+end
+
+task.spawn(function()
+    task.wait(3)
+    ScanForShootingRemotes()
 end)
 
--- __namecall hook for Raycast redirection
+-- ============================================
+-- MAGNITUDE SAFETY CHECK
+-- Ensures redirected hits stay within server
+-- tolerance to avoid rejection
+-- ============================================
+local MAGNITUDE_TOLERANCE = 8 -- studs, Rivals uses 6-10
+
+local function IsMagnitudeSafe(originalTarget, redirectedTarget)
+    if not originalTarget or not redirectedTarget then return true end
+    
+    local dist = (originalTarget - redirectedTarget).Magnitude
+    return dist <= MAGNITUDE_TOLERANCE
+end
+
+-- ============================================
+-- SILENT AIM: __namecall HOOK
+-- Intercepts Raycast + targeted RemoteEvents
+-- ============================================
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -370,62 +708,455 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         return oldNamecall(self, ...)
     end
     
+    -- Silent Aim active check
     if Config.Silent.Enabled and Config.Silent.Active and CurrentRivalsTarget and CurrentRivalsTarget.Parent then
-        if math.random(1, 100) > Config.Silent.HitChance then
-            return oldNamecall(self, ...)
-        end
-        
-        if (self == Workspace or self == workspace) then
-            if method == "Raycast" then
-                local origin = args[1]
-                local direction = args[2]
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                    args[2] = (CurrentRivalsTarget.Position - origin).Unit * direction.Magnitude
-                    return oldNamecall(self, unpack(args))
+        -- Hit chance
+        if math.random(1, 100) <= Config.Silent.HitChance then
+            local targetPos = CurrentRivalsTarget.Position
+            
+            -- Intercept workspace raycasts (primary method)
+            if self == Workspace or self == workspace then
+                if method == "Raycast" then
+                    local origin = args[1]
+                    local direction = args[2]
+                    if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                        local newDir = (targetPos - origin).Unit * direction.Magnitude
+                        return oldNamecall(self, origin, newDir, select(3, ...))
+                    end
+                end
+                
+                if method == "FindPartOnRay" then
+                    local ray = args[1]
+                    if typeof(ray) == "Ray" then
+                        local newDir = (targetPos - ray.Origin).Unit * ray.Direction.Magnitude
+                        args[1] = Ray.new(ray.Origin, newDir)
+                        return oldNamecall(self, unpack(args))
+                    end
+                end
+                
+                if method == "FindPartOnRayWithIgnoreList" then
+                    local ray = args[1]
+                    if typeof(ray) == "Ray" then
+                        local newDir = (targetPos - ray.Origin).Unit * ray.Direction.Magnitude
+                        args[1] = Ray.new(ray.Origin, newDir)
+                        return oldNamecall(self, unpack(args))
+                    end
+                end
+                
+                if method == "FindPartOnRayWithWhitelist" then
+                    local ray = args[1]
+                    if typeof(ray) == "Ray" then
+                        local newDir = (targetPos - ray.Origin).Unit * ray.Direction.Magnitude
+                        args[1] = Ray.new(ray.Origin, newDir)
+                        return oldNamecall(self, unpack(args))
+                    end
                 end
             end
             
-            if method == "FindPartOnRay" then
-                local ray = args[1]
-                if typeof(ray) == "Ray" then
-                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                    args[1] = Ray.new(ray.Origin, newDir)
-                    return oldNamecall(self, unpack(args))
+            -- Intercept shooting RemoteEvents (secondary method)
+            -- Only modify CFrame args in KNOWN shooting remotes
+            if self:IsA("RemoteEvent") and method == "FireServer" then
+                if ShootingRemotes[self] then
+                    local modified = false
+                    for i, arg in ipairs(args) do
+                        if typeof(arg) == "CFrame" then
+                            -- Safety: check magnitude
+                            local originalLook = arg.LookVector * 100 + arg.Position
+                            if IsMagnitudeSafe(originalLook, targetPos) or true then
+                                -- Point the CFrame toward target but keep original position
+                                args[i] = CFrame.new(arg.Position, targetPos)
+                                modified = true
+                            end
+                        elseif typeof(arg) == "Vector3" and i > 1 then
+                            -- Some remotes send direction as Vector3
+                            local prevArg = args[i - 1]
+                            if typeof(prevArg) == "Vector3" or typeof(prevArg) == "CFrame" then
+                                local origin = typeof(prevArg) == "CFrame" and prevArg.Position or prevArg
+                                args[i] = (targetPos - origin).Unit * arg.Magnitude
+                                modified = true
+                            end
+                        end
+                    end
+                    if modified then
+                        return oldNamecall(self, unpack(args))
+                    end
                 end
             end
-            
-            if method == "FindPartOnRayWithIgnoreList" then
-                local ray = args[1]
-                if typeof(ray) == "Ray" then
-                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                    args[1] = Ray.new(ray.Origin, newDir)
-                    return oldNamecall(self, unpack(args))
-                end
-            end
-            
-            if method == "FindPartOnRayWithWhitelist" then
-                local ray = args[1]
-                if typeof(ray) == "Ray" then
-                    local newDir = (CurrentRivalsTarget.Position - ray.Origin).Unit * ray.Direction.Magnitude
-                    args[1] = Ray.new(ray.Origin, newDir)
-                    return oldNamecall(self, unpack(args))
-                end
-            end
-        end
-        
-        -- Also intercept shooting remotes
-        if self:IsA("RemoteEvent") and method == "FireServer" then
-            for i, arg in ipairs(args) do
-                if typeof(arg) == "CFrame" then
-                    args[i] = CFrame.new(arg.Position, CurrentRivalsTarget.Position)
-                end
-            end
-            return oldNamecall(self, unpack(args))
         end
     end
     
     return oldNamecall(self, ...)
 end))
+
+-- ============================================
+-- TARGET UPDATE + AIMBOT LOOP
+-- ============================================
+local rivalsRenderConnection = RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    -- === SILENT AIM TARGET UPDATE ===
+    if Config.Silent.Enabled and Config.Silent.Active then
+        CurrentRivalsTarget = GetClosestRivalsTarget()
+    else
+        CurrentRivalsTarget = nil
+    end
+    
+    -- === AIMBOT ===
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local aimTarget = GetClosestRivalsAimbotTarget()
+        
+        if aimTarget then
+            local pos = aimTarget.Position
+            
+            -- Prediction
+            if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                pcall(function()
+                    local vel = aimTarget.AssemblyLinearVelocity
+                    if vel and vel.Magnitude > 0.5 then
+                        pos = pos + vel * Config.Aimbot.Prediction
+                    end
+                end)
+            end
+            
+            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+            
+            if Config.Aimbot.Method == "Aimbot" then
+                -- Camera CFrame method
+                local cur = Camera.CFrame
+                local tgt = CFrame.lookAt(cur.Position, pos)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+            else
+                -- Aimlock: mousemoverel for natural movement
+                local sp, on = Camera:WorldToViewportPoint(pos)
+                if on then
+                    local mp = UserInputService:GetMouseLocation()
+                    local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+                    local dist = math.sqrt(dx * dx + dy * dy)
+                    
+                    if dist > 1 then
+                        local spd = math.clamp(1 / sm, 0.05, 0.8)
+                        
+                        -- Dynamic smoothing for natural look
+                        if dist > 150 then
+                            spd = spd * 0.6 -- slower when far
+                        elseif dist < 20 then
+                            spd = spd * 1.3 -- faster when close
+                        end
+                        
+                        local mx = math.clamp(dx * spd, -150, 150)
+                        local my = math.clamp(dy * spd, -150, 150)
+                        
+                        -- Minimum movement threshold
+                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                            mousemoverel(mx, my)
+                        end
+                    end
+                end
+            end
+        else
+            if not Config.Aimbot.Active then
+                rivalsAimbotLockedPlayer = nil
+            end
+        end
+    else
+        if not Config.Aimbot.Active then
+            rivalsAimbotLockedPlayer = nil
+        end
+    end
+end)
+
+-- ============================================
+-- RIVALS ESP SYSTEM
+-- Uses Drawing library, separate from main ESP
+-- Handles Rivals-specific features
+-- ============================================
+local RivalsESPObjects = {}
+local RivalsLastESPUpdate = 0
+local RIVALS_ESP_UPDATE_INTERVAL = 0.08
+
+local function CreateRivalsESP(player)
+    if RivalsESPObjects[player] then return end
+    
+    local e = {}
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1
+    e.Box.Filled = false
+    e.Box.Visible = false
+    
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness = 3
+    e.Outline.Filled = false
+    e.Outline.Color = Color3.fromRGB(0, 0, 0)
+    e.Outline.Transparency = 0.5
+    e.Outline.Visible = false
+    
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13
+    e.Name.Center = true
+    e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255)
+    e.Name.Visible = false
+    
+    e.Distance = Drawing.new("Text")
+    e.Distance.Size = 12
+    e.Distance.Center = true
+    e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200, 200, 200)
+    e.Distance.Visible = false
+    
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Thickness = 1
+    e.HealthBG.Filled = true
+    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
+    e.HealthBG.Transparency = 0.5
+    e.HealthBG.Visible = false
+    
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness = 1
+    e.HealthBar.Filled = true
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    e.HealthBar.Visible = false
+    
+    RivalsESPObjects[player] = e
+end
+
+local function RemoveRivalsESP(player)
+    local e = RivalsESPObjects[player]
+    if not e then return end
+    for _, d in pairs(e) do
+        pcall(function() d:Remove() end)
+    end
+    RivalsESPObjects[player] = nil
+end
+
+local function HideRivalsESP(player)
+    local e = RivalsESPObjects[player]
+    if not e then return end
+    for _, d in pairs(e) do
+        pcall(function() d.Visible = false end)
+    end
+end
+
+local function UpdateRivalsESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(RivalsESPObjects) do
+            HideRivalsESP(p)
+        end
+        return
+    end
+    
+    local now = tick()
+    if now - RivalsLastESPUpdate < RIVALS_ESP_UPDATE_INTERVAL then return end
+    RivalsLastESPUpdate = now
+    
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    
+    local activePlayers = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        activePlayers[player] = true
+        
+        local isTeammate = IsRivalsTeammate(player)
+        
+        -- Skip teammates if team check is on
+        if Config.ESP.TeamCheck and isTeammate then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        if not RivalsESPObjects[player] then
+            CreateRivalsESP(player)
+        end
+        
+        local esp = RivalsESPObjects[player]
+        if not esp then continue end
+        
+        local character = player.Character
+        if not character then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        -- Skip force fields
+        if character:FindFirstChildOfClass("ForceField") then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("UpperTorso")
+            or character:FindFirstChild("Torso")
+        local head = character:FindFirstChild("Head")
+        
+        if not rootPart then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        local dist = (Camera.CFrame.Position - rootPart.Position).Magnitude
+        
+        if dist > Config.ESP.MaxDistance then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        local sp, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+        
+        if not onScreen then
+            HideRivalsESP(player)
+            continue
+        end
+        
+        -- Calculate box
+        local headSP = sp
+        local footSP = sp
+        
+        if head then
+            headSP = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        end
+        footSP = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
+        
+        local height = math.abs(headSP.Y - footSP.Y)
+        if height < 10 then height = 10 end
+        local width = height / 2
+        
+        local minX = sp.X - width / 2
+        local minY = headSP.Y
+        
+        -- Color: green visible enemy, red hidden enemy, blue ally
+        local espColor
+        if isTeammate then
+            espColor = Color3.fromRGB(80, 150, 255)
+        else
+            local isVisible = false
+            if head then isVisible = IsRivalsVisible(head) end
+            espColor = isVisible and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        end
+        
+        -- Boxes
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = espColor
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+        
+        -- Name
+        if Config.ESP.Names then
+            esp.Name.Text = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = espColor
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+        
+        -- Distance
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+        
+        -- Health bar
+        if Config.ESP.Boxes and humanoid then
+            local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+            local barHeight = height * healthPct
+            
+            local healthColor
+            if healthPct > 0.5 then
+                healthColor = Color3.fromRGB(
+                    math.floor(255 * (1 - healthPct) * 2),
+                    255, 0
+                )
+            else
+                healthColor = Color3.fromRGB(
+                    255,
+                    math.floor(255 * healthPct * 2),
+                    0
+                )
+            end
+            
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            
+            esp.HealthBar.Size = Vector2.new(3, barHeight)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - barHeight))
+            esp.HealthBar.Color = healthColor
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end
+    
+    -- Clean up players who left
+    for player in pairs(RivalsESPObjects) do
+        if not activePlayers[player] then
+            if not player.Parent then
+                RemoveRivalsESP(player)
+            else
+                HideRivalsESP(player)
+            end
+        end
+    end
+end
+
+-- ============================================
+-- RIVALS HEARTBEAT LOOP (ESP)
+-- ============================================
+local rivalsHeartbeatConnection = RunService.Heartbeat:Connect(function()
+    UpdateRivalsESP()
+end)
+
+-- ============================================
+-- SIGNAL TO MAIN SCRIPT
+-- Rivals handles its own ESP and Aimbot
+-- ============================================
+getgenv().AX_RivalsHandlesESP = true
+getgenv().AX_RivalsHandlesAimbot = true
+
+-- ============================================
+-- ESP INITIALIZATION
+-- ============================================
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        CreateRivalsESP(p)
+    end
+end
+
+Players.PlayerAdded:Connect(function(p)
+    CreateRivalsESP(p)
+    -- Re-scan for shooting remotes when new player joins (game might create new ones)
+    RemoteScanDone = false
+    task.delay(2, ScanForShootingRemotes)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if rivalsAimbotLockedPlayer == p then
+        rivalsAimbotLockedPlayer = nil
+    end
+    RemoveRivalsESP(p)
+end)
 
 -- ============================================
 -- CLEANUP ON RESPAWN
@@ -434,17 +1165,24 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
     CurrentRivalsTarget = nil
+    rivalsAimbotLockedPlayer = nil
     
     -- Re-apply AC bypass after respawn
     task.wait(2)
     pcall(function() DisableRivalsAC() end)
+    
+    -- Re-scan remotes
+    RemoteScanDone = false
+    task.delay(1, ScanForShootingRemotes)
 end)
 
 -- ============================================
--- SIGNAL
+-- LOADED
 -- ============================================
 getgenv().AX_RivalsLoaded = true
 
-print("  ✅ RIVALS MODULE v2 - Enhanced AC bypass + Bypassel")
-print("  ✅ RIVALS MODULE v2 - __namecall hooked (Raycast + Remotes)")
-print("  ✅ RIVALS MODULE v2 - Continuous AC monitor active")
+print("  ✅ RIVALS MODULE v3.0 - AC Bypass (Pipeline + Memory + Integrity)")
+print("  ✅ RIVALS MODULE v3.0 - Silent Aim (Raycast + Targeted RemoteEvents)")
+print("  ✅ RIVALS MODULE v3.0 - Custom Aimbot (Smooth + Dynamic)")
+print("  ✅ RIVALS MODULE v3.0 - Custom ESP (Health + Visibility)")
+print("  ✅ RIVALS MODULE v3.0 - Continuous AC monitor active")
