@@ -84,7 +84,7 @@ local function DisableRivalsAC()
         end
     end)
 
-    -- Disable error connections (but do NOT hook .Connect itself)
+    -- Disable error connections (safe method - only Disable, NOT hook .Connect)
     pcall(function()
         if not getconnections then return end
         local SC = cloneref(game:GetService("ScriptContext"))
@@ -156,7 +156,7 @@ task.spawn(function()
                 end
             end)
 
-            -- Re-disable errors (safe method)
+            -- Re-disable errors (safe method - only Disable)
             pcall(function()
                 if not getconnections then return end
                 local SC = cloneref(game:GetService("ScriptContext"))
@@ -224,7 +224,7 @@ local function IsRivalsVisible(targetPart)
     if not result then return true end
     if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
     -- Secondary rays
-    for _, offset in ipairs({Vector3.new(0,0.3,0), Vector3.new(0,-0.3,0)}) do
+    for _, offset in ipairs({Vector3.new(0, 0.3, 0), Vector3.new(0, -0.3, 0)}) do
         local oPos = targetPart.Position + offset
         local oDir = oPos - origin
         local oResult = Workspace:Raycast(origin, oDir.Unit * (oDir.Magnitude - 0.3), params)
@@ -251,7 +251,7 @@ local function GetRivalsTargetPart(character, setting)
                 local p = character:FindFirstChild(n)
                 if p and p:IsA("BasePart") then table.insert(valid, n) end
             end
-            if #valid > 0 then rivalsRandomPart = valid[math.random(1,#valid)] end
+            if #valid > 0 then rivalsRandomPart = valid[math.random(1, #valid)] end
             rivalsRandomSwitch = t
         end
         local p = character:FindFirstChild(rivalsRandomPart)
@@ -310,7 +310,7 @@ local function GetRivalsAimbotPart(character)
                 local p = character:FindFirstChild(n)
                 if p and p:IsA("BasePart") then table.insert(valid, n) end
             end
-            if #valid > 0 then rivalsAimbotRandom = valid[math.random(1,#valid)] end
+            if #valid > 0 then rivalsAimbotRandom = valid[math.random(1, #valid)] end
             rivalsAimbotSwitch = t
         end
         local p = character:FindFirstChild(rivalsAimbotRandom)
@@ -451,67 +451,147 @@ local RivalsLastESP = 0
 local function CreateRivalsESP(player)
     if RivalsESP[player] then return end
     local e = {}
-    e.Box = Drawing.new("Square") e.Box.Thickness=1 e.Box.Filled=false e.Box.Visible=false
-    e.Outline = Drawing.new("Square") e.Outline.Thickness=3 e.Outline.Filled=false e.Outline.Color=Color3.fromRGB(0,0,0) e.Outline.Transparency=0.5 e.Outline.Visible=false
-    e.Name = Drawing.new("Text") e.Name.Size=13 e.Name.Center=true e.Name.Outline=true e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
-    e.Distance = Drawing.new("Text") e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
-    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness=1 e.HealthBG.Filled=true e.HealthBG.Color=Color3.fromRGB(0,0,0) e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
-    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness=1 e.HealthBar.Filled=true e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
+    e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Visible = false
+    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0,0,0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255,255,255) e.Name.Visible = false
+    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
+    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0,0,0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
     RivalsESP[player] = e
 end
-local function RemoveRivalsESP(p) local e=RivalsESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d:Remove() end) end RivalsESP[p]=nil end
-local function HideRivalsESP(p) local e=RivalsESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d.Visible=false end) end end
+
+local function RemoveRivalsESP(p)
+    local e = RivalsESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    RivalsESP[p] = nil
+end
+
+local function HideRivalsESP(p)
+    local e = RivalsESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
 
 local function UpdateRivalsESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(RivalsESP) do HideRivalsESP(p) end return
+        for p in pairs(RivalsESP) do HideRivalsESP(p) end
+        return
     end
-    local now = tick() if now - RivalsLastESP < 0.08 then return end RivalsLastESP = now
-    Camera = Workspace.CurrentCamera if not Camera then return end
+
+    local now = tick()
+    if now - RivalsLastESP < 0.08 then return end
+    RivalsLastESP = now
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
     local active = {}
+
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         active[player] = true
+
         local isTm = IsRivalsTeammate(player)
-        if Config.ESP.TeamCheck and isTm then HideRivalsESP(player) continue end
+
+        if Config.ESP.TeamCheck and isTm then
+            HideRivalsESP(player)
+            continue
+        end
+
         if not RivalsESP[player] then CreateRivalsESP(player) end
-        local esp = RivalsESP[player] if not esp then continue end
+        local esp = RivalsESP[player]
+        if not esp then continue end
+
         local c = player.Character
         if not c then HideRivalsESP(player) continue end
         local h = c:FindFirstChildOfClass("Humanoid")
         if not h or h.Health <= 0 then HideRivalsESP(player) continue end
         if c:FindFirstChildOfClass("ForceField") then HideRivalsESP(player) continue end
+
         local rp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
         local head = c:FindFirstChild("Head")
+
         if not rp then HideRivalsESP(player) continue end
+
         local dist = (Camera.CFrame.Position - rp.Position).Magnitude
         if dist > Config.ESP.MaxDistance then HideRivalsESP(player) continue end
+
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideRivalsESP(player) continue end
-        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0)) or sp
-        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0))
+
+        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0)) or sp
+        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
         local width = height / 2
-        local minX, minY = sp.X - width/2, hSP.Y
-        local col = isTm and Color3.fromRGB(80,150,255) or ((head and IsRivalsVisible(head)) and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50))
+        local minX, minY = sp.X - width / 2, hSP.Y
+
+        local col
+        if isTm then
+            col = Color3.fromRGB(80, 150, 255)
+        else
+            local isVis = head and IsRivalsVisible(head) or false
+            col = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        end
+
         if Config.ESP.Boxes then
-            esp.Outline.Size=Vector2.new(width+2,height+2) esp.Outline.Position=Vector2.new(minX-1,minY-1) esp.Outline.Visible=true
-            esp.Box.Size=Vector2.new(width,height) esp.Box.Position=Vector2.new(minX,minY) esp.Box.Color=col esp.Box.Visible=true
-        else esp.Box.Visible=false esp.Outline.Visible=false end
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = col
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+
         if Config.ESP.Names then
-            esp.Name.Text=player.DisplayName or player.Name esp.Name.Position=Vector2.new(minX+width/2,minY-16) esp.Name.Color=col esp.Name.Visible=true
-        else esp.Name.Visible=false end
+            esp.Name.Text = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = col
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+
         if Config.ESP.Distance then
-            esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2) esp.Distance.Visible=true
-        else esp.Distance.Visible=false end
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+
         if Config.ESP.Boxes and h then
-            local pct=math.clamp(h.Health/h.MaxHealth,0,1) local bh=height*pct
-            local hc=pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
-            esp.HealthBG.Size=Vector2.new(3,height) esp.HealthBG.Position=Vector2.new(minX-6,minY) esp.HealthBG.Visible=true
-            esp.HealthBar.Size=Vector2.new(3,bh) esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh)) esp.HealthBar.Color=hc esp.HealthBar.Visible=true
-        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+            local pct = math.clamp(h.Health / h.MaxHealth, 0, 1)
+            local bh = height * pct
+            local hc
+            if pct > 0.5 then
+                hc = Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
+            else
+                hc = Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+            end
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
+            esp.HealthBar.Color = hc
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
     end
-    for p in pairs(RivalsESP) do if not active[p] then if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end end end
+
+    -- Cleanup
+    for p in pairs(RivalsESP) do
+        if not active[p] then
+            if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end
+        end
+    end
 end
 
 -- ============================================
@@ -548,7 +628,7 @@ RunService.RenderStepped:Connect(function()
                 if on then
                     local mp = UserInputService:GetMouseLocation()
                     local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-                    local d = math.sqrt(dx*dx + dy*dy)
+                    local d = math.sqrt(dx * dx + dy * dy)
                     if d > 1 then
                         local spd = math.clamp(1 / sm, 0.05, 0.8)
                         if d > 150 then spd = spd * 0.6
@@ -578,15 +658,27 @@ getgenv().AX_RivalsLoaded = true
 getgenv().AX_RivalsHandlesAimbot = true
 getgenv().AX_RivalsHandlesESP = true
 
-for _, p in ipairs(Players:GetPlayers()) do if p ~= LocalPlayer then CreateRivalsESP(p) end end
-Players.PlayerAdded:Connect(function(p) CreateRivalsESP(p) RemoteScanDone = false task.delay(2, ScanForShootingRemotes) end)
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then CreateRivalsESP(p) end
+end
+Players.PlayerAdded:Connect(function(p)
+    CreateRivalsESP(p)
+    RemoteScanDone = false
+    task.delay(2, ScanForShootingRemotes)
+end)
 Players.PlayerRemoving:Connect(function(p)
     if rivalsAimbotLocked == p then rivalsAimbotLocked = nil end
     RemoveRivalsESP(p)
 end)
 LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1) Camera = Workspace.CurrentCamera CurrentRivalsTarget = nil rivalsAimbotLocked = nil
-    task.wait(2) pcall(DisableRivalsAC) RemoteScanDone = false task.delay(1, ScanForShootingRemotes)
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentRivalsTarget = nil
+    rivalsAimbotLocked = nil
+    task.wait(2)
+    pcall(DisableRivalsAC)
+    RemoteScanDone = false
+    task.delay(1, ScanForShootingRemotes)
 end)
 
 print("  ✅ RIVALS v3.1 - Safe AC bypass (no freeze)")
