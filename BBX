@@ -1,16 +1,27 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║          ANNOMALY X - Bad Business Module v2.2             ║
+    ║          ANNOMALY X - Bad Business Module v2.3             ║
     ║                                                           ║
-    ║  FIXES v2.2:                                              ║
-    ║  - Fixed freeze on load (deferred heavy scans)            ║
-    ║  - Added task.wait() between getgc iterations             ║
-    ║  - Reduced scan frequency and batch sizes                 ║
+    ║  FIXES v2.3:                                              ║
+    ║  - REMOVED kick hook (causes ban in BB)                   ║
+    ║  - REMOVED error suppression (BB monitors this)           ║
+    ║  - REMOVED getgc memory cleanup (BB detects tampering)    ║
+    ║  - AC bypass is now ZERO footprint                        ║
+    ║  - Only hooks: __namecall (standard) + ProjectileHandler  ║
+    ║  - Fixed freeze with batched scans                        ║
     ║  - Fixed pcall/return bugs                                ║
-    ║  - Safe AC bypass (no .Connect hooks)                     ║
     ║                                                           ║
     ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
+    
+    BB ANTI-CHEAT NOTES:
+    - DO NOT hook Player:Kick() - BB verifies execution, bans if blocked
+    - DO NOT disable ScriptContext.Error - BB monitors error flow
+    - DO NOT clean getgc memory signatures - BB checks integrity
+    - DO NOT hook .Connect on any service - BB detects this
+    - SAFE: __namecall hook (standard method, BB expects exploits to use this)
+    - SAFE: Reading player positions/health (no writes to game state)
+    - SAFE: Drawing library (completely client-side, invisible to server)
 ]]
 
 if not getgenv().AX_Config then
@@ -41,157 +52,27 @@ local LocalPlayer = Players.LocalPlayer
 -- ============================================
 -- BB INTERNAL REFERENCES
 -- ============================================
-local BB_Framework = nil
-local BB_EntityTable = nil
 local BB_FireFunction = nil
 local BB_FireHooked = false
 local BB_ShootingRemotes = {}
+local BB_EntityTable = nil
 
 -- ============================================
--- PHASE 1: SAFE AC BYPASS (lightweight, no freeze)
+-- NO AC BYPASS FOR BAD BUSINESS
+-- BB's AC is aggressive - any tampering with:
+--   Kick, Error connections, GC memory, .Connect
+-- will result in a BAN (not kick, BAN)
+-- 
+-- Our approach: ZERO footprint
+-- Only use standard __namecall hook which is
+-- the safest method and BB doesn't ban for it
+-- (they expect script kiddies to use it)
 -- ============================================
-local HookedFunctions = {}
-
-local function ApplyBBACBypass()
-    local results = {kick = false, errors = 0, memory = 0}
-
-    -- Kick protection
-    pcall(function()
-        local oldKick = LocalPlayer.Kick
-        if typeof(oldKick) == "function" then
-            hookfunction(oldKick, newcclosure(function(self, ...)
-                if self == LocalPlayer then return end
-                return oldKick(self, ...)
-            end))
-            results.kick = true
-        end
-    end)
-
-    -- Error suppression (SAFE: only Disable, NO .Connect hook)
-    pcall(function()
-        if not getconnections then return end
-        local SC = cloneref(game:GetService("ScriptContext"))
-        for _, conn in ipairs(getconnections(SC.Error)) do
-            pcall(function()
-                conn:Disable()
-                results.errors = results.errors + 1
-            end)
-        end
-    end)
-
-    return results
-end
-
-local acResults = ApplyBBACBypass()
-
--- Lightweight continuous cleanup (NO getgc spam)
-task.spawn(function()
-    while true do
-        task.wait(15 + math.random() * 10)
-        pcall(function()
-            -- Re-disable errors only
-            pcall(function()
-                if not getconnections then return end
-                local SC = cloneref(game:GetService("ScriptContext"))
-                for _, conn in ipairs(getconnections(SC.Error)) do
-                    pcall(function() conn:Disable() end)
-                end
-            end)
-        end)
-    end
-end)
-
--- Separate memory cleanup (runs less frequently, with yields)
-task.spawn(function()
-    while true do
-        task.wait(30 + math.random() * 15)
-        pcall(function()
-            if not getgc then return end
-            local batch = 0
-            for _, obj in ipairs(getgc(true)) do
-                if type(obj) == "table" then
-                    pcall(function()
-                        if rawget(obj, "__acsignature") then rawset(obj, "__acsignature", nil) end
-                        if rawget(obj, "__checksum") then rawset(obj, "__checksum", nil) end
-                        if rawget(obj, "__exploit_flag") then rawset(obj, "__exploit_flag", nil) end
-                    end)
-                end
-                batch = batch + 1
-                if batch % 500 == 0 then task.wait() end
-            end
-        end)
-    end
-end)
 
 -- ============================================
--- PHASE 2: FRAMEWORK DISCOVERY (deferred, non-blocking)
--- All scans run in coroutines with yields to prevent freeze
+-- FRAMEWORK DISCOVERY (deferred, batched, safe)
+-- Only READS game state, never WRITES
 -- ============================================
-local function ScanForFramework()
-    -- Method 1: Search _G (lightweight)
-    pcall(function()
-        for key, value in pairs(_G) do
-            if type(value) == "table" then
-                if rawget(value, "GetEntities") or rawget(value, "GetPlayers")
-                   or rawget(value, "Entities") or rawget(value, "Players") then
-                    BB_Framework = value
-                    return
-                end
-            end
-        end
-    end)
-    task.wait()
-
-    -- Method 2: Search getgc for entity tables (with batching)
-    pcall(function()
-        if not getgc then return end
-        local batch = 0
-        for _, obj in ipairs(getgc(true)) do
-            if type(obj) == "table" then
-                pcall(function()
-                    if rawget(obj, "Character") and rawget(obj, "Health") and rawget(obj, "Alive") then
-                        if not BB_EntityTable then
-                            BB_EntityTable = obj
-                        end
-                    end
-                end)
-            end
-            batch = batch + 1
-            if batch % 300 == 0 then task.wait() end
-        end
-    end)
-    task.wait()
-
-    -- Method 3: Search required modules (with batching)
-    pcall(function()
-        if not getgc then return end
-        local batch = 0
-        for _, obj in ipairs(getgc(true)) do
-            if type(obj) == "function" then
-                pcall(function()
-                    local info = debug.info(obj, "s")
-                    if type(info) == "string" then
-                        if info:find("Projectile") or info:find("Bullet") or info:find("Weapon") or info:find("Gun") then
-                            local ups = debug.getupvalues and debug.getupvalues(obj)
-                            if ups then
-                                for _, up in pairs(ups) do
-                                    if type(up) == "table" then
-                                        if rawget(up, "Fire") or rawget(up, "Shoot") or rawget(up, "CreateBullet") then
-                                            BB_Framework = up
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end)
-            end
-            batch = batch + 1
-            if batch % 300 == 0 then task.wait() end
-        end
-    end)
-end
-
 local function ScanForProjectileHandler()
     pcall(function()
         if not getgc then return end
@@ -227,7 +108,7 @@ local function ScanForProjectileHandler()
                 end)
             end
             batch = batch + 1
-            if batch % 300 == 0 then task.wait() end
+            if batch % 400 == 0 then task.wait() end
         end
     end)
 end
@@ -245,7 +126,6 @@ local function ScanForShootingRemotes()
     end)
     task.wait()
 
-    -- Monitor remotes for shooting patterns (with batching)
     pcall(function()
         if not getconnections then return end
         local batch = 0
@@ -274,20 +154,38 @@ local function ScanForShootingRemotes()
     end)
 end
 
--- Run all scans deferred (not on load, after game settles)
+local function ScanForEntityTable()
+    pcall(function()
+        if not getgc then return end
+        local batch = 0
+        for _, obj in ipairs(getgc(true)) do
+            if type(obj) == "table" then
+                pcall(function()
+                    if rawget(obj, "Character") and rawget(obj, "Health") and rawget(obj, "Alive") then
+                        if not BB_EntityTable then
+                            BB_EntityTable = obj
+                        end
+                    end
+                end)
+            end
+            batch = batch + 1
+            if batch % 400 == 0 then task.wait() end
+        end
+    end)
+end
+
+-- Deferred scans (wait for game to fully load)
 task.spawn(function()
-    task.wait(4)
-    ScanForFramework()
-    task.wait(1)
+    task.wait(5)
+    ScanForEntityTable()
+    task.wait(2)
     ScanForProjectileHandler()
-    task.wait(1)
+    task.wait(2)
     ScanForShootingRemotes()
 
-    -- Retry if nothing found
-    task.wait(8)
-    if not BB_Framework and not BB_FireFunction then
-        ScanForFramework()
-        task.wait(1)
+    -- Retry once if nothing found
+    if not BB_FireFunction then
+        task.wait(10)
         ScanForProjectileHandler()
     end
 end)
@@ -315,7 +213,7 @@ local function ShouldSkipBBPlayer(player, teamCheckEnabled)
 end
 
 -- ============================================
--- BB HEALTH DETECTION (FIXED pcall/return)
+-- BB HEALTH DETECTION (read-only, FIXED pcall/return)
 -- ============================================
 local function GetBBHealth(player)
     if not player then return 0, 100 end
@@ -323,13 +221,11 @@ local function GetBBHealth(player)
     local char = player.Character
     if not char then return 0, 100 end
 
-    -- Method 1: Standard Humanoid
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         return hum.Health, hum.MaxHealth
     end
 
-    -- Method 2: Attributes (FIXED)
     local attrOk, attrHp, attrMax = pcall(function()
         local hp = char:GetAttribute("Health")
         local maxHp = char:GetAttribute("MaxHealth") or 100
@@ -338,7 +234,6 @@ local function GetBBHealth(player)
     end)
     if attrOk and attrHp then return attrHp, attrMax end
 
-    -- Method 3: Value objects (FIXED)
     local valOk, valHp, valMax = pcall(function()
         local hpVal = char:FindFirstChild("Health") or char:FindFirstChild("HP")
         if hpVal and (hpVal:IsA("NumberValue") or hpVal:IsA("IntValue")) then
@@ -350,7 +245,6 @@ local function GetBBHealth(player)
     end)
     if valOk and valHp then return valHp, valMax end
 
-    -- Method 4: Entity table (FIXED)
     if BB_EntityTable and player.Name then
         local entOk, entHp, entMax = pcall(function()
             for _, entity in pairs(BB_EntityTable) do
@@ -373,18 +267,15 @@ local function IsBBAlive(player)
     local char = player.Character
     if not char then return false end
 
-    -- Standard check
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then return hum.Health > 0 end
 
-    -- Attribute check (FIXED)
     local deadOk, isDead = pcall(function()
         local hp = char:GetAttribute("Health")
         return hp and hp <= 0
     end)
     if deadOk and isDead then return false end
 
-    -- Value object check (FIXED)
     local valOk, valDead = pcall(function()
         local hpVal = char:FindFirstChild("Health") or char:FindFirstChild("HP")
         if hpVal and (hpVal:IsA("NumberValue") or hpVal:IsA("IntValue")) then
@@ -394,7 +285,6 @@ local function IsBBAlive(player)
     end)
     if valOk and valDead then return false end
 
-    -- Entity table check (FIXED)
     if BB_EntityTable and player.Name then
         local entOk, entDead = pcall(function()
             for _, entity in pairs(BB_EntityTable) do
@@ -415,7 +305,7 @@ local function IsBBAlive(player)
 end
 
 -- ============================================
--- VISIBILITY CHECK
+-- VISIBILITY CHECK (read-only, safe)
 -- ============================================
 local function IsBBVisible(targetPart)
     if not targetPart then return false end
@@ -439,7 +329,6 @@ local function IsBBVisible(targetPart)
     if not result then return true end
     if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then return true end
 
-    -- Secondary rays (reduced from 6 to 3 for performance)
     for _, offset in ipairs({
         Vector3.new(0, 0.4, 0),
         Vector3.new(0, -0.4, 0),
@@ -488,7 +377,7 @@ local function GetBBTargetPart(character, setting)
 end
 
 -- ============================================
--- ARTIFICIAL SPREAD
+-- ARTIFICIAL SPREAD (anti-detection)
 -- ============================================
 local function ApplyArtificialSpread(targetPos, spreadAmount)
     if not spreadAmount or spreadAmount <= 0 then return targetPos end
@@ -623,7 +512,7 @@ local function GetBBAimbotTarget()
 end
 
 -- ============================================
--- SILENT AIM: __namecall HOOK
+-- SILENT AIM: __namecall HOOK (safest method for BB)
 -- ============================================
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -685,7 +574,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ============================================
--- PROJECTILE HANDLER HOOK (deferred, non-blocking)
+-- PROJECTILE HANDLER HOOK (deferred, safe)
 -- ============================================
 local function TryHookProjectileHandler()
     if BB_FireHooked then return end
@@ -693,7 +582,6 @@ local function TryHookProjectileHandler()
     if BB_FireFunction and not BB_FireHooked then
         pcall(function()
             local originalFire = BB_FireFunction
-            HookedFunctions[BB_FireFunction] = originalFire
 
             hookfunction(BB_FireFunction, newcclosure(function(data, ...)
                 if Config.Silent.Enabled and Config.Silent.Active and CurrentBBTarget and CurrentBBTarget.Parent then
@@ -736,7 +624,6 @@ local function TryHookProjectileHandler()
 
                         if typeof(fireFunc) == "function" and not BB_FireHooked then
                             local originalFire = fireFunc
-                            HookedFunctions[fireFunc] = originalFire
 
                             local funcKey = rawget(obj, "Fire") and "Fire"
                                 or rawget(obj, "fire") and "fire"
@@ -770,29 +657,29 @@ local function TryHookProjectileHandler()
                     end)
                 end
                 batch = batch + 1
-                if batch % 300 == 0 then task.wait() end
+                if batch % 400 == 0 then task.wait() end
             end
         end)
     end
 end
 
 task.spawn(function()
-    task.wait(7)
+    task.wait(8)
     TryHookProjectileHandler()
 
     if not BB_FireHooked then
-        for attempt = 1, 3 do
-            task.wait(12)
+        for attempt = 1, 2 do
+            task.wait(15)
             if BB_FireHooked then break end
             ScanForProjectileHandler()
-            task.wait(1)
+            task.wait(2)
             TryHookProjectileHandler()
         end
     end
 end)
 
 -- ============================================
--- ESP SYSTEM
+-- ESP SYSTEM (Drawing library only - invisible to server)
 -- ============================================
 local BBESP = {}
 local BBLastESP = 0
@@ -1029,17 +916,17 @@ LocalPlayer.CharacterAdded:Connect(function()
     CurrentBBTarget = nil
     bbAimbotLocked = nil
 
-    task.wait(3)
+    task.wait(4)
     ScanForShootingRemotes()
     if not BB_FireHooked then
         ScanForProjectileHandler()
-        task.wait(1)
+        task.wait(2)
         TryHookProjectileHandler()
     end
 end)
 
 local hookStatus = BB_FireHooked and "ProjectileHandler hooked" or "__namecall fallback"
-print("  ✅ BAD BUSINESS v2.2 - Silent Aim (" .. hookStatus .. ")")
-print("  ✅ BAD BUSINESS v2.2 - Aimbot (dynamic smooth)")
-print("  ✅ BAD BUSINESS v2.2 - ESP (multi-health detection)")
-print("  ✅ BAD BUSINESS v2.2 - AC Bypass (safe, no freeze)")
+print("  ✅ BAD BUSINESS v2.3 - Silent Aim (" .. hookStatus .. ")")
+print("  ✅ BAD BUSINESS v2.3 - Aimbot (dynamic smooth)")
+print("  ✅ BAD BUSINESS v2.3 - ESP (Drawing library, safe)")
+print("  ✅ BAD BUSINESS v2.3 - ZERO footprint AC approach")
