@@ -1,8 +1,10 @@
 --[[
-    ANNOMALY X - Combat Arena Module v10.0
+    ANNOMALY X - Combat Arena Module v10.1
     
     Silent Aim REMOVED - Not functional for Combat Arena
     Only ESP + Aimbot active
+    
+    v10.1: Fixed ESP TeamCheck not working
 ]]
 
 if not getgenv().AX_Config then
@@ -37,6 +39,37 @@ local Workspace = cloneref(game:GetService("Workspace"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- TEAM CHECK UTILITY
+-- Safe team check that handles nil Teams
+-- ============================================
+local function AreTeammates(player)
+    if not player or player == LocalPlayer then return true end
+    local ok, result = pcall(function()
+        if not player.Team or not LocalPlayer.Team then
+            return false
+        end
+        return player.Team == LocalPlayer.Team
+    end)
+    if ok then return result end
+    -- Fallback: try TeamColor
+    local ok2, result2 = pcall(function()
+        if not player.TeamColor or not LocalPlayer.TeamColor then
+            return false
+        end
+        return player.TeamColor == LocalPlayer.TeamColor
+    end)
+    if ok2 then return result2 end
+    return false
+end
+
+local function ShouldSkipPlayer(player, teamCheckEnabled)
+    if not player or player == LocalPlayer then return true end
+    if not player.Parent then return true end
+    if not teamCheckEnabled then return false end
+    return AreTeammates(player)
+end
 
 -- ============================================
 -- CACHED PLAYERS
@@ -186,21 +219,27 @@ local function UpdateAimbot()
 
     local target = nil
     local method = Config.Aimbot.Method or "Aimbot"
+    local teamCheck = Config.Aimbot.TeamCheck or false
 
     if method == "Aimlock"
         and AimLockedPlayer
         and AimLockedPlayer.Character then
-        local char = AimLockedPlayer.Character
-        local part = GetTargetPart(
-            char, Config.Aimbot.TargetPart or "Head"
-        )
-        if part and (
-            not (Config.Aimbot.VisibleCheck)
-            or IsVisible(part)
-        ) then
-            target = part
-        else
+        -- Validate locked player still valid
+        if ShouldSkipPlayer(AimLockedPlayer, teamCheck) then
             AimLockedPlayer = nil
+        else
+            local char = AimLockedPlayer.Character
+            local part = GetTargetPart(
+                char, Config.Aimbot.TargetPart or "Head"
+            )
+            if part and (
+                not (Config.Aimbot.VisibleCheck)
+                or IsVisible(part)
+            ) then
+                target = part
+            else
+                AimLockedPlayer = nil
+            end
         end
     end
 
@@ -211,11 +250,7 @@ local function UpdateAimbot()
             or UserInputService:GetMouseLocation()
 
         for _, player in ipairs(CachedPlayers) do
-            if not player or not player.Parent then continue end
-            if Config.Aimbot.TeamCheck
-                and player.Team == LocalPlayer.Team then
-                continue
-            end
+            if ShouldSkipPlayer(player, teamCheck) then continue end
 
             local data = GetCachedCharacterData(player)
             if not data then continue end
@@ -291,6 +326,7 @@ end
 
 -- ============================================
 -- ESP (CA-SPECIFIC)
+-- Now with proper TeamCheck support
 -- ============================================
 local CAESPObjects = {}
 local LastCAESPUpdate = 0
@@ -351,6 +387,8 @@ local function UpdateCAESP()
     Camera = Workspace.CurrentCamera
     if not Camera then return end
 
+    local espTeamCheck = Config.ESP.TeamCheck or false
+
     for _, player in ipairs(CachedPlayers) do
         if not player or not player.Parent then continue end
 
@@ -360,6 +398,12 @@ local function UpdateCAESP()
 
         local esp = CAESPObjects[player]
         if not esp then continue end
+
+        -- TeamCheck: if enabled and player is teammate, hide ESP
+        if ShouldSkipPlayer(player, espTeamCheck) then
+            HideCAESP(esp)
+            continue
+        end
 
         local visible = false
         local data = GetCachedCharacterData(player)
@@ -455,9 +499,9 @@ end)
 getgenv().AX_CALoaded = true
 
 print("══════════════════════════════════════")
-print("  ANNOMALY X - Combat Arena v10.0")
+print("  ANNOMALY X - Combat Arena v10.1")
 print("══════════════════════════════════════")
-print("  Silent Aim: ❌ DISABLED (not available for CA)")
-print("  ESP: ✅ ACTIVE")
-print("  Aimbot: ✅ ACTIVE")
+print("  Silent Aim: ❌ DISABLED")
+print("  ESP: ✅ ACTIVE (TeamCheck fixed)")
+print("  Aimbot: ✅ ACTIVE (TeamCheck fixed)")
 print("══════════════════════════════════════")
