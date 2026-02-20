@@ -1,17 +1,22 @@
 --[[
     ANNOMALY X - Rivals Module v3.3
     
-    Cambios v3.3 basados en análisis de AC Disabler público,
-    Disrupt, e informe técnico de seguridad:
-    
-    - LogService.MessageOut filtrado (no bloqueado completamente)
+    Cambios v3.3:
+    - Pipeline hook: return nil (no task.wait 9e9)
+    - Monitor continuo con pipeline rescan + full keys
+    - Silent Aim con predicción de velocidad
+    - Silent Aim limitado por ángulo máximo (server validation)
+    - Humanización de impactos (offset aleatorio en hitbox)
+    - Remote hook modifica Vector3 + CFrame + tablas nested
+    - Rate limit en modificaciones de raycast
     - Kick hook incluye variante lowercase
-    - Silent Aim limitado por ángulo máximo (server-side validation)
-    - Humanización de impactos (offset aleatorio dentro del hitbox)
+    - No duplica kick hook si main script ya lo hizo
     - Assertion checks al inicio
-    - Sin prints
-    - Protección contra __tostring traps
-    - Latencia considerada en predicción
+    - SafeToString contra __tostring traps
+    - Sin print statements
+    - Sin LogService.MessageOut hook (causa freeze)
+    
+    Creator: ElSacaLeche
 ]]
 
 if not getgenv().AX_Config then
@@ -21,7 +26,7 @@ end
 local Config = getgenv().AX_Config
 
 -- ============================================
--- ASSERTION CHECKS (from AC Disabler - good practice)
+-- ASSERTION CHECKS
 -- ============================================
 local _missing = {}
 local function _check(name, ref)
@@ -35,13 +40,13 @@ local hookfunction = _check("hookfunction", hookfunction or replaceclosure or de
 local hookmetamethod = _check("hookmetamethod", hookmetamethod)
 local getnamecallmethod = _check("getnamecallmethod", getnamecallmethod or get_namecall_method)
 local checkcaller = checkcaller or function() return false end
-local getconnections = _check("getconnections", getconnections)
-local getgc = _check("getgc", getgc)
+local getconnections = getconnections
+local getgc = getgc
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 -- Critical functions check
 if not hookfunction or not hookmetamethod or not getnamecallmethod then
-    return -- Cannot operate without these
+    return
 end
 
 local Players = cloneref(game:GetService("Players"))
@@ -53,11 +58,11 @@ local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
--- CONSTANTS (v3.3)
+-- CONSTANTS
 -- ============================================
-local MAX_SILENT_ANGLE_DEG = 15  -- Server rejects hits beyond ~15-20° deviation
-local HITBOX_OFFSET_SCALE = 0.3  -- Humanization: random offset within hitbox
-local MIN_SHOT_INTERVAL = 0.06   -- Don't modify every single raycast
+local MAX_SILENT_ANGLE_DEG = 15
+local HITBOX_OFFSET_SCALE = 0.3
+local MIN_SHOT_INTERVAL = 0.06
 
 local _lastShotModified = 0
 
@@ -72,10 +77,24 @@ local _acKeys = {
 }
 
 -- ============================================
--- PHASE 1: AC BYPASS (v3.3)
+-- SAFE TOSTRING (avoid __tostring traps)
+-- ============================================
+local function SafeToString(obj)
+    if obj == nil then return "nil" end
+    local ok, mt = pcall(getmetatable, obj)
+    if ok and mt then
+        local ok2, ts = pcall(rawget, mt, "__tostring")
+        if ok2 and ts then return "[protected]" end
+    end
+    local ok3, result = pcall(tostring, obj)
+    return ok3 and result or "[error]"
+end
+
+-- ============================================
+-- PHASE 1: AC BYPASS
 -- ============================================
 local function DisableRivalsAC()
-    local results = {pipeline = 0, remotes = 0, errors = 0, kick = false, memory = 0, logs = 0}
+    local results = {pipeline = 0, remotes = 0, errors = 0, kick = false, memory = 0}
 
     -- 1. AnalyticsPipelineController via getgc
     pcall(function()
@@ -116,7 +135,7 @@ local function DisableRivalsAC()
         end
     end)
 
-    -- 3. ScriptContext.Error - Disable connections
+    -- 3. ScriptContext.Error - Disable connections (safe method)
     pcall(function()
         if not getconnections then return end
         local SC = cloneref(game:GetService("ScriptContext"))
@@ -128,40 +147,7 @@ local function DisableRivalsAC()
         end
     end)
 
-    -- 4. LogService.MessageOut - FILTERED hook (v3.3)
-    -- Don't block ALL messages (causes freezes)
-    -- Only block messages that contain traceless error signatures
-    pcall(function()
-        if not getconnections then return end
-        local LogService = cloneref(game:GetService("LogService"))
-        for _, conn in pairs(getconnections(LogService.MessageOut)) do
-            if conn and conn.Function then
-                pcall(function()
-                    local originalFn = conn.Function
-                    hookfunction(conn.Function, newcclosure(function(message, messageType, ...)
-                        -- Block error messages with short stacktraces (traceless error detection)
-                        if messageType == Enum.MessageType.MessageError then
-                            if type(message) == "string" and #message < 10 then
-                                return -- Block traceless errors
-                            end
-                        end
-                        -- Block messages containing exploit-related keywords
-                        if type(message) == "string" then
-                            local lower = message:lower()
-                            if lower:find("exploit") or lower:find("cheat") or lower:find("inject") then
-                                return
-                            end
-                        end
-                        -- Allow all other messages through
-                        return originalFn(message, messageType, ...)
-                    end))
-                    results.logs = results.logs + 1
-                end)
-            end
-        end
-    end)
-
-    -- 5. Kick protection (both cases, like AC Disabler)
+    -- 4. Kick protection (both cases, skip if main already did it)
     if not getgenv()._AX_KickHooked then
         pcall(function()
             for _, kickName in ipairs({"Kick", "kick"}) do
@@ -179,7 +165,7 @@ local function DisableRivalsAC()
         end)
     end
 
-    -- 6. Memory signature cleanup
+    -- 5. Memory signature cleanup
     pcall(function()
         if not getgc then return end
         for _, obj in ipairs(getgc(true)) do
@@ -201,7 +187,7 @@ end
 
 local acResults = DisableRivalsAC()
 
--- Continuous AC monitor (v3.3: includes pipeline rescan + log filter + full keys)
+-- Continuous AC monitor
 task.spawn(function()
     while true do
         task.wait(10 + math.random() * 5)
@@ -266,20 +252,6 @@ task.spawn(function()
 end)
 
 -- ============================================
--- SAFE TOSTRING (v3.3: avoid __tostring traps)
--- ============================================
-local function SafeToString(obj)
-    local ok, result = pcall(function()
-        return rawget(getmetatable(obj) or {}, "__tostring")
-    end)
-    if ok and result then
-        -- Has custom __tostring, could be a trap
-        return "[protected]"
-    end
-    return tostring(obj)
-end
-
--- ============================================
 -- TEAM CHECK
 -- ============================================
 local function IsRivalsTeammate(player)
@@ -332,7 +304,7 @@ local function IsRivalsVisible(targetPart)
 end
 
 -- ============================================
--- ANGLE CHECK (v3.3: server validation compliance)
+-- ANGLE CHECK (server validation compliance)
 -- ============================================
 local function GetAngleToTarget(origin, currentDirection, targetPos)
     local toTarget = (targetPos - origin).Unit
@@ -343,7 +315,7 @@ local function GetAngleToTarget(origin, currentDirection, targetPos)
 end
 
 -- ============================================
--- HUMANIZATION (v3.3: random offset within hitbox)
+-- HUMANIZATION (random offset within hitbox)
 -- ============================================
 local function HumanizeTargetPos(targetPos, targetPart)
     if not targetPart then return targetPos end
@@ -387,7 +359,7 @@ local function GetRivalsTargetPart(character, setting)
 end
 
 -- ============================================
--- SILENT AIM TARGET (v3.3: with prediction + angle limit)
+-- SILENT AIM TARGET (with prediction + angle limit)
 -- ============================================
 local CurrentRivalsTarget = nil
 local CurrentRivalsTargetPos = nil
@@ -423,9 +395,9 @@ local function GetClosestRivalsTarget()
             end
         end)
 
-        -- v3.3: Check angle deviation from current aim
+        -- Check angle deviation from current aim
         local angle = GetAngleToTarget(camCF.Position, camCF.LookVector, pos)
-        if angle > MAX_SILENT_ANGLE_DEG then continue end  -- Server would reject this
+        if angle > MAX_SILENT_ANGLE_DEG then continue end
 
         local sp, on = Camera:WorldToViewportPoint(pos)
         if not on then continue end
@@ -517,7 +489,7 @@ local function GetRivalsAimbotTarget()
 end
 
 -- ============================================
--- SHOOTING REMOTE DETECTION (v3.3)
+-- SHOOTING REMOTE DETECTION
 -- ============================================
 local ShootingRemotes = {}
 local RemoteScanDone = false
@@ -555,7 +527,7 @@ local function IsLikelyDirection(v3, origin)
 end
 
 -- ============================================
--- __namecall HOOK (Silent Aim) v3.3
+-- __namecall HOOK (Silent Aim)
 -- Server-validated, humanized, angle-limited
 -- ============================================
 local oldNamecall
@@ -565,8 +537,8 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 
     if checkcaller() then return oldNamecall(self, ...) end
 
-    if Config.Silent.Enabled and Config.Silent.Active 
-       and CurrentRivalsTarget and CurrentRivalsTarget.Parent 
+    if Config.Silent.Enabled and Config.Silent.Active
+       and CurrentRivalsTarget and CurrentRivalsTarget.Parent
        and CurrentRivalsTargetPos then
 
         -- HitChance check
@@ -574,13 +546,13 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             return oldNamecall(self, ...)
         end
 
-        -- v3.3: Rate limit modifications (don't modify every raycast)
+        -- Rate limit modifications
         local now = tick()
         if now - _lastShotModified < MIN_SHOT_INTERVAL then
             return oldNamecall(self, ...)
         end
 
-        -- v3.3: Humanize target position
+        -- Humanize target position
         local targetPos = HumanizeTargetPos(CurrentRivalsTargetPos, CurrentRivalsTargetPart)
 
         -- Raycast hooks
@@ -588,7 +560,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             if method == "Raycast" then
                 local o, d = args[1], args[2]
                 if typeof(o) == "Vector3" and typeof(d) == "Vector3" then
-                    -- v3.3: Verify angle is within server tolerance
+                    -- Verify angle is within server tolerance
                     local angle = GetAngleToTarget(o, d, targetPos)
                     if angle <= MAX_SILENT_ANGLE_DEG then
                         _lastShotModified = now
@@ -597,7 +569,6 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         for i = 3, #args do newArgs[i] = args[i] end
                         return oldNamecall(self, unpack(newArgs))
                     end
-                    -- Angle too large, let original through
                 end
             end
             if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
@@ -619,6 +590,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                 local modified = false
                 local foundOrigin = nil
 
+                -- First pass: find origin
                 for i, arg in ipairs(args) do
                     if typeof(arg) == "Vector3" and arg.Magnitude > 10 then
                         foundOrigin = arg break
@@ -628,9 +600,9 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                     end
                 end
 
+                -- Second pass: modify aim data
                 for i, arg in ipairs(args) do
                     if typeof(arg) == "CFrame" then
-                        -- v3.3: Check angle before modifying
                         local angle = GetAngleToTarget(arg.Position, arg.LookVector, targetPos)
                         if angle <= MAX_SILENT_ANGLE_DEG then
                             args[i] = CFrame.new(arg.Position, targetPos)
@@ -671,7 +643,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 end))
 
 -- ============================================
--- ESP (same as v3.2)
+-- ESP
 -- ============================================
 local RivalsESP = {}
 local RivalsLastESP = 0
@@ -814,6 +786,7 @@ local function UpdateRivalsESP()
         end
     end
 
+    -- Cleanup disconnected players
     for p in pairs(RivalsESP) do
         if not active[p] then
             if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end
