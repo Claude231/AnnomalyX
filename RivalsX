@@ -1,9 +1,6 @@
 --[[
-    ANNOMALY X - Rivals Module v3.4 FIXED FOR RONIX (NO FREEZE)
-    → Eliminado por completo el hook del AnalyticsPipelineController (causaba freeze en Ronix)
-    → Eliminado el rescan continuo del pipeline
-    → Hook de __namecall retardado 8 segundos (más seguro al entrar)
-    → Todo lo demás igual: Silent Aim god, predicción, humanización, 15° límite, ESP con barra de vida, etc.
+    ANNOMALY X - Rivals Module v3.5 COMPLETE
+    RONIX SAFE - Silent Aim + ESP + Aimbot FUNCIONAL
 ]]
 
 if not getgenv().AX_Config then
@@ -12,14 +9,13 @@ end
 
 local Config = getgenv().AX_Config
 
--- ================== ASSERTIONS ==================
 local hookfunction = hookfunction or replaceclosure or detour_function
 local hookmetamethod = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
 local checkcaller = checkcaller or function() return false end
 local getconnections = getconnections
-local getgc = getgc
 local mousemoverel = mousemoverel or function() end
+local newcclosure = newcclosure or function(f) return f end
 
 if not hookfunction or not hookmetamethod or not getnamecallmethod then
     return
@@ -33,38 +29,39 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- ================== CONSTANTES ==================
 local MAX_SILENT_ANGLE_DEG = 15
 local HITBOX_OFFSET_SCALE = 0.3
 local MIN_SHOT_INTERVAL = 0.06
 local _lastShotModified = 0
 
--- ================== AC BYPASS SEGURO (sin pipeline controller) ==================
+-- ================== AC BYPASS SEGURO ==================
 local function SafeACBypass()
-    local results = {remotes = 0, errors = 0, kick = false}
-
-    -- Pipeline RemoteEvent (solo este sí es seguro y necesario)
     pcall(function()
-        local pipeline = ReplicatedStorage:FindFirstChild("Remotes")?.AnalyticsPipeline?.RemoteEvent
-        if pipeline and pipeline.OnClientEvent then
-            for _, conn in pairs(getconnections(pipeline.OnClientEvent)) do
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if not remotes then return end
+        local pipeline = remotes:FindFirstChild("AnalyticsPipeline")
+        if not pipeline then return end
+        local re = pipeline:FindFirstChild("RemoteEvent")
+        if not re then return end
+        if re.OnClientEvent and getconnections then
+            for _, conn in pairs(getconnections(re.OnClientEvent)) do
                 if conn.Function then
-                    hookfunction(conn.Function, function() end)
-                    results.remotes = results.remotes + 1
+                    pcall(function()
+                        hookfunction(conn.Function, newcclosure(function() end))
+                    end)
                 end
             end
         end
     end)
 
-    -- ScriptContext.Error disable
     pcall(function()
-        for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
-            conn:Disable()
-            results.errors = results.errors + 1
+        if getconnections then
+            for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
+                pcall(function() conn:Disable() end)
+            end
         end
     end)
 
-    -- Kick hook (nunca quitar)
     if not getgenv()._AX_KickHooked then
         pcall(function()
             for _, name in ipairs({"Kick", "kick"}) do
@@ -77,53 +74,60 @@ local function SafeACBypass()
                 end
             end
             getgenv()._AX_KickHooked = true
-            results.kick = true
         end)
     end
-
-    return results
 end
 
 SafeACBypass()
 
--- Monitor ligero (solo error connections y kick)
 task.spawn(function()
     while task.wait(15) do
         pcall(function()
-            for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
-                conn:Disable()
+            if getconnections then
+                for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
+                    pcall(function() conn:Disable() end)
+                end
             end
         end)
     end
 end)
 
--- ================== RESTO DEL SCRIPT (100% funcional) ==================
--- (Team check, visibility, target part, silent aim target, aimbot, ESP, todo igual que v3.3)
-
-local function IsRivalsTeammate(p) -- igual que antes
+-- ================== TEAM CHECK ==================
+local function IsRivalsTeammate(p)
     if not p or p == LocalPlayer then return false end
-    return p.Team == LocalPlayer.Team or p.TeamColor == LocalPlayer.TeamColor
-end
-
-local function ShouldSkipRivalsPlayer(p, tc) 
-    return tc and IsRivalsTeammate(p) 
-end
-
-local function IsRivalsVisible(part) -- igual, mejorado con 2 offsets
-    if not part then return false end
-    local char = LocalPlayer.Character
-    if not char then return true end
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char, Camera}
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.IgnoreWater = true
-    local origin = Camera.CFrame.Position
-    local dir = part.Position - origin
-    local result = Workspace:Raycast(origin, dir, params)
-    if not result or result.Instance:IsDescendantOf(part.Parent) then return true end
+    local ok1, r1 = pcall(function() return p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team end)
+    if ok1 and r1 then return true end
+    local ok2, r2 = pcall(function() return p.TeamColor and LocalPlayer.TeamColor and p.TeamColor == LocalPlayer.TeamColor end)
+    if ok2 and r2 then return true end
     return false
 end
 
+local function ShouldSkipRivalsPlayer(p, tc)
+    return tc and IsRivalsTeammate(p)
+end
+
+-- ================== VISIBILITY ==================
+local function IsRivalsVisible(part)
+    if not part then return false end
+    local char = LocalPlayer.Character
+    if not char then return true end
+    local cam = Workspace.CurrentCamera
+    if not cam then return true end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char, cam}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+    local origin = cam.CFrame.Position
+    local dir = part.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
+    if not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(part.Parent) then return true end
+    return false
+end
+
+-- ================== ANGLE CHECK ==================
 local function GetAngleToTarget(origin, direction, target)
     local toTarget = (target - origin).Unit
     local dot = direction.Unit:Dot(toTarget)
@@ -131,7 +135,9 @@ local function GetAngleToTarget(origin, direction, target)
     return math.deg(math.acos(dot))
 end
 
+-- ================== HUMANIZATION ==================
 local function HumanizeTargetPos(pos, part)
+    if not part then return pos end
     local size = part.Size
     local offset = Vector3.new(
         (math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,
@@ -141,11 +147,13 @@ local function HumanizeTargetPos(pos, part)
     return pos + offset
 end
 
+-- ================== TARGET PART ==================
 local RIVALS_PARTS = {"Head","HumanoidRootPart","UpperTorso","LowerTorso"}
 local randomPart = "Head"
 local randomSwitch = 0
 
 local function GetRivalsTargetPart(char, setting)
+    if not char then return nil end
     if setting == "Random" then
         if tick() - randomSwitch > 0.5 then
             local valid = {}
@@ -160,31 +168,42 @@ local function GetRivalsTargetPart(char, setting)
     return char:FindFirstChild(setting) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 
+-- ================== SILENT AIM TARGET ==================
 local CurrentTarget, CurrentTargetPos, CurrentTargetPart = nil, nil, nil
 
 local function UpdateSilentTarget()
-    if not (Config.Silent.Enabled and Config.Silent.Active) then 
-        CurrentTarget, CurrentTargetPos, CurrentTargetPart = nil, nil, nil 
-        return 
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+    if not (Config.Silent.Enabled and Config.Silent.Active) then
+        CurrentTarget, CurrentTargetPos, CurrentTargetPart = nil, nil, nil
+        return
     end
 
-    local closest, dist, pos, part = nil, Config.FOV.Enabled and Config.FOV.Radius or 9e9, nil, nil
+    local closest, dist = nil, Config.FOV.Enabled and Config.FOV.Radius or 9e9
+    local pos, part = nil, nil
     local mouse = UserInputService:GetMouseLocation()
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer or ShouldSkipRivalsPlayer(plr, Config.Silent.TeamCheck) then continue end
         local char = plr.Character
-        if not char or not char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("Humanoid").Health <= 0 then continue end
+        if not char then continue end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        if char:FindFirstChildOfClass("ForceField") then continue end
 
         local tp = GetRivalsTargetPart(char, Config.Silent.TargetPart)
         if not tp then continue end
         if Config.Silent.VisibleCheck and not IsRivalsVisible(tp) then continue end
 
         local predicted = tp.Position
-        if Config.Aimbot.Prediction > 0 then
-            local vel = tp.AssemblyLinearVelocity
-            if vel.Magnitude > 0.5 then predicted += vel * Config.Aimbot.Prediction end
-        end
+        pcall(function()
+            if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                local vel = tp.AssemblyLinearVelocity
+                if vel and vel.Magnitude > 0.5 then
+                    predicted = predicted + vel * Config.Aimbot.Prediction
+                end
+            end
+        end)
 
         local angle = GetAngleToTarget(Camera.CFrame.Position, Camera.CFrame.LookVector, predicted)
         if angle > MAX_SILENT_ANGLE_DEG then continue end
@@ -206,7 +225,222 @@ local function UpdateSilentTarget()
     CurrentTargetPart = part
 end
 
--- ================== HOOK RETARDADO 8 SEGUNDOS (evita freeze al entrar) ==================
+-- ================== AIMBOT ==================
+local rivalsAimbotLocked = nil
+local rivalsAimbotRandom = "Head"
+local rivalsAimbotSwitch = 0
+
+local function GetRivalsAimbotPart(character)
+    if not character then return nil end
+    local s = Config.Aimbot.TargetPart
+    if s == "Random" then
+        local t = tick()
+        if t - rivalsAimbotSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local valid = {}
+            for _, n in ipairs(RIVALS_PARTS) do
+                if character:FindFirstChild(n) then table.insert(valid, n) end
+            end
+            if #valid > 0 then rivalsAimbotRandom = valid[math.random(#valid)] end
+            rivalsAimbotSwitch = t
+        end
+        return character:FindFirstChild(rivalsAimbotRandom) or character:FindFirstChild("Head")
+    end
+    return character:FindFirstChild(s) or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsRivalsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipRivalsPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c then return false end
+    if c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetRivalsAimbotTarget()
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
+    local fov = Config.Aimbot.FOVRadius or 150
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+
+    if Config.Aimbot.Method == "Aimlock" and rivalsAimbotLocked then
+        if IsRivalsPlayerValid(rivalsAimbotLocked) then
+            local tp = GetRivalsAimbotPart(rivalsAimbotLocked.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsRivalsVisible(tp)) then
+                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+        end
+        rivalsAimbotLocked = nil
+    end
+
+    local best, bestDist, bestP = nil, fov, nil
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsRivalsPlayerValid(player) then continue end
+        local tp = GetRivalsAimbotPart(player.Character)
+        if not tp then continue end
+        if Config.Aimbot.VisibleCheck and not IsRivalsVisible(tp) then continue end
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < bestDist then bestDist = d best = tp bestP = player end
+    end
+    if Config.Aimbot.Method == "Aimlock" and bestP then rivalsAimbotLocked = bestP end
+    return best
+end
+-- ================== ESP COMPLETO ==================
+local RivalsESP = {}
+local RivalsLastESP = 0
+
+local function CreateRivalsESP(player)
+    if RivalsESP[player] then return end
+    local e = {}
+    e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Color = Color3.fromRGB(255,255,255) e.Box.Visible = false
+    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0,0,0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255,255,255) e.Name.Visible = false
+    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
+    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0,0,0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+    RivalsESP[player] = e
+end
+
+local function RemoveRivalsESP(p)
+    local e = RivalsESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    RivalsESP[p] = nil
+end
+
+local function HideRivalsESP(p)
+    local e = RivalsESP[p]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+local function UpdateRivalsESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(RivalsESP) do HideRivalsESP(p) end
+        return
+    end
+
+    local now = tick()
+    if now - RivalsLastESP < 0.08 then return end
+    RivalsLastESP = now
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local active = {}
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        active[player] = true
+
+        local isTm = IsRivalsTeammate(player)
+        if Config.ESP.TeamCheck and isTm then
+            HideRivalsESP(player)
+            continue
+        end
+
+        if not RivalsESP[player] then CreateRivalsESP(player) end
+        local esp = RivalsESP[player]
+        if not esp then continue end
+
+        local c = player.Character
+        if not c then HideRivalsESP(player) continue end
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if not h or h.Health <= 0 then HideRivalsESP(player) continue end
+        if c:FindFirstChildOfClass("ForceField") then HideRivalsESP(player) continue end
+
+        local rp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
+        local head = c:FindFirstChild("Head")
+        if not rp then HideRivalsESP(player) continue end
+
+        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideRivalsESP(player) continue end
+
+        local sp, on = Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideRivalsESP(player) continue end
+
+        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0)) or sp
+        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0))
+        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
+        local width = height / 2
+        local minX, minY = sp.X - width / 2, hSP.Y
+
+        local col
+        if isTm then
+            col = Color3.fromRGB(80, 150, 255)
+        else
+            local isVis = head and IsRivalsVisible(head) or false
+            col = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        end
+
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = col
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+
+        if Config.ESP.Names then
+            esp.Name.Text = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = col
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+
+        if Config.ESP.Boxes and h then
+            local pct = math.clamp(h.Health / h.MaxHealth, 0, 1)
+            local bh = height * pct
+            local hc
+            if pct > 0.5 then
+                hc = Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
+            else
+                hc = Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+            end
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
+            esp.HealthBar.Color = hc
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end
+
+    for p in pairs(RivalsESP) do
+        if not active[p] then
+            if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end
+        end
+    end
+end
+
+-- ================== NAMECALL HOOK (8 SEGUNDOS) ==================
 task.delay(8, function()
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -215,27 +449,37 @@ task.delay(8, function()
 
         if checkcaller() then return oldNamecall(self, ...) end
 
-        if Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos then
+        if Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart then
             if math.random(100) > Config.Silent.HitChance then return oldNamecall(self, ...) end
             if tick() - _lastShotModified < MIN_SHOT_INTERVAL then return oldNamecall(self, ...) end
 
             local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
 
-            -- Raycast
-            if self == Workspace and (method == "Raycast" or method:find("Ray")) then
-                local origin = args[1]
-                local direction = args[2]
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                    local angle = GetAngleToTarget(origin, direction, targetPos)
-                    if angle <= MAX_SILENT_ANGLE_DEG then
-                        _lastShotModified = tick()
-                        args[2] = (targetPos - origin).Unit * direction.Magnitude
-                        return oldNamecall(self, unpack(args))
+            if self == Workspace then
+                if method == "Raycast" then
+                    local origin = args[1]
+                    local direction = args[2]
+                    if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                        local angle = GetAngleToTarget(origin, direction, targetPos)
+                        if angle <= MAX_SILENT_ANGLE_DEG then
+                            _lastShotModified = tick()
+                            args[2] = (targetPos - origin).Unit * direction.Magnitude
+                            return oldNamecall(self, unpack(args))
+                        end
+                    end
+                elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+                    local ray = args[1]
+                    if typeof(ray) == "Ray" then
+                        local angle = GetAngleToTarget(ray.Origin, ray.Direction, targetPos)
+                        if angle <= MAX_SILENT_ANGLE_DEG then
+                            _lastShotModified = tick()
+                            args[1] = Ray.new(ray.Origin, (targetPos - ray.Origin).Unit * ray.Direction.Magnitude)
+                            return oldNamecall(self, unpack(args))
+                        end
                     end
                 end
             end
 
-            -- RemoteEvents (shoot/fire/hit/damage/etc.)
             if self:IsA("RemoteEvent") and method == "FireServer" then
                 local modified = false
                 for i, arg in ipairs(args) do
@@ -243,12 +487,6 @@ task.delay(8, function()
                         local angle = GetAngleToTarget(arg.Position, arg.LookVector, targetPos)
                         if angle <= MAX_SILENT_ANGLE_DEG then
                             args[i] = CFrame.new(arg.Position, targetPos)
-                            modified = true
-                        end
-                    elseif typeof(arg) == "Vector3" and args[1] and typeof(args[1]) == "Vector3" then
-                        local angle = GetAngleToTarget(args[1], arg, targetPos)
-                        if angle <= MAX_SILENT_ANGLE_DEG and arg.Magnitude > 10 then
-                            args[i] = (targetPos - args[1]).Unit * arg.Magnitude
                             modified = true
                         end
                     end
@@ -264,25 +502,80 @@ task.delay(8, function()
     end))
 end)
 
--- ================== AIMBOT & ESP (100% igual que v3.3, funciona perfecto) ==================
--- (Todo el código de aimbot, ESP con barra de vida, etc. lo dejo igual que tu v3.3, no lo pego por longitud pero está idéntico)
+-- ================== MAIN LOOPS ==================
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    UpdateSilentTarget()
+    
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local t = GetRivalsAimbotTarget()
+        if t then
+            local pos = t.Position
+            pcall(function()
+                if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                    local v = t.AssemblyLinearVelocity
+                    if v and v.Magnitude > 0.5 then pos = pos + v * Config.Aimbot.Prediction end
+                end
+            end)
+            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+            if Config.Aimbot.Method == "Aimbot" then
+                local cur = Camera.CFrame
+                local tgt = CFrame.lookAt(cur.Position, pos)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+            else
+                local sp, on = Camera:WorldToViewportPoint(pos)
+                if on then
+                    local mp = UserInputService:GetMouseLocation()
+                    local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d > 1 then
+                        local spd = math.clamp(1 / sm, 0.05, 0.8)
+                        local mx = math.clamp(dx * spd, -150, 150)
+                        local my = math.clamp(dy * spd, -150, 150)
+                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then mousemoverel(mx, my) end
+                    end
+                end
+            end
+        else
+            if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
+        end
+    else
+        if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
+    end
+end)
 
--- Solo agrego las banderas al final:
+RunService.Heartbeat:Connect(function()
+    UpdateRivalsESP()
+end)
+
+-- ================== FLAGS + INIT ==================
 getgenv().AX_RivalsLoaded = true
 getgenv().AX_RivalsHandlesAimbot = true
 getgenv().AX_RivalsHandlesESP = true
 
--- ESP creation
-for _, p in Players:GetPlayers() do
-    if p ~= LocalPlayer then task.spawn(function() pcall(CreateRivalsESP, p) end) end
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        pcall(function() CreateRivalsESP(p) end)
+    end
 end
-Players.PlayerAdded:Connect(function(p) task.delay(2, function() pcall(CreateRivalsESP, p) end) end)
 
-RunService.RenderStepped:Connect(function()
-    UpdateSilentTarget()
-    -- Aimbot code aquí (igual que tu v3.3)
+Players.PlayerAdded:Connect(function(p)
+    task.delay(2, function() pcall(function() CreateRivalsESP(p) end) end)
 end)
 
-RunService.Heartbeat:Connect(UpdateRivalsESP) -- ESP igual que v3.3
+Players.PlayerRemoving:Connect(function(p)
+    if rivalsAimbotLocked == p then rivalsAimbotLocked = nil end
+    RemoveRivalsESP(p)
+end)
 
-print("AX Rivals v3.4 RONIX FIXED → loaded sin freeze")
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    CurrentTarget = nil
+    CurrentTargetPos = nil
+    CurrentTargetPart = nil
+    rivalsAimbotLocked = nil
+    task.wait(2)
+    pcall(SafeACBypass)
+end)
