@@ -1,12 +1,8 @@
 --[[
     ANNOMALY X - Combat Arena Module v10.0
     
-    FIXES APLICADOS SOBRE v9.2:
-    ✅ Bug #1: Hook redirige SIEMPRE que hay target (sin depender de isMouseDown)
-    ✅ Bug #2: setreadonly validado explícitamente, errores reportados
-    ✅ Bug #3: Prediction default 0.125 para Combat Arena
-    ✅ Bug #4: Target update cada frame (no cada 2)
-    ✅ Bug #5: Mouse.Target hookeado para que el arma valide correctamente
+    Silent Aim REMOVED - Not functional for Combat Arena
+    Only ESP + Aimbot active
 ]]
 
 if not getgenv().AX_Config then
@@ -16,23 +12,11 @@ end
 local Config = getgenv().AX_Config
 
 -- ============================================
--- AUTO-FIX CONFIG PARA COMBAT ARENA
+-- FORCE DISABLE SILENT AIM FOR CA
 -- ============================================
 if Config.Silent then
-    Config.Silent.Enabled = true
-    Config.Silent.Active = true
-
-    -- FIX Bug #3: Prediction real, no 0
-    -- 0.125 es el sweet spot para Combat Arena
-    if not Config.Silent.Prediction or Config.Silent.Prediction <= 0 then
-        Config.Silent.Prediction = 0.125
-    end
-end
-
-if Config.FOV then
-    if Config.FOV.Radius < 300 then
-        Config.FOV.Radius = 400
-    end
+    Config.Silent.Enabled = false
+    Config.Silent.Active = false
 end
 
 -- ============================================
@@ -40,28 +24,9 @@ end
 -- ============================================
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
-local getrawmetatable = getrawmetatable
 local mousemoverel = mousemoverel
     or (Input and Input.MouseMove)
     or function() end
-
--- FIX Bug #2: Validar que setreadonly EXISTE de verdad
-local has_setreadonly = type(setreadonly) == "function"
-if not has_setreadonly then
-    -- Intentar alternativas conocidas
-    if type(make_writeable) == "function" then
-        setreadonly = function(t, val)
-            if not val then make_writeable(t) end
-        end
-        has_setreadonly = true
-    elseif type(setrawmetatable) == "function" then
-        -- Algunos executors permiten setrawmetatable directamente
-        has_setreadonly = false -- marcar como no disponible, usaremos otro approach
-    else
-        setreadonly = nil
-        has_setreadonly = false
-    end
-end
 
 -- ============================================
 -- SERVICES
@@ -72,25 +37,6 @@ local Workspace = cloneref(game:GetService("Workspace"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-
--- ============================================
--- MOUSE TRACKING (mantenido para aimbot, ya NO para silent aim)
--- ============================================
-local isMouseDown = false
-
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = true
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        isMouseDown = false
-    end
-end)
 
 -- ============================================
 -- CACHED PLAYERS
@@ -171,12 +117,6 @@ end
 -- ============================================
 -- TARGET UTILITIES
 -- ============================================
-local CurrentTargetPart = nil
-local FrameCounter = 0
-
--- FIX Bug #4: Ya no usamos TARGET_UPDATE_FRAMES
--- Target se actualiza CADA frame
-
 local function GetTargetPart(character, setting)
     if not character then return nil end
     local parts = {
@@ -225,240 +165,6 @@ local function IsVisible(targetPart)
     return true
 end
 
-local function GetTargetPosition()
-    if not CurrentTargetPart then return nil end
-    local pos = CurrentTargetPart.Position
-    local pred = Config.Silent.Prediction or 0.125
-    if pred > 0 then
-        pcall(function()
-            local vel = CurrentTargetPart.AssemblyLinearVelocity
-            if vel and vel.Magnitude > 0.5 then
-                pos = pos + vel * pred
-            end
-        end)
-    end
-    return pos
-end
-
--- ============================================
--- FIND TARGET
--- ============================================
-local function FindTarget()
-    Camera = Workspace.CurrentCamera
-    if not Camera then return nil end
-
-    local fovRadius = (Config.FOV and Config.FOV.Enabled)
-        and (Config.FOV.Radius or 400)
-        or 99999
-
-    local teamCheck = Config.Silent.TeamCheck or false
-    local targetSetting = Config.Silent.TargetPart or "Head"
-    local visCheck = Config.Silent.VisibleCheck or false
-
-    local closest = nil
-    local closestDist = fovRadius
-    local mousePos = UserInputService:GetMouseLocation()
-
-    for _, player in ipairs(CachedPlayers) do
-        if not player or not player.Parent then continue end
-
-        if teamCheck then
-            if player.Team and LocalPlayer.Team
-                and player.Team == LocalPlayer.Team then
-                continue
-            end
-        end
-
-        local data = GetCachedCharacterData(player)
-        if not data then continue end
-        if data.char:FindFirstChildOfClass("ForceField") then
-            continue
-        end
-
-        local part = GetTargetPart(data.char, targetSetting)
-        if not part then continue end
-
-        if visCheck and not IsVisible(part) then continue end
-
-        local screenPos, onScreen = Camera:WorldToViewportPoint(
-            part.Position
-        )
-        if not onScreen then continue end
-
-        local dist = (
-            Vector2.new(screenPos.X, screenPos.Y) - mousePos
-        ).Magnitude
-
-        if dist < closestDist then
-            closestDist = dist
-            closest = part
-        end
-    end
-
-    return closest
-end
-
--- ============================================
--- SILENT AIM HOOK
---
--- FIX Bug #1: Ya NO depende de isMouseDown
---   El juego lee Mouse.Hit ANTES de que nuestro InputBegan corra.
---   Solución: redirigir SIEMPRE que haya target válido dentro del FOV.
---   Esto es seguro porque FindTarget() ya valida FOV, team, visibility.
---
--- FIX Bug #2: setreadonly validado con error explícito
---
--- FIX Bug #5: Mouse.Target ahora devuelve CurrentTargetPart
--- ============================================
-local SilentAimActive = false
-local HookError = nil
-local hitChancePass = false
-local lastHitChanceFrame = -1
-
-do
-    local mt = nil
-    local success_mt, err_mt = pcall(function()
-        mt = getrawmetatable(Mouse)
-    end)
-
-    if not success_mt or not mt then
-        HookError = "getrawmetatable(Mouse) falló: " .. tostring(err_mt)
-        warn("[AX] " .. HookError)
-        warn("[AX] Silent Aim DESACTIVADO")
-    else
-        local oldIndex = mt.__index
-        if not oldIndex then
-            HookError = "Mouse.__index no encontrado"
-            warn("[AX] " .. HookError)
-            warn("[AX] Silent Aim DESACTIVADO")
-        else
-            -- FIX Bug #2: Intentar desbloquear metatable con validación real
-            local unlock_success = false
-
-            if has_setreadonly then
-                local ok, err = pcall(function()
-                    setreadonly(mt, false)
-                end)
-                if ok then
-                    -- Verificar que REALMENTE se desbloqueó
-                    local test_ok = pcall(function()
-                        mt.__index = oldIndex -- escribir lo mismo para testear
-                    end)
-                    if test_ok then
-                        unlock_success = true
-                    end
-                else
-                    warn("[AX] setreadonly falló: " .. tostring(err))
-                end
-            end
-
-            -- Fallback: intentar escribir directamente (algunos executors lo permiten)
-            if not unlock_success then
-                local direct_ok = pcall(function()
-                    mt.__index = oldIndex
-                end)
-                if direct_ok then
-                    unlock_success = true
-                    warn("[AX] setreadonly no disponible, escritura directa OK")
-                end
-            end
-
-            if not unlock_success then
-                HookError = "No se pudo desbloquear metatable (setreadonly falló y escritura directa falló)"
-                warn("[AX] " .. HookError)
-                warn("[AX] Silent Aim DESACTIVADO - Tu executor no soporta modificar metatables")
-            else
-                -- Aplicar el hook
-                local hook_ok, hook_err = pcall(function()
-                    mt.__index = newcclosure(function(self, key)
-                        -- Fast exit para calls que no son Mouse
-                        if self ~= Mouse then
-                            return oldIndex(self, key)
-                        end
-
-                        -- ═══════════════════════════════════════
-                        -- FIX Bug #1: NO checar isMouseDown
-                        -- Redirigir SIEMPRE que hay target válido
-                        -- El juego lee Mouse.Hit en cualquier momento,
-                        -- no solo cuando nosotros detectamos el click
-                        -- ═══════════════════════════════════════
-                        if CurrentTargetPart
-                            and CurrentTargetPart.Parent
-                            and Config.Silent.Enabled
-                            and Config.Silent.Active then
-
-                            -- Hit chance consistente por frame
-                            local currentFrame = FrameCounter
-                            if currentFrame ~= lastHitChanceFrame then
-                                lastHitChanceFrame = currentFrame
-                                hitChancePass = math.random(1, 100)
-                                    <= (Config.Silent.HitChance or 100)
-                            end
-
-                            if hitChancePass then
-                                Camera = Workspace.CurrentCamera
-                                if Camera then
-                                    local targetPos = GetTargetPosition()
-                                    if targetPos then
-                                        if key == "Hit" then
-                                            return CFrame.new(targetPos)
-
-                                        elseif key == "UnitRay" then
-                                            local origin = Camera.CFrame.Position
-                                            local dir = (targetPos - origin).Unit
-                                            return Ray.new(origin, dir)
-
-                                        -- ═══════════════════════════
-                                        -- FIX Bug #5: Hook Mouse.Target
-                                        -- Sin esto, el arma ve que apuntas
-                                        -- a una pared y rechaza el hit
-                                        -- ═══════════════════════════
-                                        elseif key == "Target" then
-                                            return CurrentTargetPart
-                                        end
-                                    end
-                                end
-                            end
-                        end
-
-                        return oldIndex(self, key)
-                    end)
-                end)
-
-                if hook_ok then
-                    -- Intentar re-lockear (no crítico si falla)
-                    if has_setreadonly then
-                        pcall(function()
-                            setreadonly(mt, true)
-                        end)
-                    end
-                    SilentAimActive = true
-                else
-                    HookError = "Hook __index falló: " .. tostring(hook_err)
-                    warn("[AX] " .. HookError)
-                    warn("[AX] Silent Aim DESACTIVADO")
-                end
-            end
-        end
-    end
-end
-
--- ============================================
--- VISUAL INDICATORS
--- ============================================
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Thickness = 1
-FOVCircle.Filled = false
-FOVCircle.Transparency = 0.6
-FOVCircle.Color = Color3.fromRGB(255, 255, 255)
-
-local TargetDot = Drawing.new("Circle")
-TargetDot.Thickness = 1
-TargetDot.Filled = true
-TargetDot.Transparency = 0.8
-TargetDot.Color = Color3.fromRGB(0, 255, 0)
-TargetDot.Radius = 5
-
 -- ============================================
 -- AIMBOT
 -- ============================================
@@ -474,6 +180,9 @@ local function UpdateAimbot()
         end
         return
     end
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
 
     local target = nil
     local method = Config.Aimbot.Method or "Aimbot"
@@ -496,11 +205,9 @@ local function UpdateAimbot()
     end
 
     if not target then
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
         local closestDist = Config.Aimbot.FOVRadius or 300
         local refPoint = method == "Aimbot"
-            and cam.ViewportSize / 2
+            and Camera.ViewportSize / 2
             or UserInputService:GetMouseLocation()
 
         for _, player in ipairs(CachedPlayers) do
@@ -525,7 +232,7 @@ local function UpdateAimbot()
                 continue
             end
 
-            local sp, onScreen = cam:WorldToViewportPoint(
+            local sp, onScreen = Camera:WorldToViewportPoint(
                 part.Position
             )
             if not onScreen then continue end
@@ -557,17 +264,15 @@ local function UpdateAimbot()
         end)
     end
 
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
     local smoothness = Config.Aimbot.Smoothness or 1
 
     if method == "Aimbot" then
-        local cur = cam.CFrame
+        local cur = Camera.CFrame
         local tgt = CFrame.lookAt(cur.Position, pos)
-        cam.CFrame = smoothness <= 1 and tgt
+        Camera.CFrame = smoothness <= 1 and tgt
             or cur:Lerp(tgt, 1 / smoothness)
     else
-        local sp, on = cam:WorldToViewportPoint(pos)
+        local sp, on = Camera:WorldToViewportPoint(pos)
         if not on then return end
         local mp = UserInputService:GetMouseLocation()
         local dx, dy = sp.X - mp.X, sp.Y - mp.Y
@@ -726,53 +431,6 @@ getgenv().AX_PF_HandlesESP = true
 -- ============================================
 RunService.Heartbeat:Connect(function()
     Camera = Workspace.CurrentCamera
-    FrameCounter = FrameCounter + 1
-
-    -- ═══════════════════════════════════════
-    -- FIX Bug #4: Target update CADA frame
-    -- Ya no hay "if FrameCounter % 2 == 0"
-    -- ═══════════════════════════════════════
-    if SilentAimActive
-        and Config.Silent.Enabled
-        and Config.Silent.Active then
-        local ok, result = pcall(FindTarget)
-        if ok then
-            CurrentTargetPart = result
-        else
-            CurrentTargetPart = nil
-        end
-    else
-        CurrentTargetPart = nil
-    end
-
-    -- FOV Circle
-    if Config.FOV
-        and Config.FOV.Enabled
-        and Config.FOV.Visible then
-        local mp = UserInputService:GetMouseLocation()
-        FOVCircle.Position = mp
-        FOVCircle.Radius = Config.FOV.Radius or 400
-        FOVCircle.Visible = true
-    else
-        FOVCircle.Visible = false
-    end
-
-    -- Target dot
-    if CurrentTargetPart
-        and CurrentTargetPart.Parent
-        and Camera then
-        local sp, on = Camera:WorldToViewportPoint(
-            CurrentTargetPart.Position
-        )
-        if on then
-            TargetDot.Position = Vector2.new(sp.X, sp.Y)
-            TargetDot.Visible = true
-        else
-            TargetDot.Visible = false
-        end
-    else
-        TargetDot.Visible = false
-    end
 
     pcall(UpdateAimbot)
     pcall(UpdateCAESP)
@@ -784,10 +442,8 @@ end)
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     Camera = Workspace.CurrentCamera
-    CurrentTargetPart = nil
     AimTarget = nil
     AimLockedPlayer = nil
-    isMouseDown = false
     CachedCharacters = {}
 end)
 
@@ -798,29 +454,10 @@ end)
 
 getgenv().AX_CALoaded = true
 
--- ============================================
--- STATUS REPORT
--- ============================================
 print("══════════════════════════════════════")
 print("  ANNOMALY X - Combat Arena v10.0")
 print("══════════════════════════════════════")
-if SilentAimActive then
-    print("  Silent Aim: ✅ ACTIVO")
-else
-    print("  Silent Aim: ❌ FALLÓ")
-    if HookError then
-        print("  Error: " .. HookError)
-    end
-end
-print("  Prediction:", Config.Silent.Prediction)
-print("  FOV Radius:", Config.FOV.Radius)
-print("  Target Update: CADA FRAME")
-print("  Mouse.Target Hook: ✅")
-print("  ESP: ✅ ACTIVO")
-print("  Aimbot: ✅ ACTIVO")
-print("══════════════════════════════════════")
-if SilentAimActive then
-    print("  🟢 Punto verde = target adquirido")
-    print("  Apunta CERCA del enemigo y dispara")
-end
+print("  Silent Aim: ❌ DISABLED (not available for CA)")
+print("  ESP: ✅ ACTIVE")
+print("  Aimbot: ✅ ACTIVE")
 print("══════════════════════════════════════")
