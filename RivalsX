@@ -1,49 +1,57 @@
 --[[
-    ANNOMALY X - Rivals Module v3.6
-    RONIX SAFE - Silent Aim + ESP + Aimbot FUNCIONAL
-    Compatible con main v17.6
+    ANNOMALY X - Rivals Module v3.7
+    RONIX SAFE - Sin freeze
+    Fix: SafeACBypass delay 4s, RenderStepped delay 3s,
+         Heartbeat delay 4s, hookmetamethod delay 12s,
+         getconnections ScriptContext eliminado del bypass
 ]]
 
 if not getgenv().AX_Config then
-    repeat task.wait() until getgenv().AX_Config
+    local timeout = tick()
+    repeat
+        task.wait()
+        if tick() - timeout > 30 then return end -- timeout de seguridad
+    until getgenv().AX_Config
 end
 
 local Config = getgenv().AX_Config
 
-local hookfunction    = hookfunction or replaceclosure or detour_function
-local hookmetamethod  = hookmetamethod
+local hookfunction      = hookfunction or replaceclosure or detour_function
+local hookmetamethod    = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
-local checkcaller     = checkcaller or function() return false end
-local getconnections  = getconnections
-local mousemoverel    = mousemoverel or function() end
-local newcclosure     = newcclosure or function(f) return f end
+local checkcaller       = checkcaller or function() return false end
+local getconnections    = getconnections
+local mousemoverel      = mousemoverel or function() end
+local newcclosure       = newcclosure or function(f) return f end
 
 if not hookfunction or not hookmetamethod or not getnamecallmethod then return end
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local Workspace        = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
-local Camera           = Workspace.CurrentCamera
-local LocalPlayer      = Players.LocalPlayer
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local Workspace         = game:GetService("Workspace")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera            = Workspace.CurrentCamera
+local LocalPlayer       = Players.LocalPlayer
 
-local MAX_SILENT_ANGLE_DEG  = 15
-local HITBOX_OFFSET_SCALE   = 0.3
-local MIN_SHOT_INTERVAL     = 0.06
-local _lastShotModified     = 0
+local MAX_SILENT_ANGLE_DEG = 15
+local HITBOX_OFFSET_SCALE  = 0.3
+local MIN_SHOT_INTERVAL    = 0.06
+local _lastShotModified    = 0
 
--- ================== AC BYPASS (con delay para no freeze) ==================
+-- ================== AC BYPASS ==================
+-- DELAY 4s: getconnections en ScriptContext causaba freeze inmediato
+-- Se eliminó ScriptContext.Error del bypass (el main ya lo maneja)
 local function SafeACBypass()
-    -- Analytics pipeline
+    -- Analytics pipeline hook
     pcall(function()
         local remotes = ReplicatedStorage:FindFirstChild("Remotes")
         if not remotes then return end
         local pipeline = remotes:FindFirstChild("AnalyticsPipeline")
         if not pipeline then return end
         local re = pipeline:FindFirstChild("RemoteEvent")
-        if not re then return end
-        if re.OnClientEvent and getconnections then
+        if not re or not re.OnClientEvent then return end
+        if getconnections then
             for _, conn in pairs(getconnections(re.OnClientEvent)) do
                 if conn.Function then
                     pcall(function()
@@ -54,16 +62,7 @@ local function SafeACBypass()
         end
     end)
 
-    -- ScriptContext.Error
-    pcall(function()
-        if getconnections then
-            for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
-                pcall(function() conn:Disable() end)
-            end
-        end
-    end)
-
-    -- Kick hook (solo si no fue hookeado ya por el main)
+    -- Kick hook (solo si el main no lo hookeo ya)
     if not getgenv()._AX_KickHooked then
         pcall(function()
             for _, name in ipairs({"Kick", "kick"}) do
@@ -81,20 +80,13 @@ local function SafeACBypass()
     end
 end
 
--- DELAY antes de SafeACBypass para evitar freeze en Rivals
-task.delay(1, SafeACBypass)
+-- DELAY 4s: evita freeze al inicio
+task.delay(4, SafeACBypass)
 
--- Loop de mantenimiento cada 20s
+-- Loop de mantenimiento: primera iteración a los 30s
 task.spawn(function()
-    while task.wait(20) do
-        pcall(function()
-            if getconnections then
-                for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
-                    pcall(function() conn:Disable() end)
-                end
-            end
-        end)
-        -- Re-limpieza global ligera
+    task.wait(30)
+    while true do
         pcall(function()
             local sk = {"signature","checksum","exploit","detect","anticheat"}
             for k in pairs(_G) do
@@ -104,6 +96,7 @@ task.spawn(function()
                 end
             end
         end)
+        task.wait(25)
     end
 end)
 
@@ -142,8 +135,7 @@ local function IsRivalsVisible(part)
     if dist < 3 then return true end
     local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
     if not result then return true end
-    if result.Instance and result.Instance:IsDescendantOf(part.Parent) then return true end
-    return false
+    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
 end
 
 -- ================== ANGLE CHECK ==================
@@ -157,12 +149,11 @@ end
 local function HumanizeTargetPos(pos, part)
     if not part then return pos end
     local size = part.Size
-    local offset = Vector3.new(
-        (math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,
-        (math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,
-        (math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE
+    return pos + Vector3.new(
+        (math.random()-0.5) * size.X * HITBOX_OFFSET_SCALE,
+        (math.random()-0.5) * size.Y * HITBOX_OFFSET_SCALE,
+        (math.random()-0.5) * size.Z * HITBOX_OFFSET_SCALE
     )
-    return pos + offset
 end
 
 -- ================== TARGET PART ==================
@@ -188,7 +179,7 @@ local function GetRivalsTargetPart(char, setting)
         or char:FindFirstChild("HumanoidRootPart")
 end
 
--- ================== SILENT AIM TARGET ==================
+-- ================== SILENT TARGET ==================
 local CurrentTarget, CurrentTargetPos, CurrentTargetPart = nil, nil, nil
 
 local function UpdateSilentTarget()
@@ -199,13 +190,13 @@ local function UpdateSilentTarget()
         return
     end
 
-    local closest = nil
     local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
-    local bestPos, bestPart = nil, nil
+    local closest, bestPos, bestPart = nil, nil, nil
     local mouse = UserInputService:GetMouseLocation()
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or ShouldSkipRivalsPlayer(plr, Config.Silent.TeamCheck) then continue end
+        if plr == LocalPlayer then continue end
+        if ShouldSkipRivalsPlayer(plr, Config.Silent.TeamCheck) then continue end
         local char = plr.Character
         if not char then continue end
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -234,10 +225,10 @@ local function UpdateSilentTarget()
 
         local screenDist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
         if screenDist < bestDist then
-            bestDist    = screenDist
-            closest     = plr
-            bestPos     = predicted
-            bestPart    = tp
+            bestDist  = screenDist
+            closest   = plr
+            bestPos   = predicted
+            bestPart  = tp
         end
     end
 
@@ -285,13 +276,12 @@ end
 local function GetRivalsAimbotTarget()
     Camera = Workspace.CurrentCamera
     if not Camera then return nil end
-    local fov    = Config.Aimbot.FOVRadius or 150
-    local vp     = Camera.ViewportSize
-    local center = Vector2.new(vp.X/2, vp.Y/2)
+    local fov      = Config.Aimbot.FOVRadius or 150
+    local vp       = Camera.ViewportSize
+    local center   = Vector2.new(vp.X/2, vp.Y/2)
     local mousePos = UserInputService:GetMouseLocation()
-    local ref    = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    local ref      = Config.Aimbot.Method == "Aimbot" and center or mousePos
 
-    -- Aimlock: mantener locked si sigue siendo válido
     if Config.Aimbot.Method == "Aimlock" and rivalsAimbotLocked then
         if IsRivalsPlayerValid(rivalsAimbotLocked) then
             local tp = GetRivalsAimbotPart(rivalsAimbotLocked.Character)
@@ -322,38 +312,38 @@ local function GetRivalsAimbotTarget()
 end
 
 -- ================== ESP ==================
-local RivalsESP    = {}
+local RivalsESP     = {}
 local RivalsLastESP = 0
 
 local function CreateRivalsESP(player)
     if RivalsESP[player] then return end
     local e = {}
 
-    e.Box           = Drawing.new("Square")
-    e.Box.Thickness = 1 e.Box.Filled = false
-    e.Box.Color     = Color3.fromRGB(255,255,255) e.Box.Visible = false
+    e.Box               = Drawing.new("Square")
+    e.Box.Thickness     = 1 e.Box.Filled = false
+    e.Box.Color         = Color3.fromRGB(255,255,255) e.Box.Visible = false
 
-    e.Outline           = Drawing.new("Square")
-    e.Outline.Thickness = 3 e.Outline.Filled = false
-    e.Outline.Color     = Color3.fromRGB(0,0,0)
-    e.Outline.Transparency = 0.5 e.Outline.Visible = false
+    e.Outline               = Drawing.new("Square")
+    e.Outline.Thickness     = 3 e.Outline.Filled = false
+    e.Outline.Color         = Color3.fromRGB(0,0,0)
+    e.Outline.Transparency  = 0.5 e.Outline.Visible = false
 
-    e.Name          = Drawing.new("Text")
-    e.Name.Size     = 13 e.Name.Center = true e.Name.Outline = true
-    e.Name.Color    = Color3.fromRGB(255,255,255) e.Name.Visible = false
+    e.Name              = Drawing.new("Text")
+    e.Name.Size         = 13 e.Name.Center = true e.Name.Outline = true
+    e.Name.Color        = Color3.fromRGB(255,255,255) e.Name.Visible = false
 
-    e.Distance      = Drawing.new("Text")
-    e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true
-    e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
+    e.Distance          = Drawing.new("Text")
+    e.Distance.Size     = 12 e.Distance.Center = true e.Distance.Outline = true
+    e.Distance.Color    = Color3.fromRGB(200,200,200) e.Distance.Visible = false
 
-    e.HealthBG           = Drawing.new("Square")
-    e.HealthBG.Thickness = 1 e.HealthBG.Filled = true
-    e.HealthBG.Color     = Color3.fromRGB(0,0,0)
+    e.HealthBG              = Drawing.new("Square")
+    e.HealthBG.Thickness    = 1 e.HealthBG.Filled = true
+    e.HealthBG.Color        = Color3.fromRGB(0,0,0)
     e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
 
-    e.HealthBar        = Drawing.new("Square")
-    e.HealthBar.Thickness = 1 e.HealthBar.Filled = true
-    e.HealthBar.Color  = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+    e.HealthBar             = Drawing.new("Square")
+    e.HealthBar.Thickness   = 1 e.HealthBar.Filled = true
+    e.HealthBar.Color       = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
 
     RivalsESP[player] = e
 end
@@ -390,10 +380,7 @@ local function UpdateRivalsESP()
         active[player] = true
 
         local isTm = IsRivalsTeammate(player)
-        if Config.ESP.TeamCheck and isTm then
-            HideRivalsESP(player)
-            continue
-        end
+        if Config.ESP.TeamCheck and isTm then HideRivalsESP(player) continue end
 
         if not RivalsESP[player] then
             pcall(function() CreateRivalsESP(player) end)
@@ -401,14 +388,13 @@ local function UpdateRivalsESP()
         local esp = RivalsESP[player]
         if not esp then continue end
 
-        local c  = player.Character
-        local h  = c and c:FindFirstChildOfClass("Humanoid")
-        local rp = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
+        local c    = player.Character
+        local h    = c and c:FindFirstChildOfClass("Humanoid")
+        local rp   = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
         local head = c and c:FindFirstChild("Head")
 
         if not c or not h or not rp or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then
-            HideRivalsESP(player)
-            continue
+            HideRivalsESP(player) continue
         end
 
         local dist = (Camera.CFrame.Position - rp.Position).Magnitude
@@ -417,24 +403,21 @@ local function UpdateRivalsESP()
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideRivalsESP(player) continue end
 
-        -- Calcular dimensiones del box
-        local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
-        local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
+        local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))) or sp
+        local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0)))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
         local width  = height / 2
         local minX   = sp.X - width / 2
         local minY   = hSP.Y
 
-        -- Color por equipo/visibilidad
         local col
         if isTm then
-            col = Color3.fromRGB(80, 150, 255)
+            col = Color3.fromRGB(80,150,255)
         else
             local isVis = head and IsRivalsVisible(head) or false
             col = isVis and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50)
         end
 
-        -- Box
         if Config.ESP.Boxes then
             esp.Outline.Size     = Vector2.new(width+2, height+2)
             esp.Outline.Position = Vector2.new(minX-1, minY-1)
@@ -444,11 +427,9 @@ local function UpdateRivalsESP()
             esp.Box.Color        = col
             esp.Box.Visible      = true
         else
-            esp.Box.Visible     = false
-            esp.Outline.Visible = false
+            esp.Box.Visible = false esp.Outline.Visible = false
         end
 
-        -- Nombre
         if Config.ESP.Names then
             esp.Name.Text     = player.DisplayName or player.Name
             esp.Name.Position = Vector2.new(minX + width/2, minY - 16)
@@ -458,7 +439,6 @@ local function UpdateRivalsESP()
             esp.Name.Visible = false
         end
 
-        -- Distancia
         if Config.ESP.Distance then
             esp.Distance.Text     = math.floor(dist).."m"
             esp.Distance.Position = Vector2.new(minX + width/2, minY + height + 2)
@@ -467,30 +447,24 @@ local function UpdateRivalsESP()
             esp.Distance.Visible = false
         end
 
-        -- Health bar
         if Config.ESP.Boxes and h then
             local pct = math.clamp(h.Health / math.max(h.MaxHealth, 1), 0, 1)
             local bh  = height * pct
-            local hc
-            if pct > 0.5 then
-                hc = Color3.fromRGB(math.floor(255*(1-pct)*2), 255, 0)
-            else
-                hc = Color3.fromRGB(255, math.floor(255*pct*2), 0)
-            end
-            esp.HealthBG.Size     = Vector2.new(3, height)
-            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
-            esp.HealthBG.Visible  = true
+            local hc  = pct > 0.5
+                and Color3.fromRGB(math.floor(255*(1-pct)*2), 255, 0)
+                or  Color3.fromRGB(255, math.floor(255*pct*2), 0)
+            esp.HealthBG.Size      = Vector2.new(3, height)
+            esp.HealthBG.Position  = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible   = true
             esp.HealthBar.Size     = Vector2.new(3, bh)
             esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
             esp.HealthBar.Color    = hc
             esp.HealthBar.Visible  = true
         else
-            esp.HealthBG.Visible  = false
-            esp.HealthBar.Visible = false
+            esp.HealthBG.Visible = false esp.HealthBar.Visible = false
         end
     end
 
-    -- Limpiar jugadores que ya no existen
     for p in pairs(RivalsESP) do
         if not active[p] then
             if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end
@@ -498,8 +472,77 @@ local function UpdateRivalsESP()
     end
 end
 
--- ================== NAMECALL HOOK (8s delay — sync con main) ==================
-task.delay(8, function()
+-- ================== LOOPS CON DELAY ==================
+-- FIX PRINCIPAL: RenderStepped y Heartbeat se conectaban inmediatamente
+-- causando loops pesados antes de que el juego estuviera listo
+
+-- RenderStepped: delay 3s antes de conectar
+task.delay(3, function()
+    RunService.RenderStepped:Connect(function()
+        Camera = Workspace.CurrentCamera
+
+        UpdateSilentTarget()
+
+        if Config.Aimbot.Enabled and Config.Aimbot.Active then
+            local t = GetRivalsAimbotTarget()
+            if t then
+                local pos = t.Position
+                pcall(function()
+                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                        local v = t.AssemblyLinearVelocity
+                        if v and v.Magnitude > 0.5 then
+                            pos = pos + v * Config.Aimbot.Prediction
+                        end
+                    end
+                end)
+                local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+                if Config.Aimbot.Method == "Aimbot" then
+                    local cur = Camera.CFrame
+                    local tgt = CFrame.lookAt(cur.Position, pos)
+                    Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+                else
+                    local sp, on = Camera:WorldToViewportPoint(pos)
+                    if on then
+                        local mp = UserInputService:GetMouseLocation()
+                        local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+                        local d = math.sqrt(dx*dx + dy*dy)
+                        if d > 1 then
+                            local spd = math.clamp(1/sm, 0.05, 0.8)
+                            local mx  = math.clamp(dx*spd, -150, 150)
+                            local my  = math.clamp(dy*spd, -150, 150)
+                            if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                                mousemoverel(mx, my)
+                            end
+                        end
+                    end
+                end
+            else
+                if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
+            end
+        else
+            if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
+        end
+    end)
+end)
+
+-- Heartbeat (ESP): delay 4s antes de conectar
+task.delay(4, function()
+    RunService.Heartbeat:Connect(function()
+        UpdateRivalsESP()
+    end)
+end)
+
+-- ================== NAMECALL HOOK ==================
+-- delay 12s: hookmetamethod es el mayor riesgo de freeze en Rivals/Ronix
+-- Se espera a que el juego esté completamente cargado
+task.delay(12, function()
+    -- Verificar que el personaje existe antes de hookear
+    local char = LocalPlayer.Character
+    if not char then
+        local timeout = tick()
+        repeat task.wait(0.5) until LocalPlayer.Character or tick()-timeout > 10
+    end
+
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
@@ -508,11 +551,9 @@ task.delay(8, function()
         if checkcaller() then return oldNamecall(self, ...) end
 
         if Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart then
-            -- Hit chance check
             if math.random(100) > Config.Silent.HitChance then
                 return oldNamecall(self, ...)
             end
-            -- Rate limit
             if tick() - _lastShotModified < MIN_SHOT_INTERVAL then
                 return oldNamecall(self, ...)
             end
@@ -547,17 +588,14 @@ task.delay(8, function()
                 end
             end
 
-            -- RemoteEvent CFrame (solo si está activado silent y hay target)
-            -- Solo modificar si el ángulo es válido para evitar detección
+            -- RemoteEvent CFrame
             if typeof(self) == "Instance" and self:IsA("RemoteEvent") and method == "FireServer" then
                 local modified = false
                 for i, arg in ipairs(args) do
                     if typeof(arg) == "CFrame" then
-                        local angle = GetAngleToTarget(
-                            Camera and Camera.CFrame.Position or Vector3.zero,
-                            Camera and Camera.CFrame.LookVector or Vector3.zAxis,
-                            targetPos
-                        )
+                        local camPos = Camera and Camera.CFrame.Position or Vector3.zero
+                        local camLook = Camera and Camera.CFrame.LookVector or Vector3.zAxis
+                        local angle = GetAngleToTarget(camPos, camLook, targetPos)
                         if angle <= MAX_SILENT_ANGLE_DEG then
                             args[i]  = CFrame.new(arg.Position, targetPos)
                             modified = true
@@ -575,71 +613,20 @@ task.delay(8, function()
     end))
 end)
 
--- ================== MAIN LOOPS ==================
--- RenderStepped: Silent target + Aimbot (alta frecuencia)
-RunService.RenderStepped:Connect(function()
-    Camera = Workspace.CurrentCamera
-
-    UpdateSilentTarget()
-
-    if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local t = GetRivalsAimbotTarget()
-        if t then
-            local pos = t.Position
-            pcall(function()
-                if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-                    local v = t.AssemblyLinearVelocity
-                    if v and v.Magnitude > 0.5 then
-                        pos = pos + v * Config.Aimbot.Prediction
-                    end
-                end
-            end)
-            local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-            if Config.Aimbot.Method == "Aimbot" then
-                local cur = Camera.CFrame
-                local tgt = CFrame.lookAt(cur.Position, pos)
-                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
-            else
-                local sp, on = Camera:WorldToViewportPoint(pos)
-                if on then
-                    local mp = UserInputService:GetMouseLocation()
-                    local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-                    local d = math.sqrt(dx*dx + dy*dy)
-                    if d > 1 then
-                        local spd = math.clamp(1/sm, 0.05, 0.8)
-                        local mx  = math.clamp(dx*spd, -150, 150)
-                        local my  = math.clamp(dy*spd, -150, 150)
-                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
-                            mousemoverel(mx, my)
-                        end
-                    end
-                end
-            end
-        else
-            if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
-        end
-    else
-        if not Config.Aimbot.Active then rivalsAimbotLocked = nil end
-    end
-end)
-
--- Heartbeat: ESP (menor frecuencia)
-RunService.Heartbeat:Connect(function()
-    UpdateRivalsESP()
-end)
-
 -- ================== FLAGS ==================
-getgenv().AX_RivalsLoaded         = true
-getgenv().AX_RivalsHandlesAimbot  = true
-getgenv().AX_RivalsHandlesESP     = true
-getgenv().AX_RivalsHandlesSilent  = true  -- NUEVO: evita doble hook desde main
+getgenv().AX_RivalsLoaded        = true
+getgenv().AX_RivalsHandlesAimbot = true
+getgenv().AX_RivalsHandlesESP    = true
+getgenv().AX_RivalsHandlesSilent = true
 
 -- ================== INIT PLAYERS ==================
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= LocalPlayer then
-        pcall(function() CreateRivalsESP(p) end)
+task.delay(1, function()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            pcall(function() CreateRivalsESP(p) end)
+        end
     end
-end
+end)
 
 Players.PlayerAdded:Connect(function(p)
     task.delay(2, function()
@@ -659,6 +646,6 @@ LocalPlayer.CharacterAdded:Connect(function()
     CurrentTargetPos   = nil
     CurrentTargetPart  = nil
     rivalsAimbotLocked = nil
-    task.wait(2)
+    task.wait(3)
     pcall(SafeACBypass)
 end)
