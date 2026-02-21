@@ -1,9 +1,9 @@
 --[[
-    ANNOMALY X - HyperShot Module v4
-    Copiado DIRECTO del script funcional
+    ANNOMALY X - HyperShot Module v4.1
+    Silent Aim + Aimbot + ESP
+    Busca targets en Workspace.Mobs Y en Workspace (jugadores reales)
 ]]
 
--- Esperar config
 if not getgenv().AX_Config then
     local t = tick()
     repeat task.wait() until getgenv().AX_Config or tick() - t > 30
@@ -18,7 +18,12 @@ local camera = workspace.CurrentCamera
 local runService = game:GetService("RunService")
 local userInput = game:GetService("UserInputService")
 
--- Esperar a que PlayerGui tenga todo cargado
+warn("[AX HSX] Esperando módulos del juego...")
+
+repeat task.wait(0.5) until localPlayer:FindFirstChild("PlayerGui")
+repeat task.wait(0.5) until localPlayer.PlayerGui:FindFirstChild("GameUI")
+repeat task.wait(0.5) until localPlayer.PlayerGui:FindFirstChild("ControllerGUI")
+
 local function waitForChild(parent, name, timeout)
     local t = tick()
     local child = parent:FindFirstChild(name, true)
@@ -29,14 +34,6 @@ local function waitForChild(parent, name, timeout)
     return child
 end
 
-warn("[AX HSX] Esperando módulos del juego...")
-
--- Esperar PlayerGui
-repeat task.wait(0.5) until localPlayer:FindFirstChild("PlayerGui")
-repeat task.wait(0.5) until localPlayer.PlayerGui:FindFirstChild("GameUI")
-repeat task.wait(0.5) until localPlayer.PlayerGui:FindFirstChild("ControllerGUI")
-
--- Esperar módulos específicos
 local gameUIFound = waitForChild(localPlayer.PlayerGui.GameUI, "GameUIMod")
 local gunFound = waitForChild(localPlayer.PlayerGui.ControllerGUI, "Gun")
 
@@ -45,26 +42,105 @@ if not gameUIFound or not gunFound then
     return
 end
 
-warn("[AX HSX] Módulos encontrados, cargando...")
-
 local globalStuff = require(game:GetService("ReplicatedStorage").Modules.GlobalStuff)
 local gameUIMod = require(localPlayer.PlayerGui.GameUI.GameUIMod)
 local gunModule = require(localPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun)
 
 warn("[AX HSX] ✅ Módulos cargados")
 
--- ================== SILENT AIM (copiado exacto) ==================
+-- ================== GET ALL ENEMIES (Mobs + Real Players) ==================
+local function getAllEnemies()
+    local enemies = {}
+
+    -- 1. Buscar en Workspace.Mobs (bots y jugadores en partida normal)
+    local mobs = workspace:FindFirstChild("Mobs")
+    if mobs then
+        for _, mob in ipairs(mobs:GetChildren()) do
+            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
+                table.insert(enemies, mob)
+            end
+        end
+    end
+
+    -- 2. Buscar jugadores reales en Workspace (Duels y cuando no están en Mobs)
+    for _, player in ipairs(players:GetPlayers()) do
+        if player == localPlayer then continue end
+        -- Buscar su modelo en Workspace
+        local char = workspace:FindFirstChild(player.Name)
+        if char and char:IsA("Model") and char:FindFirstChildOfClass("Humanoid") then
+            -- Verificar que no esté ya agregado desde Mobs
+            local yaAgregado = false
+            for _, enemy in ipairs(enemies) do
+                if enemy == char then
+                    yaAgregado = true
+                    break
+                end
+            end
+            if not yaAgregado then
+                table.insert(enemies, char)
+            end
+        end
+        -- También verificar player.Character por si acaso
+        local pChar = player.Character
+        if pChar and pChar.Parent and pChar ~= char then
+            local hum = pChar:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local yaAgregado2 = false
+                for _, enemy in ipairs(enemies) do
+                    if enemy == pChar then
+                        yaAgregado2 = true
+                        break
+                    end
+                end
+                if not yaAgregado2 then
+                    table.insert(enemies, pChar)
+                end
+            end
+        end
+    end
+
+    return enemies
+end
+
+-- ================== VISIBILITY ==================
+local _visParams = RaycastParams.new()
+_visParams.FilterType = Enum.RaycastFilterType.Exclude
+_visParams.IgnoreWater = true
+
+local function UpdateVisFilter()
+    local t = {camera}
+    local myChar = workspace:FindFirstChild(localPlayer.Name)
+    if myChar then table.insert(t, myChar) end
+    if localPlayer.Character and localPlayer.Character ~= myChar then
+        table.insert(t, localPlayer.Character)
+    end
+    _visParams.FilterDescendantsInstances = t
+end
+UpdateVisFilter()
+
+local function IsVisible(part)
+    if not part then return false end
+    local origin = camera.CFrame.Position
+    local dir = part.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
+    local result = workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
+    if not result then return true end
+    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
+end
+
+-- ================== SILENT AIM ==================
 local function getClosestTarget()
     local closestTarget, shortestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or 300
     local mousePos = userInput:GetMouseLocation()
-    local mobs = workspace:FindFirstChild("Mobs")
-    if not mobs then return nil end
-    for _, mob in ipairs(mobs:GetChildren()) do
+
+    for _, mob in ipairs(getAllEnemies()) do
         if globalStuff:SameTeam(localPlayer, mob) then continue end
         local humanoid = mob:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
         local part = mob:FindFirstChild("Head") or mob:FindFirstChild("HumanoidRootPart")
         if not part then continue end
+        if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
         local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
         if not onScreen then continue end
         local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
@@ -76,7 +152,6 @@ local function getClosestTarget()
     return closestTarget
 end
 
--- Hook GetMousePos
 local originalGetMousePos = gameUIMod.GetMousePos
 gameUIMod.GetMousePos = function(self, ...)
     if Config.Silent.Enabled and Config.Silent.Active then
@@ -93,7 +168,6 @@ gameUIMod.GetMousePos = function(self, ...)
     return originalGetMousePos(self, ...)
 end
 
--- Hook ConeOfFire
 local originalConeOfFire = gunModule.ConeOfFire
 gunModule.ConeOfFire = function(self, origin, mousePos, spread)
     if Config.Silent.Enabled and Config.Silent.Active then
@@ -110,7 +184,6 @@ gunModule.ConeOfFire = function(self, origin, mousePos, spread)
     return originalConeOfFire(self, origin, mousePos, spread)
 end
 
--- Hook GetTotalSpread
 local originalGetTotalSpread = gunModule.GetTotalSpread
 gunModule.GetTotalSpread = function(self)
     if Config.Silent.Enabled and Config.Silent.Active then
@@ -123,43 +196,16 @@ end
 
 warn("[AX HSX] ✅ Silent Aim hooks instalados")
 
--- ================== VISIBILITY (para ESP) ==================
-local _visParams = RaycastParams.new()
-_visParams.FilterType = Enum.RaycastFilterType.Exclude
-_visParams.IgnoreWater = true
-
-local function UpdateVisFilter()
-    local t = {camera}
-    local myChar = workspace:FindFirstChild(localPlayer.Name)
-    if myChar then table.insert(t, myChar) end
-    _visParams.FilterDescendantsInstances = t
-end
-UpdateVisFilter()
-
-local function IsVisible(part)
-    if not part then return false end
-    local origin = camera.CFrame.Position
-    local dir = part.Position - origin
-    local dist = dir.Magnitude
-    if dist < 3 then return true end
-    local result = workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
-    if not result then return true end
-    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
-end
-
 -- ================== AIMBOT ==================
 local hsAimbotLocked = nil
 
 runService.RenderStepped:Connect(function()
     camera = workspace.CurrentCamera
-    
+
     if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
         if not Config.Aimbot.Active then hsAimbotLocked = nil end
         return
     end
-
-    local mobs = workspace:FindFirstChild("Mobs")
-    if not mobs then return end
 
     local vp = camera.ViewportSize
     local center = Vector2.new(vp.X/2, vp.Y/2)
@@ -167,7 +213,6 @@ runService.RenderStepped:Connect(function()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
     local bestPart, bestDist = nil, Config.Aimbot.FOVRadius or 150
 
-    -- Aimlock mantener target
     if Config.Aimbot.Method == "Aimlock" and hsAimbotLocked and hsAimbotLocked.Parent then
         local hum = hsAimbotLocked:FindFirstChildOfClass("Humanoid")
         if hum and hum.Health > 0 then
@@ -181,7 +226,7 @@ runService.RenderStepped:Connect(function()
     end
 
     if not bestPart then
-        for _, mob in ipairs(mobs:GetChildren()) do
+        for _, mob in ipairs(getAllEnemies()) do
             if Config.Aimbot.TeamCheck and globalStuff:SameTeam(localPlayer, mob) then continue end
             local hum = mob:FindFirstChildOfClass("Humanoid")
             if not hum or hum.Health <= 0 then continue end
@@ -277,14 +322,8 @@ runService.Heartbeat:Connect(function()
     if not camera then return end
     UpdateVisFilter()
 
-    local mobs = workspace:FindFirstChild("Mobs")
-    if not mobs then
-        for k in pairs(HSESP) do HideESP(k) end
-        return
-    end
-
     local active = {}
-    for _, mob in ipairs(mobs:GetChildren()) do
+    for _, mob in ipairs(getAllEnemies()) do
         if not mob:IsA("Model") then continue end
         local key = mob.Name
         active[key] = true
@@ -345,10 +384,18 @@ runService.Heartbeat:Connect(function()
     end
 end)
 
+-- Vis filter update
+task.spawn(function()
+    while true do
+        task.wait(2)
+        UpdateVisFilter()
+    end
+end)
+
 -- ================== FLAGS ==================
 getgenv().AX_HyperShotLoaded        = true
 getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot v4 LOADED")
+warn("[AX HSX] ✅ HyperShot v4.1 LOADED (Mobs + Real Players)")
