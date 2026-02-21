@@ -1,14 +1,7 @@
 --[[
-    ANNOMALY X - HyperShot Module v3.0
-    
-    HyperShot usa módulos Lua custom para el sistema de disparo:
-    - gameUIMod.GetMousePos -> posición del mouse
-    - gunModule.ConeOfFire -> spread del arma
-    - gunModule.GetTotalSpread -> valor de spread
-    - Enemigos en Workspace.Mobs
-    - Team check via globalStuff:SameTeam()
-    
-    Silent Aim hookea estos módulos, NO raycasts.
+    ANNOMALY X - HyperShot Module v3.1
+    Silent Aim copiado del script que SÍ funciona
+    ESP usando Workspace.Mobs
 ]]
 
 if not getgenv().AX_Config then
@@ -18,7 +11,6 @@ end
 local Config = getgenv().AX_Config
 
 local mousemoverel = mousemoverel or function() end
-local newcclosure  = newcclosure or function(f) return f end
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -28,58 +20,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera            = Workspace.CurrentCamera
 local LocalPlayer       = Players.LocalPlayer
 
--- ================== GAME MODULES ==================
-local globalStuff  = nil
-local gameUIMod    = nil
-local gunModule    = nil
-local gExtraModule = nil
-
--- Originales
-local originalGetMousePos   = nil
-local originalConeOfFire    = nil
-local originalGetTotalSpread = nil
-
-local modulesLoaded = false
-
-local function LoadGameModules()
-    if modulesLoaded then return true end
-    
-    local success = true
-    
-    pcall(function()
-        globalStuff = require(ReplicatedStorage.Modules.GlobalStuff)
-    end)
-    if not globalStuff then
-        warn("[AX HSX] ⚠ GlobalStuff not found")
-        success = false
-    end
-    
-    pcall(function()
-        gameUIMod = require(LocalPlayer.PlayerGui.GameUI.GameUIMod)
-    end)
-    if not gameUIMod then
-        warn("[AX HSX] ⚠ GameUIMod not found")
-        success = false
-    end
-    
-    pcall(function()
-        gunModule = require(LocalPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun)
-    end)
-    if not gunModule then
-        warn("[AX HSX] ⚠ GunModule not found")
-        success = false
-    end
-    
-    pcall(function()
-        gExtraModule = require(LocalPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun.GExtra)
-    end)
-    
-    if success then
-        modulesLoaded = true
-    end
-    
-    return success
-end
+-- ================== CARGAR MÓDULOS DEL JUEGO (igual que el script que funciona) ==================
+local globalStuff  = require(ReplicatedStorage.Modules.GlobalStuff)
+local gameUIMod    = require(LocalPlayer.PlayerGui.GameUI.GameUIMod)
+local gunModule    = require(LocalPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun)
 
 -- ================== VISIBILITY ==================
 local _visParams = RaycastParams.new()
@@ -105,186 +49,115 @@ local function IsVisible(part)
     return result.Instance and result.Instance:IsDescendantOf(part.Parent)
 end
 
--- ================== TEAM CHECK ==================
-local function IsSameTeam(mob)
-    if not globalStuff then return false end
-    local ok, result = pcall(function()
-        return globalStuff:SameTeam(LocalPlayer, mob)
-    end)
-    if ok then return result end
-    return false
-end
-
--- ================== TARGET FINDING ==================
-local function GetMobsFolder()
-    return Workspace:FindFirstChild("Mobs")
-end
-
-local function GetTargetPart(mob, setting)
-    if not mob then return nil end
-    if setting == "Random" then
-        local valid = {}
-        for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "FakeHRP"}) do
-            local p = mob:FindFirstChild(name)
-            if p then table.insert(valid, p) end
-        end
-        if #valid > 0 then return valid[math.random(#valid)] end
-    end
-    return mob:FindFirstChild(setting)
-        or mob:FindFirstChild("Head")
-        or mob:FindFirstChild("HumanoidRootPart")
-end
-
-local CurrentSilentTarget = nil
-local CurrentSilentPart   = nil
-
-local function GetClosestTarget(teamCheck, targetPartSetting)
-    Camera = Workspace.CurrentCamera
-    if not Camera then return nil, nil end
-    
-    local mobs = GetMobsFolder()
-    if not mobs then return nil, nil end
-    
-    local closestTarget, closestPart = nil, nil
-    local shortestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
+-- ================== GET CLOSEST TARGET (copiado del script que funciona) ==================
+local function getClosestTarget()
+    local closestTarget, shortestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or 9e9
     local mousePos = UserInputService:GetMouseLocation()
-    
+    local mobs = Workspace:FindFirstChild("Mobs")
+    if not mobs then return nil end
     for _, mob in ipairs(mobs:GetChildren()) do
-        if not mob:IsA("Model") then continue end
-        
-        -- Team check
-        if teamCheck and IsSameTeam(mob) then continue end
-        
+        if globalStuff:SameTeam(LocalPlayer, mob) then continue end
         local humanoid = mob:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
-        if mob:FindFirstChildOfClass("ForceField") then continue end
-        
-        local part = GetTargetPart(mob, targetPartSetting or "Head")
+        local part = mob:FindFirstChild("Head") or mob:FindFirstChild("HumanoidRootPart")
         if not part then continue end
-        
         if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
-        
         local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
         if not onScreen then continue end
-        
         local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if dist < shortestDist then
             shortestDist = dist
             closestTarget = mob
-            closestPart = part
         end
     end
-    
-    return closestTarget, closestPart
+    return closestTarget
 end
 
--- Para aimbot (usa FOV de aimbot y centro de pantalla)
-local function GetAimbotTarget(teamCheck, targetPartSetting)
+-- ================== SILENT AIM HOOKS (copiado del script que funciona) ==================
+local originalGetMousePos = gameUIMod.GetMousePos
+gameUIMod.GetMousePos = function(self, ...)
+    if Config.Silent.Enabled and Config.Silent.Active then
+        local target = getClosestTarget()
+        if target then
+            if math.random(100) <= Config.Silent.HitChance then
+                local head = target:FindFirstChild("Head")
+                if head then
+                    return head.Position
+                end
+            end
+        end
+    end
+    return originalGetMousePos(self, ...)
+end
+
+local originalConeOfFire = gunModule.ConeOfFire
+gunModule.ConeOfFire = function(self, origin, mousePos, spread)
+    if Config.Silent.Enabled and Config.Silent.Active then
+        local target = getClosestTarget()
+        if target then
+            if math.random(100) <= Config.Silent.HitChance then
+                local head = target:FindFirstChild("Head")
+                if head then
+                    return head.Position
+                end
+            end
+        end
+    end
+    return originalConeOfFire(self, origin, mousePos, spread)
+end
+
+local originalGetTotalSpread = gunModule.GetTotalSpread
+gunModule.GetTotalSpread = function(self)
+    if Config.Silent.Enabled and Config.Silent.Active then
+        if getClosestTarget() then
+            return 0
+        end
+    end
+    return originalGetTotalSpread(self)
+end
+
+warn("[AX HSX] ✅ Silent Aim hooks installed")
+
+-- ================== AIMBOT ==================
+local hsAimbotLocked = nil
+
+local function GetAimbotTarget()
     Camera = Workspace.CurrentCamera
-    if not Camera then return nil, nil end
-    
-    local mobs = GetMobsFolder()
-    if not mobs then return nil, nil end
-    
+    if not Camera then return nil end
+    local mobs = Workspace:FindFirstChild("Mobs")
+    if not mobs then return nil end
+
     local vp = Camera.ViewportSize
     local center = Vector2.new(vp.X / 2, vp.Y / 2)
     local mousePos = UserInputService:GetMouseLocation()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
-    
-    local closestTarget, closestPart = nil, nil
-    local shortestDist = Config.Aimbot.FOVRadius or 150
-    
-    for _, mob in ipairs(mobs:GetChildren()) do
-        if not mob:IsA("Model") then continue end
-        if teamCheck and IsSameTeam(mob) then continue end
-        
-        local humanoid = mob:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
-        if mob:FindFirstChildOfClass("ForceField") then continue end
-        
-        local part = GetTargetPart(mob, targetPartSetting or "Head")
-        if not part then continue end
-        
-        if Config.Aimbot.VisibleCheck and not IsVisible(part) then continue end
-        
-        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-        if not onScreen then continue end
-        
-        local dist = (Vector2.new(screenPos.X, screenPos.Y) - ref).Magnitude
-        if dist < shortestDist then
-            shortestDist = dist
-            closestTarget = mob
-            closestPart = part
-        end
-    end
-    
-    return closestTarget, closestPart
-end
+    local best, bestDist = nil, Config.Aimbot.FOVRadius or 150
 
--- ================== SILENT AIM HOOKS ==================
-local function InstallSilentHooks()
-    if not modulesLoaded then return false end
-    
-    -- Hook GetMousePos
-    if gameUIMod and gameUIMod.GetMousePos and not originalGetMousePos then
-        originalGetMousePos = gameUIMod.GetMousePos
-        gameUIMod.GetMousePos = function(self, ...)
-            if Config.Silent.Enabled and Config.Silent.Active then
-                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
-                if target then
-                    local head = target:FindFirstChild("Head")
-                        or target:FindFirstChild(Config.Silent.TargetPart)
-                        or target:FindFirstChild("HumanoidRootPart")
-                    if head then
-                        if math.random(100) <= Config.Silent.HitChance then
-                            return head.Position
-                        end
-                    end
-                end
+    if Config.Aimbot.Method == "Aimlock" and hsAimbotLocked and hsAimbotLocked.Parent then
+        local hum = hsAimbotLocked:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            local p = hsAimbotLocked:FindFirstChild("Head") or hsAimbotLocked:FindFirstChild("HumanoidRootPart")
+            if p and (not Config.Aimbot.VisibleCheck or IsVisible(p)) then
+                local sp, on = Camera:WorldToViewportPoint(p.Position)
+                if on then return p end
             end
-            return originalGetMousePos(self, ...)
         end
-        warn("[AX HSX] ✅ GetMousePos hooked")
+        hsAimbotLocked = nil
     end
-    
-    -- Hook ConeOfFire
-    if gunModule and gunModule.ConeOfFire and not originalConeOfFire then
-        originalConeOfFire = gunModule.ConeOfFire
-        gunModule.ConeOfFire = function(self, origin, mousePos, spread)
-            if Config.Silent.Enabled and Config.Silent.Active then
-                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
-                if target then
-                    local head = target:FindFirstChild("Head")
-                        or target:FindFirstChild(Config.Silent.TargetPart)
-                        or target:FindFirstChild("HumanoidRootPart")
-                    if head then
-                        if math.random(100) <= Config.Silent.HitChance then
-                            return head.Position
-                        end
-                    end
-                end
-            end
-            return originalConeOfFire(self, origin, mousePos, spread)
-        end
-        warn("[AX HSX] ✅ ConeOfFire hooked")
+
+    for _, mob in ipairs(mobs:GetChildren()) do
+        if Config.Aimbot.TeamCheck and globalStuff:SameTeam(LocalPlayer, mob) then continue end
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local p = mob:FindFirstChild("Head") or mob:FindFirstChild("HumanoidRootPart")
+        if not p then continue end
+        if Config.Aimbot.VisibleCheck and not IsVisible(p) then continue end
+        local sp, on = Camera:WorldToViewportPoint(p.Position)
+        if not on then continue end
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < bestDist then bestDist = d; best = p; if Config.Aimbot.Method == "Aimlock" then hsAimbotLocked = mob end end
     end
-    
-    -- Hook GetTotalSpread
-    if gunModule and gunModule.GetTotalSpread and not originalGetTotalSpread then
-        originalGetTotalSpread = gunModule.GetTotalSpread
-        gunModule.GetTotalSpread = function(self)
-            if Config.Silent.Enabled and Config.Silent.Active then
-                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
-                if target then
-                    return 0
-                end
-            end
-            return originalGetTotalSpread(self)
-        end
-        warn("[AX HSX] ✅ GetTotalSpread hooked")
-    end
-    
-    return true
+    return best
 end
 
 -- ================== ESP ==================
@@ -294,30 +167,12 @@ local HSLastESP = 0
 local function CreateHSESP(key)
     if HyperShotESP[key] then return end
     local e = {}
-    e.Box = Drawing.new("Square")
-    e.Box.Thickness = 1; e.Box.Filled = false
-    e.Box.Color = Color3.fromRGB(255, 255, 255); e.Box.Visible = false
-
-    e.Outline = Drawing.new("Square")
-    e.Outline.Thickness = 3; e.Outline.Filled = false
-    e.Outline.Color = Color3.fromRGB(0, 0, 0); e.Outline.Transparency = 0.5; e.Outline.Visible = false
-
-    e.Name = Drawing.new("Text")
-    e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true
-    e.Name.Color = Color3.fromRGB(255, 255, 255); e.Name.Visible = false
-
-    e.Distance = Drawing.new("Text")
-    e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true
-    e.Distance.Color = Color3.fromRGB(200, 200, 200); e.Distance.Visible = false
-
-    e.HealthBG = Drawing.new("Square")
-    e.HealthBG.Thickness = 1; e.HealthBG.Filled = true
-    e.HealthBG.Color = Color3.fromRGB(0, 0, 0); e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
-
-    e.HealthBar = Drawing.new("Square")
-    e.HealthBar.Thickness = 1; e.HealthBar.Filled = true
-    e.HealthBar.Color = Color3.fromRGB(0, 255, 0); e.HealthBar.Visible = false
-
+    e.Box = Drawing.new("Square"); e.Box.Thickness=1; e.Box.Filled=false; e.Box.Color=Color3.fromRGB(255,255,255); e.Box.Visible=false
+    e.Outline = Drawing.new("Square"); e.Outline.Thickness=3; e.Outline.Filled=false; e.Outline.Color=Color3.fromRGB(0,0,0); e.Outline.Transparency=0.5; e.Outline.Visible=false
+    e.Name = Drawing.new("Text"); e.Name.Size=13; e.Name.Center=true; e.Name.Outline=true; e.Name.Color=Color3.fromRGB(255,255,255); e.Name.Visible=false
+    e.Distance = Drawing.new("Text"); e.Distance.Size=12; e.Distance.Center=true; e.Distance.Outline=true; e.Distance.Color=Color3.fromRGB(200,200,200); e.Distance.Visible=false
+    e.HealthBG = Drawing.new("Square"); e.HealthBG.Thickness=1; e.HealthBG.Filled=true; e.HealthBG.Color=Color3.fromRGB(0,0,0); e.HealthBG.Transparency=0.5; e.HealthBG.Visible=false
+    e.HealthBar = Drawing.new("Square"); e.HealthBar.Thickness=1; e.HealthBar.Filled=true; e.HealthBar.Color=Color3.fromRGB(0,255,0); e.HealthBar.Visible=false
     HyperShotESP[key] = e
 end
 
@@ -339,43 +194,32 @@ local function UpdateHyperShotESP()
         for key in pairs(HyperShotESP) do HideHSESP(key) end
         return
     end
-
     local now = tick()
     if now - HSLastESP < 0.08 then return end
     HSLastESP = now
-
     Camera = Workspace.CurrentCamera
     if not Camera then return end
 
-    local mobs = GetMobsFolder()
+    local mobs = Workspace:FindFirstChild("Mobs")
     if not mobs then
         for key in pairs(HyperShotESP) do HideHSESP(key) end
         return
     end
 
     local activeKeys = {}
-
     for _, mob in ipairs(mobs:GetChildren()) do
         if not mob:IsA("Model") then continue end
-        
-        local key = mob.Name .. "_" .. tostring(mob:GetDebugId())
+        local key = mob.Name
         activeKeys[key] = true
 
-        -- Team check
-        local isTeammate = Config.ESP.TeamCheck and IsSameTeam(mob)
-        if isTeammate then
-            HideHSESP(key)
-            continue
+        if Config.ESP.TeamCheck and globalStuff:SameTeam(LocalPlayer, mob) then
+            HideHSESP(key); continue
         end
 
         local hum = mob:FindFirstChildOfClass("Humanoid")
-        local rp = mob:FindFirstChild("HumanoidRootPart")
-            or mob:FindFirstChild("FakeHRP")
-            or mob:FindFirstChild("UpperTorso")
+        local rp = mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChild("FakeHRP") or mob:FindFirstChild("UpperTorso")
         local head = mob:FindFirstChild("Head")
-
         if not hum or not rp or hum.Health <= 0 then HideHSESP(key); continue end
-        if mob:FindFirstChildOfClass("ForceField") then HideHSESP(key); continue end
 
         local dist = (Camera.CFrame.Position - rp.Position).Magnitude
         if dist > Config.ESP.MaxDistance then HideHSESP(key); continue end
@@ -383,13 +227,10 @@ local function UpdateHyperShotESP()
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideHSESP(key); continue end
 
-        if not HyperShotESP[key] then
-            pcall(function() CreateHSESP(key) end)
-        end
+        if not HyperShotESP[key] then CreateHSESP(key) end
         local esp = HyperShotESP[key]
         if not esp then continue end
 
-        -- Bounding box
         local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
         local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
@@ -397,7 +238,6 @@ local function UpdateHyperShotESP()
         local minX = sp.X - width / 2
         local minY = hSP.Y
 
-        -- Color: visible=verde, no visible=rojo
         local isBot = mob.Name:find("__Bot") ~= nil
         local col
         if isBot then
@@ -409,238 +249,89 @@ local function UpdateHyperShotESP()
         end
 
         if Config.ESP.Boxes then
-            esp.Outline.Size = Vector2.new(width + 2, height + 2)
-            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
-            esp.Outline.Visible = true
-            esp.Box.Size = Vector2.new(width, height)
-            esp.Box.Position = Vector2.new(minX, minY)
-            esp.Box.Color = col
-            esp.Box.Visible = true
-        else
-            esp.Box.Visible = false
-            esp.Outline.Visible = false
-        end
+            esp.Outline.Size=Vector2.new(width+2,height+2); esp.Outline.Position=Vector2.new(minX-1,minY-1); esp.Outline.Visible=true
+            esp.Box.Size=Vector2.new(width,height); esp.Box.Position=Vector2.new(minX,minY); esp.Box.Color=col; esp.Box.Visible=true
+        else esp.Box.Visible=false; esp.Outline.Visible=false end
 
         if Config.ESP.Names then
-            local displayName = mob.Name
-            if isBot then displayName = displayName:gsub("__Bot", "") .. " [BOT]" end
-            esp.Name.Text = displayName
-            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
-            esp.Name.Color = col
-            esp.Name.Visible = true
-        else
-            esp.Name.Visible = false
-        end
+            local dn = mob.Name
+            if isBot then dn = dn:gsub("__Bot","").." [BOT]" end
+            esp.Name.Text=dn; esp.Name.Position=Vector2.new(minX+width/2,minY-16); esp.Name.Color=col; esp.Name.Visible=true
+        else esp.Name.Visible=false end
 
         if Config.ESP.Distance then
-            esp.Distance.Text = math.floor(dist) .. "m"
-            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
-            esp.Distance.Visible = true
-        else
-            esp.Distance.Visible = false
-        end
+            esp.Distance.Text=math.floor(dist).."m"; esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2); esp.Distance.Visible=true
+        else esp.Distance.Visible=false end
 
         if Config.ESP.Boxes and hum then
-            local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-            local bh = height * pct
-            local hc = pct > 0.5
-                and Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
-                or Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
-            esp.HealthBG.Size = Vector2.new(3, height)
-            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
-            esp.HealthBG.Visible = true
-            esp.HealthBar.Size = Vector2.new(3, bh)
-            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
-            esp.HealthBar.Color = hc
-            esp.HealthBar.Visible = true
-        else
-            esp.HealthBG.Visible = false
-            esp.HealthBar.Visible = false
-        end
+            local pct=math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
+            local bh=height*pct
+            local hc=pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
+            esp.HealthBG.Size=Vector2.new(3,height); esp.HealthBG.Position=Vector2.new(minX-6,minY); esp.HealthBG.Visible=true
+            esp.HealthBar.Size=Vector2.new(3,bh); esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh)); esp.HealthBar.Color=hc; esp.HealthBar.Visible=true
+        else esp.HealthBG.Visible=false; esp.HealthBar.Visible=false end
     end
 
-    -- Limpiar ESP de mobs que ya no existen
     for key in pairs(HyperShotESP) do
-        if not activeKeys[key] then
-            RemoveHSESP(key)
-        end
+        if not activeKeys[key] then RemoveHSESP(key) end
     end
 end
-
--- ================== AIMBOT ==================
-local hsAimbotLocked = nil
-
-local function UpdateHSAimbot()
-    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
-        if not Config.Aimbot.Active then hsAimbotLocked = nil end
-        return
-    end
-
-    Camera = Workspace.CurrentCamera
-    if not Camera then return end
-
-    local target, part
-    
-    -- Aimlock: mantener target
-    if Config.Aimbot.Method == "Aimlock" and hsAimbotLocked then
-        if hsAimbotLocked.Parent then
-            local hum = hsAimbotLocked:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                part = GetTargetPart(hsAimbotLocked, Config.Aimbot.TargetPart)
-                if part and (not Config.Aimbot.VisibleCheck or IsVisible(part)) then
-                    target = hsAimbotLocked
-                end
-            end
-        end
-        if not target then hsAimbotLocked = nil end
-    end
-    
-    if not target then
-        target, part = GetAimbotTarget(Config.Aimbot.TeamCheck, Config.Aimbot.TargetPart)
-        if Config.Aimbot.Method == "Aimlock" and target then
-            hsAimbotLocked = target
-        end
-    end
-
-    if not target or not part then return end
-
-    local pos = part.Position
-    pcall(function()
-        if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-            local vel = part.AssemblyLinearVelocity
-            if vel and vel.Magnitude > 0.5 then
-                pos = pos + vel * Config.Aimbot.Prediction
-            end
-        end
-    end)
-
-    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-    if Config.Aimbot.Method == "Aimbot" then
-        local cur = Camera.CFrame
-        local tgt = CFrame.lookAt(cur.Position, pos)
-        Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
-    else
-        local sp, on = Camera:WorldToViewportPoint(pos)
-        if on then
-            local mp = UserInputService:GetMouseLocation()
-            local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-            local d = math.sqrt(dx * dx + dy * dy)
-            if d > 1 then
-                local spd = math.clamp(1 / sm, 0.05, 0.8)
-                local mx = math.clamp(dx * spd, -150, 150)
-                local my = math.clamp(dy * spd, -150, 150)
-                if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
-                    mousemoverel(mx, my)
-                end
-            end
-        end
-    end
-end
-
--- ================== INITIALIZATION ==================
--- Intentar cargar módulos con reintentos
-task.spawn(function()
-    local maxRetries = 20
-    local retryDelay = 2
-    
-    for i = 1, maxRetries do
-        if LoadGameModules() then
-            warn("[AX HSX] ✅ Game modules loaded (attempt " .. i .. ")")
-            
-            if InstallSilentHooks() then
-                warn("[AX HSX] ✅ Silent Aim hooks installed!")
-            else
-                warn("[AX HSX] ⚠ Some hooks failed, retrying...")
-                task.wait(3)
-                InstallSilentHooks()
-            end
-            
-            break
-        else
-            if i < maxRetries then
-                warn("[AX HSX] ⏳ Modules not ready, retry " .. i .. "/" .. maxRetries)
-                task.wait(retryDelay)
-            else
-                warn("[AX HSX] ❌ Failed to load modules after " .. maxRetries .. " attempts")
-            end
-        end
-    end
-end)
-
--- Reinstalar hooks cuando respawneas (los módulos pueden recargarse)
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(3)
-    Camera = Workspace.CurrentCamera
-    hsAimbotLocked = nil
-    UpdateVisFilter()
-    
-    -- Reintentar cargar módulos (pueden haberse recargado)
-    modulesLoaded = false
-    originalGetMousePos = nil
-    originalConeOfFire = nil
-    originalGetTotalSpread = nil
-    
-    task.wait(2)
-    if LoadGameModules() then
-        InstallSilentHooks()
-        warn("[AX HSX] ✅ Hooks reinstalled after respawn")
-    end
-end)
-
--- También monitorear cuando aparece el personaje en Workspace
-task.spawn(function()
-    while true do
-        task.wait(3)
-        local myChar = Workspace:FindFirstChild(LocalPlayer.Name)
-        if myChar then
-            UpdateVisFilter()
-        end
-        -- Si los módulos no están cargados, reintentar
-        if not modulesLoaded then
-            if LoadGameModules() then
-                InstallSilentHooks()
-            end
-        end
-    end
-end)
 
 -- ================== MAIN LOOPS ==================
-task.delay(3, function()
+task.delay(1, function()
     RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
-        UpdateHSAimbot()
+        -- Aimbot
+        if Config.Aimbot.Enabled and Config.Aimbot.Active then
+            local tp = GetAimbotTarget()
+            if tp then
+                local pos = tp.Position
+                pcall(function()
+                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                        local v = tp.AssemblyLinearVelocity
+                        if v and v.Magnitude > 0.5 then pos = pos + v * Config.Aimbot.Prediction end
+                    end
+                end)
+                local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+                if Config.Aimbot.Method == "Aimbot" then
+                    local cur = Camera.CFrame
+                    local tgt = CFrame.lookAt(cur.Position, pos)
+                    Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+                else
+                    local sp, on = Camera:WorldToViewportPoint(pos)
+                    if on then
+                        local mp = UserInputService:GetMouseLocation()
+                        local dx, dy = sp.X-mp.X, sp.Y-mp.Y
+                        local d = math.sqrt(dx*dx+dy*dy)
+                        if d > 1 then
+                            local spd = math.clamp(1/sm, 0.05, 0.8)
+                            local mx = math.clamp(dx*spd, -150, 150)
+                            local my = math.clamp(dy*spd, -150, 150)
+                            if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then mousemoverel(mx, my) end
+                        end
+                    end
+                end
+            else
+                if not Config.Aimbot.Active then hsAimbotLocked = nil end
+            end
+        else
+            if not Config.Aimbot.Active then hsAimbotLocked = nil end
+        end
     end)
 end)
 
-task.delay(4, function()
+task.delay(2, function()
     RunService.Heartbeat:Connect(function()
         UpdateHyperShotESP()
     end)
 end)
 
--- Monitorear Workspace.Mobs
+-- Vis filter update
 task.spawn(function()
-    local mobs = nil
-    while not mobs do
-        mobs = Workspace:FindFirstChild("Mobs")
-        if not mobs then task.wait(1) end
+    while true do
+        task.wait(2)
+        UpdateVisFilter()
     end
-    
-    mobs.ChildAdded:Connect(function(child)
-        -- Nuevo mob, ESP se actualizará automáticamente
-    end)
-    
-    mobs.ChildRemoved:Connect(function(child)
-        -- Limpiar ESP del mob removido
-        for key in pairs(HyperShotESP) do
-            if key:find(child.Name) then
-                RemoveHSESP(key)
-            end
-        end
-        if hsAimbotLocked == child then
-            hsAimbotLocked = nil
-        end
-    end)
 end)
 
 -- ================== FLAGS ==================
@@ -649,11 +340,4 @@ getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot module v3.0 loaded")
-warn("[AX HSX] Silent: Module hooks (GetMousePos+ConeOfFire+Spread)")
-warn("[AX HSX] ESP: Workspace.Mobs | TeamCheck: globalStuff:SameTeam()")
-
--- ================== CLEANUP ==================
-Players.PlayerRemoving:Connect(function(p)
-    RemoveHSESP(p.Name)
-end)
+warn("[AX HSX] ✅ HyperShot v3.1 loaded - Silent+Aimbot+ESP")
