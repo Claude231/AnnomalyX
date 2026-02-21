@@ -540,113 +540,218 @@ task.delay(12, function()
         repeat task.wait(0.5) until LocalPlayer.Character or tick()-timeout > 10
     end
 
+    -- GUARD: evita recursion infinita cuando nuestro propio hook
+    -- llama metodos que disparan __namecall nuevamente
+    local _inHook = false
+
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        -- Si ya estamos procesando el hook O es una llamada del exploit
+        -- dejamos pasar sin procesar para evitar recursion
+        if _inHook or checkcaller() then
+            return oldNamecall(self, ...)
+        end
+
         local method = getnamecallmethod()
-        local args   = {...}
 
-        if checkcaller() then return oldNamecall(self, ...) end
+        -- Filtro rapido: solo nos interesan estos metodos
+        -- Todo lo demas pasa directo sin activar el guard
+        local isRaycast = (method == "Raycast"
+            or method == "FindPartOnRay"
+            or method == "FindPartOnRayWithIgnoreList"
+            or method == "FindPartOnRayWithWhitelist")
+        local isFireServer = (method == "FireServer")
 
-        if Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart then
-            if math.random(100) > Config.Silent.HitChance then
-                return oldNamecall(self, ...)
-            end
-            if tick() - _lastShotModified < MIN_SHOT_INTERVAL then
-                return oldNamecall(self, ...)
-            end
+        if not (isRaycast or isFireServer) then
+            return oldNamecall(self, ...)
+        end
 
-            -- Solo interceptar raycasts del Workspace
-            if self == Workspace or self == workspace then
-                if method == "Raycast" then
-                    local origin    = args[1]
-                    local direction = args[2]
-                    if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+        -- Verificar condiciones de silent antes de activar el guard
+        if not (Config.Silent.Enabled and Config.Silent.Active
+            and CurrentTargetPos and CurrentTargetPart) then
+            return oldNamecall(self, ...)
+        end
 
-                        -- FIX PRINCIPAL: solo modificar raycasts que vienen
-                        -- cerca de la camara (disparos), NO los del personaje
-                        -- (movimiento, fisica, salto, etc.)
-                        local cam = Workspace.CurrentCamera
-                        if not cam then return oldNamecall(self, ...) end
+        -- Hit chance y rate limit antes del guard (son operaciones puras)
+        if math.random(100) > Config.Silent.HitChance then
+            return oldNamecall(self, ...)
+        end
+        if tick() - _lastShotModified < MIN_SHOT_INTERVAL then
+            return oldNamecall(self, ...)
+        end
 
-                        local camPos    = cam.CFrame.Position
-                        local distToCam = (origin - camPos).Magnitude
+        -- ACTIVAR GUARD: cualquier __namecall interno pasa directo
+        _inHook = true
 
-                        -- Si el origen esta a mas de 8 studs de la camara
-                        -- es un raycast de fisica/movimiento, NO lo tocamos
-                        if distToCam > 8 then
-                            return oldNamecall(self, ...)
+        local args = {...}
+        local result = nil
+
+        -- Workspace raycasts
+        if isRaycast and (self == Workspace or self == workspace) then
+            local cam = Workspace.CurrentCamera
+
+            if method == "Raycast" then
+                local origin    = args[1]
+                local direction = args[2]
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and cam then
+                    -- Filtro de origen: solo raycasts cercanos a la camara (disparos)
+                    -- Usamos operaciones matematicas puras, sin llamar metodos
+                    local camPos  = cam.CFrame.Position
+                    local dx = origin.X - camPos.X
+                    local dy = origin.Y - camPos.Y
+                    local dz = origin.Z - camPos.Z
+                    local distToCam = math.sqrt(dx*dx + dy*dy + dz*dz)
+
+                    if distToCam <= 8 then
+                        -- Calculo del angulo sin usar :Dot() (evita __namecall)
+                        local targetPos = CurrentTargetPos
+                        local toTargetX = targetPos.X - origin.X
+                        local toTargetY = targetPos.Y - origin.Y
+                        local toTargetZ = targetPos.Z - origin.Z
+                        local toTargetMag = math.sqrt(toTargetX*toTargetX + toTargetY*toTargetY + toTargetZ*toTargetZ)
+
+                        local dirMag = math.sqrt(direction.X*direction.X + direction.Y*direction.Y + direction.Z*direction.Z)
+
+                        if toTargetMag > 0 and dirMag > 0 then
+                            -- Dot product manual (sin llamar :Dot())
+                            local dot = (direction.X/dirMag)*(toTargetX/toTargetMag)
+                                      + (direction.Y/dirMag)*(toTargetY/toTargetMag)
+                                      + (direction.Z/dirMag)*(toTargetZ/toTargetMag)
+                            local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+
+                            if angle <= MAX_SILENT_ANGLE_DEG then
+                                -- Humanizacion manual sin llamar metodos externos
+                                local part   = CurrentTargetPart
+                                local size   = part.Size
+                                local offset = Vector3.new(
+                                    (math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,
+                                    (math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,
+                                    (math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE
+                                )
+                                local finalTarget = targetPos + offset
+                                local newDirX = finalTarget.X - origin.X
+                                local newDirY = finalTarget.Y - origin.Y
+                                local newDirZ = finalTarget.Z - origin.Z
+                                local newDirMag = math.sqrt(newDirX*newDirX + newDirY*newDirY + newDirZ*newDirZ)
+                                if newDirMag > 0 then
+                                    local scale = dirMag / newDirMag
+                                    args[2] = Vector3.new(
+                                        newDirX*scale,
+                                        newDirY*scale,
+                                        newDirZ*scale
+                                    )
+                                    _lastShotModified = tick()
+                                    _inHook = false
+                                    return oldNamecall(self, unpack(args))
+                                end
+                            end
                         end
-
-                        -- Verificar angulo: solo redirigir si apunta
-                        -- aproximadamente hacia el target
-                        local angle = GetAngleToTarget(origin, direction, CurrentTargetPos)
-                        if angle > MAX_SILENT_ANGLE_DEG then
-                            return oldNamecall(self, ...)
-                        end
-
-                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
-                        _lastShotModified = tick()
-                        args[2] = (targetPos - origin).Unit * direction.Magnitude
-                        return oldNamecall(self, unpack(args))
                     end
+                end
 
-                elseif method == "FindPartOnRay"
-                    or method == "FindPartOnRayWithIgnoreList"
-                    or method == "FindPartOnRayWithWhitelist" then
-                    local ray = args[1]
-                    if typeof(ray) == "Ray" then
+            elseif method == "FindPartOnRay"
+                or method == "FindPartOnRayWithIgnoreList"
+                or method == "FindPartOnRayWithWhitelist" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" and cam then
+                    local origin    = ray.Origin
+                    local direction = ray.Direction
+                    local camPos    = cam.CFrame.Position
+                    local dx = origin.X - camPos.X
+                    local dy = origin.Y - camPos.Y
+                    local dz = origin.Z - camPos.Z
+                    local distToCam = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-                        -- Mismo fix: filtrar por origen cercano a camara
-                        local cam = Workspace.CurrentCamera
-                        if not cam then return oldNamecall(self, ...) end
+                    if distToCam <= 8 then
+                        local targetPos  = CurrentTargetPos
+                        local toTargetX  = targetPos.X - origin.X
+                        local toTargetY  = targetPos.Y - origin.Y
+                        local toTargetZ  = targetPos.Z - origin.Z
+                        local toTargetMag = math.sqrt(toTargetX*toTargetX + toTargetY*toTargetY + toTargetZ*toTargetZ)
+                        local dirMag     = math.sqrt(direction.X*direction.X + direction.Y*direction.Y + direction.Z*direction.Z)
 
-                        local distToCam = (ray.Origin - cam.CFrame.Position).Magnitude
-                        if distToCam > 8 then
-                            return oldNamecall(self, ...)
+                        if toTargetMag > 0 and dirMag > 0 then
+                            local dot = (direction.X/dirMag)*(toTargetX/toTargetMag)
+                                      + (direction.Y/dirMag)*(toTargetY/toTargetMag)
+                                      + (direction.Z/dirMag)*(toTargetZ/toTargetMag)
+                            local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+
+                            if angle <= MAX_SILENT_ANGLE_DEG then
+                                local part   = CurrentTargetPart
+                                local size   = part.Size
+                                local offset = Vector3.new(
+                                    (math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,
+                                    (math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,
+                                    (math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE
+                                )
+                                local finalTarget = targetPos + offset
+                                local newDirX = finalTarget.X - origin.X
+                                local newDirY = finalTarget.Y - origin.Y
+                                local newDirZ = finalTarget.Z - origin.Z
+                                local newDirMag = math.sqrt(newDirX*newDirX + newDirY*newDirY + newDirZ*newDirZ)
+                                if newDirMag > 0 then
+                                    local scale = dirMag / newDirMag
+                                    args[1] = Ray.new(
+                                        origin,
+                                        Vector3.new(newDirX*scale, newDirY*scale, newDirZ*scale)
+                                    )
+                                    _lastShotModified = tick()
+                                    _inHook = false
+                                    return oldNamecall(self, unpack(args))
+                                end
+                            end
                         end
-
-                        local angle = GetAngleToTarget(ray.Origin, ray.Direction, CurrentTargetPos)
-                        if angle > MAX_SILENT_ANGLE_DEG then
-                            return oldNamecall(self, ...)
-                        end
-
-                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
-                        _lastShotModified = tick()
-                        args[1] = Ray.new(
-                            ray.Origin,
-                            (targetPos - ray.Origin).Unit * ray.Direction.Magnitude
-                        )
-                        return oldNamecall(self, unpack(args))
                     end
                 end
             end
 
-            -- RemoteEvent CFrame: solo si checkcaller es false
-            -- Usamos pcall en IsA para evitar recursion en el hook
+        -- RemoteEvent FireServer con CFrame
+        elseif isFireServer then
             local isRemote = false
+            -- Usar rawequal/typeof sin llamar :IsA() que dispara __namecall
             pcall(function()
-                if typeof(self) == "Instance" then
-                    isRemote = self.ClassName == "RemoteEvent"
-                end
+                isRemote = typeof(self) == "Instance" and self.ClassName == "RemoteEvent"
             end)
 
-            if isRemote and method == "FireServer" then
+            if isRemote then
                 local cam = Workspace.CurrentCamera
                 if cam then
-                    local camPos  = cam.CFrame.Position
-                    local camLook = cam.CFrame.LookVector
-                    local angle   = GetAngleToTarget(camPos, camLook, CurrentTargetPos)
+                    local camPos   = cam.CFrame.Position
+                    local camLook  = cam.CFrame.LookVector
+                    local targetPos = CurrentTargetPos
+
+                    local toTargetX = targetPos.X - camPos.X
+                    local toTargetY = targetPos.Y - camPos.Y
+                    local toTargetZ = targetPos.Z - camPos.Z
+                    local toTargetMag = math.sqrt(toTargetX*toTargetX + toTargetY*toTargetY + toTargetZ*toTargetZ)
+                    local lookMag = math.sqrt(camLook.X*camLook.X + camLook.Y*camLook.Y + camLook.Z*camLook.Z)
+
+                    local angle = 999
+                    if toTargetMag > 0 and lookMag > 0 then
+                        local dot = (camLook.X/lookMag)*(toTargetX/toTargetMag)
+                                  + (camLook.Y/lookMag)*(toTargetY/toTargetMag)
+                                  + (camLook.Z/lookMag)*(toTargetZ/toTargetMag)
+                        angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+                    end
+
                     if angle <= MAX_SILENT_ANGLE_DEG then
-                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
-                        local modified  = false
+                        local part   = CurrentTargetPart
+                        local size   = part.Size
+                        local finalTarget = targetPos + Vector3.new(
+                            (math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,
+                            (math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,
+                            (math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE
+                        )
+                        local modified = false
                         for i, arg in ipairs(args) do
                             if typeof(arg) == "CFrame" then
-                                args[i]  = CFrame.new(arg.Position, targetPos)
+                                args[i]  = CFrame.new(arg.Position, finalTarget)
                                 modified = true
                             end
                         end
                         if modified then
                             _lastShotModified = tick()
+                            _inHook = false
                             return oldNamecall(self, unpack(args))
                         end
                     end
@@ -654,6 +759,8 @@ task.delay(12, function()
             end
         end
 
+        -- Sin modificacion: desactivar guard y pasar normal
+        _inHook = false
         return oldNamecall(self, ...)
     end))
 end)
