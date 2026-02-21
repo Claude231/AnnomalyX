@@ -1,7 +1,7 @@
 --[[
-    ANNOMALY X - HyperShot Module v4.1
-    Silent Aim + Aimbot + ESP
-    Busca targets en Workspace.Mobs Y en Workspace (jugadores reales)
+    ANNOMALY X - HyperShot Module v4.2
+    Silent = SOLO Workspace.Mobs (como el script original)
+    ESP = Workspace.Mobs + jugadores reales en Workspace
 ]]
 
 if not getgenv().AX_Config then
@@ -48,93 +48,13 @@ local gunModule = require(localPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools
 
 warn("[AX HSX] ✅ Módulos cargados")
 
--- ================== GET ALL ENEMIES (Mobs + Real Players) ==================
-local function getAllEnemies()
-    local enemies = {}
-
-    -- 1. Buscar en Workspace.Mobs (bots y jugadores en partida normal)
-    local mobs = workspace:FindFirstChild("Mobs")
-    if mobs then
-        for _, mob in ipairs(mobs:GetChildren()) do
-            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
-                table.insert(enemies, mob)
-            end
-        end
-    end
-
-    -- 2. Buscar jugadores reales en Workspace (Duels y cuando no están en Mobs)
-    for _, player in ipairs(players:GetPlayers()) do
-        if player == localPlayer then continue end
-        -- Buscar su modelo en Workspace
-        local char = workspace:FindFirstChild(player.Name)
-        if char and char:IsA("Model") and char:FindFirstChildOfClass("Humanoid") then
-            -- Verificar que no esté ya agregado desde Mobs
-            local yaAgregado = false
-            for _, enemy in ipairs(enemies) do
-                if enemy == char then
-                    yaAgregado = true
-                    break
-                end
-            end
-            if not yaAgregado then
-                table.insert(enemies, char)
-            end
-        end
-        -- También verificar player.Character por si acaso
-        local pChar = player.Character
-        if pChar and pChar.Parent and pChar ~= char then
-            local hum = pChar:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                local yaAgregado2 = false
-                for _, enemy in ipairs(enemies) do
-                    if enemy == pChar then
-                        yaAgregado2 = true
-                        break
-                    end
-                end
-                if not yaAgregado2 then
-                    table.insert(enemies, pChar)
-                end
-            end
-        end
-    end
-
-    return enemies
-end
-
--- ================== VISIBILITY ==================
-local _visParams = RaycastParams.new()
-_visParams.FilterType = Enum.RaycastFilterType.Exclude
-_visParams.IgnoreWater = true
-
-local function UpdateVisFilter()
-    local t = {camera}
-    local myChar = workspace:FindFirstChild(localPlayer.Name)
-    if myChar then table.insert(t, myChar) end
-    if localPlayer.Character and localPlayer.Character ~= myChar then
-        table.insert(t, localPlayer.Character)
-    end
-    _visParams.FilterDescendantsInstances = t
-end
-UpdateVisFilter()
-
-local function IsVisible(part)
-    if not part then return false end
-    local origin = camera.CFrame.Position
-    local dir = part.Position - origin
-    local dist = dir.Magnitude
-    if dist < 3 then return true end
-    local result = workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
-    if not result then return true end
-    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
-end
-
--- ================== SILENT AIM ==================
+-- ================== SILENT AIM TARGET (SOLO Workspace.Mobs - IGUAL que script original) ==================
 local function getClosestTarget()
     local closestTarget, shortestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or 300
     local mousePos = userInput:GetMouseLocation()
-
-    for _, mob in ipairs(getAllEnemies()) do
+    local mobs = workspace:FindFirstChild("Mobs")
+    if not mobs then return nil end
+    for _, mob in ipairs(mobs:GetChildren()) do
         if globalStuff:SameTeam(localPlayer, mob) then continue end
         local humanoid = mob:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
@@ -152,6 +72,7 @@ local function getClosestTarget()
     return closestTarget
 end
 
+-- ================== SILENT AIM HOOKS (IGUAL que script original) ==================
 local originalGetMousePos = gameUIMod.GetMousePos
 gameUIMod.GetMousePos = function(self, ...)
     if Config.Silent.Enabled and Config.Silent.Active then
@@ -196,7 +117,69 @@ end
 
 warn("[AX HSX] ✅ Silent Aim hooks instalados")
 
--- ================== AIMBOT ==================
+-- ================== VISIBILITY (para ESP y Aimbot) ==================
+local _visParams = RaycastParams.new()
+_visParams.FilterType = Enum.RaycastFilterType.Exclude
+_visParams.IgnoreWater = true
+
+local function UpdateVisFilter()
+    local t = {camera}
+    local myChar = workspace:FindFirstChild(localPlayer.Name)
+    if myChar then table.insert(t, myChar) end
+    if localPlayer.Character and localPlayer.Character ~= myChar then
+        table.insert(t, localPlayer.Character)
+    end
+    _visParams.FilterDescendantsInstances = t
+end
+UpdateVisFilter()
+
+local function IsVisible(part)
+    if not part then return false end
+    local origin = camera.CFrame.Position
+    local dir = part.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
+    local result = workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
+    if not result then return true end
+    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
+end
+
+-- ================== ESP TARGETS (Mobs + jugadores reales) ==================
+local function getAllEnemiesForESP()
+    local enemies = {}
+    local added = {}
+
+    local mobs = workspace:FindFirstChild("Mobs")
+    if mobs then
+        for _, mob in ipairs(mobs:GetChildren()) do
+            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
+                table.insert(enemies, mob)
+                added[mob] = true
+            end
+        end
+    end
+
+    for _, player in ipairs(players:GetPlayers()) do
+        if player == localPlayer then continue end
+        local char = workspace:FindFirstChild(player.Name)
+        if char and char:IsA("Model") and char:FindFirstChildOfClass("Humanoid") and not added[char] then
+            table.insert(enemies, char)
+            added[char] = true
+        end
+        local pChar = player.Character
+        if pChar and pChar.Parent and pChar ~= char and not added[pChar] then
+            local hum = pChar:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                table.insert(enemies, pChar)
+                added[pChar] = true
+            end
+        end
+    end
+
+    return enemies
+end
+
+-- ================== AIMBOT (usa Workspace.Mobs igual que silent) ==================
 local hsAimbotLocked = nil
 
 runService.RenderStepped:Connect(function()
@@ -206,6 +189,9 @@ runService.RenderStepped:Connect(function()
         if not Config.Aimbot.Active then hsAimbotLocked = nil end
         return
     end
+
+    local mobs = workspace:FindFirstChild("Mobs")
+    if not mobs then return end
 
     local vp = camera.ViewportSize
     local center = Vector2.new(vp.X/2, vp.Y/2)
@@ -226,7 +212,7 @@ runService.RenderStepped:Connect(function()
     end
 
     if not bestPart then
-        for _, mob in ipairs(getAllEnemies()) do
+        for _, mob in ipairs(mobs:GetChildren()) do
             if Config.Aimbot.TeamCheck and globalStuff:SameTeam(localPlayer, mob) then continue end
             local hum = mob:FindFirstChildOfClass("Humanoid")
             if not hum or hum.Health <= 0 then continue end
@@ -274,7 +260,7 @@ runService.RenderStepped:Connect(function()
     end
 end)
 
--- ================== ESP ==================
+-- ================== ESP (usa getAllEnemiesForESP) ==================
 local HSESP = {}
 local lastESP = 0
 
@@ -323,7 +309,7 @@ runService.Heartbeat:Connect(function()
     UpdateVisFilter()
 
     local active = {}
-    for _, mob in ipairs(getAllEnemies()) do
+    for _, mob in ipairs(getAllEnemiesForESP()) do
         if not mob:IsA("Model") then continue end
         local key = mob.Name
         active[key] = true
@@ -384,7 +370,6 @@ runService.Heartbeat:Connect(function()
     end
 end)
 
--- Vis filter update
 task.spawn(function()
     while true do
         task.wait(2)
@@ -398,4 +383,4 @@ getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot v4.1 LOADED (Mobs + Real Players)")
+warn("[AX HSX] ✅ HyperShot v4.2 LOADED")
