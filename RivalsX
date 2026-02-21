@@ -533,10 +533,7 @@ task.delay(4, function()
 end)
 
 -- ================== NAMECALL HOOK ==================
--- delay 12s: hookmetamethod es el mayor riesgo de freeze en Rivals/Ronix
--- Se espera a que el juego esté completamente cargado
 task.delay(12, function()
-    -- Verificar que el personaje existe antes de hookear
     local char = LocalPlayer.Character
     if not char then
         local timeout = tick()
@@ -558,53 +555,101 @@ task.delay(12, function()
                 return oldNamecall(self, ...)
             end
 
-            local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
-
-            -- Workspace raycasts
+            -- Solo interceptar raycasts del Workspace
             if self == Workspace or self == workspace then
                 if method == "Raycast" then
                     local origin    = args[1]
                     local direction = args[2]
                     if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                        local angle = GetAngleToTarget(origin, direction, targetPos)
-                        if angle <= MAX_SILENT_ANGLE_DEG then
-                            _lastShotModified = tick()
-                            args[2] = (targetPos - origin).Unit * direction.Magnitude
-                            return oldNamecall(self, unpack(args))
+
+                        -- FIX PRINCIPAL: solo modificar raycasts que vienen
+                        -- cerca de la camara (disparos), NO los del personaje
+                        -- (movimiento, fisica, salto, etc.)
+                        local cam = Workspace.CurrentCamera
+                        if not cam then return oldNamecall(self, ...) end
+
+                        local camPos    = cam.CFrame.Position
+                        local distToCam = (origin - camPos).Magnitude
+
+                        -- Si el origen esta a mas de 8 studs de la camara
+                        -- es un raycast de fisica/movimiento, NO lo tocamos
+                        if distToCam > 8 then
+                            return oldNamecall(self, ...)
                         end
+
+                        -- Verificar angulo: solo redirigir si apunta
+                        -- aproximadamente hacia el target
+                        local angle = GetAngleToTarget(origin, direction, CurrentTargetPos)
+                        if angle > MAX_SILENT_ANGLE_DEG then
+                            return oldNamecall(self, ...)
+                        end
+
+                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
+                        _lastShotModified = tick()
+                        args[2] = (targetPos - origin).Unit * direction.Magnitude
+                        return oldNamecall(self, unpack(args))
                     end
+
                 elseif method == "FindPartOnRay"
                     or method == "FindPartOnRayWithIgnoreList"
                     or method == "FindPartOnRayWithWhitelist" then
                     local ray = args[1]
                     if typeof(ray) == "Ray" then
-                        local angle = GetAngleToTarget(ray.Origin, ray.Direction, targetPos)
-                        if angle <= MAX_SILENT_ANGLE_DEG then
-                            _lastShotModified = tick()
-                            args[1] = Ray.new(ray.Origin, (targetPos - ray.Origin).Unit * ray.Direction.Magnitude)
-                            return oldNamecall(self, unpack(args))
+
+                        -- Mismo fix: filtrar por origen cercano a camara
+                        local cam = Workspace.CurrentCamera
+                        if not cam then return oldNamecall(self, ...) end
+
+                        local distToCam = (ray.Origin - cam.CFrame.Position).Magnitude
+                        if distToCam > 8 then
+                            return oldNamecall(self, ...)
                         end
+
+                        local angle = GetAngleToTarget(ray.Origin, ray.Direction, CurrentTargetPos)
+                        if angle > MAX_SILENT_ANGLE_DEG then
+                            return oldNamecall(self, ...)
+                        end
+
+                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
+                        _lastShotModified = tick()
+                        args[1] = Ray.new(
+                            ray.Origin,
+                            (targetPos - ray.Origin).Unit * ray.Direction.Magnitude
+                        )
+                        return oldNamecall(self, unpack(args))
                     end
                 end
             end
 
-            -- RemoteEvent CFrame
-            if typeof(self) == "Instance" and self:IsA("RemoteEvent") and method == "FireServer" then
-                local modified = false
-                for i, arg in ipairs(args) do
-                    if typeof(arg) == "CFrame" then
-                        local camPos = Camera and Camera.CFrame.Position or Vector3.zero
-                        local camLook = Camera and Camera.CFrame.LookVector or Vector3.zAxis
-                        local angle = GetAngleToTarget(camPos, camLook, targetPos)
-                        if angle <= MAX_SILENT_ANGLE_DEG then
-                            args[i]  = CFrame.new(arg.Position, targetPos)
-                            modified = true
+            -- RemoteEvent CFrame: solo si checkcaller es false
+            -- Usamos pcall en IsA para evitar recursion en el hook
+            local isRemote = false
+            pcall(function()
+                if typeof(self) == "Instance" then
+                    isRemote = self.ClassName == "RemoteEvent"
+                end
+            end)
+
+            if isRemote and method == "FireServer" then
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    local camPos  = cam.CFrame.Position
+                    local camLook = cam.CFrame.LookVector
+                    local angle   = GetAngleToTarget(camPos, camLook, CurrentTargetPos)
+                    if angle <= MAX_SILENT_ANGLE_DEG then
+                        local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
+                        local modified  = false
+                        for i, arg in ipairs(args) do
+                            if typeof(arg) == "CFrame" then
+                                args[i]  = CFrame.new(arg.Position, targetPos)
+                                modified = true
+                            end
+                        end
+                        if modified then
+                            _lastShotModified = tick()
+                            return oldNamecall(self, unpack(args))
                         end
                     end
-                end
-                if modified then
-                    _lastShotModified = tick()
-                    return oldNamecall(self, unpack(args))
                 end
             end
         end
