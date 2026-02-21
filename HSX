@@ -1,564 +1,659 @@
 --[[
-    ANNOMALY X - HSX Module v3.0
-    FIX REAL: Metodo encontrado en scripts working de Hypershot
-    - Sin newcclosure (causa problemas)
-    - Sin _inHook guard (innecesario)
-    - Sin angle check (innecesario)  
-    - Filtro: RaycastParams como ultimo argumento = disparo real
-    - Arguments[3] = direction (no args[2])
+    ANNOMALY X - HyperShot Module v3.0
+    
+    HyperShot usa módulos Lua custom para el sistema de disparo:
+    - gameUIMod.GetMousePos -> posición del mouse
+    - gunModule.ConeOfFire -> spread del arma
+    - gunModule.GetTotalSpread -> valor de spread
+    - Enemigos en Workspace.Mobs
+    - Team check via globalStuff:SameTeam()
+    
+    Silent Aim hookea estos módulos, NO raycasts.
 ]]
 
 if not getgenv().AX_Config then
     local t = tick()
-    repeat task.wait() until getgenv().AX_Config or tick()-t > 30
+    repeat task.wait() until getgenv().AX_Config or tick() - t > 30
 end
 local Config = getgenv().AX_Config
 
-local hookmetamethod    = hookmetamethod
-local getnamecallmethod = getnamecallmethod or get_namecall_method
-local checkcaller       = checkcaller or function() return false end
-local mousemoverel      = mousemoverel or function() end
+local mousemoverel = mousemoverel or function() end
+local newcclosure  = newcclosure or function(f) return f end
 
-if not hookmetamethod or not getnamecallmethod then return end
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local Workspace         = game:GetService("Workspace")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera            = Workspace.CurrentCamera
+local LocalPlayer       = Players.LocalPlayer
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local Workspace        = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local Camera           = Workspace.CurrentCamera
-local LocalPlayer      = Players.LocalPlayer
-local Mouse            = LocalPlayer:GetMouse()
+-- ================== GAME MODULES ==================
+local globalStuff  = nil
+local gameUIMod    = nil
+local gunModule    = nil
+local gExtraModule = nil
 
--- ===== CACHE =====
-local _cachedPlayers = {}
-local _lastCache     = 0
-local function GetCachedPlayers()
-    local t = tick()
-    if t - _lastCache > 2 then
-        _cachedPlayers = Players:GetPlayers()
-        _lastCache = t
-    end
-    return _cachedPlayers
-end
+-- Originales
+local originalGetMousePos   = nil
+local originalConeOfFire    = nil
+local originalGetTotalSpread = nil
 
--- ===== TEAM CHECK =====
-local function IsTeammate(p)
-    if not p or p == LocalPlayer then return false end
-    local ok, r = pcall(function()
-        return p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team
+local modulesLoaded = false
+
+local function LoadGameModules()
+    if modulesLoaded then return true end
+    
+    local success = true
+    
+    pcall(function()
+        globalStuff = require(ReplicatedStorage.Modules.GlobalStuff)
     end)
-    return ok and r
+    if not globalStuff then
+        warn("[AX HSX] ⚠ GlobalStuff not found")
+        success = false
+    end
+    
+    pcall(function()
+        gameUIMod = require(LocalPlayer.PlayerGui.GameUI.GameUIMod)
+    end)
+    if not gameUIMod then
+        warn("[AX HSX] ⚠ GameUIMod not found")
+        success = false
+    end
+    
+    pcall(function()
+        gunModule = require(LocalPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun)
+    end)
+    if not gunModule then
+        warn("[AX HSX] ⚠ GunModule not found")
+        success = false
+    end
+    
+    pcall(function()
+        gExtraModule = require(LocalPlayer.PlayerGui.ControllerGUI.NewMainLocal.Tools.Tool.Gun.GExtra)
+    end)
+    
+    if success then
+        modulesLoaded = true
+    end
+    
+    return success
 end
 
--- ===== RAYCASTPARAMS =====
+-- ================== VISIBILITY ==================
 local _visParams = RaycastParams.new()
 _visParams.FilterType = Enum.RaycastFilterType.Exclude
 _visParams.IgnoreWater = true
-local function UpdateFilter()
-    local char = LocalPlayer.Character
+
+local function UpdateVisFilter()
     local t = {Camera}
-    if char then table.insert(t, char) end
+    local myChar = Workspace:FindFirstChild(LocalPlayer.Name)
+    if myChar then table.insert(t, myChar) end
     _visParams.FilterDescendantsInstances = t
 end
-UpdateFilter()
+UpdateVisFilter()
 
--- ===== VISIBILITY =====
 local function IsVisible(part)
     if not part then return false end
     local origin = Camera.CFrame.Position
-    local dir    = part.Position - origin
-    local dist   = dir.Magnitude
-    if dist < 2 then return true end
+    local dir = part.Position - origin
+    local dist = dir.Magnitude
+    if dist < 3 then return true end
     local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
     if not result then return true end
     return result.Instance and result.Instance:IsDescendantOf(part.Parent)
 end
 
--- ===== SCREEN POSITION =====
-local function GetScreenPos(V3)
-    local pos, vis = Camera:WorldToScreenPoint(V3)
-    return Vector2.new(pos.X, pos.Y), vis
+-- ================== TEAM CHECK ==================
+local function IsSameTeam(mob)
+    if not globalStuff then return false end
+    local ok, result = pcall(function()
+        return globalStuff:SameTeam(LocalPlayer, mob)
+    end)
+    if ok then return result end
+    return false
 end
 
--- ===== MOUSE POSITION =====
-local function GetMousePos()
-    return Vector2.new(Mouse.X, Mouse.Y)
+-- ================== TARGET FINDING ==================
+local function GetMobsFolder()
+    return Workspace:FindFirstChild("Mobs")
 end
 
--- ===== DIRECTION =====
--- Igual que el script working: (Position - Origin).Unit * magnitud original
-local function GetDirection(Origin, TargetPos)
-    return (TargetPos - Origin).Unit * (Origin - TargetPos).Magnitude
+local function GetTargetPart(mob, setting)
+    if not mob then return nil end
+    if setting == "Random" then
+        local valid = {}
+        for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "FakeHRP"}) do
+            local p = mob:FindFirstChild(name)
+            if p then table.insert(valid, p) end
+        end
+        if #valid > 0 then return valid[math.random(#valid)] end
+    end
+    return mob:FindFirstChild(setting)
+        or mob:FindFirstChild("Head")
+        or mob:FindFirstChild("HumanoidRootPart")
 end
 
--- ===== GET CLOSEST PLAYER =====
--- Para el namecall hook: busqueda directa sin cache de target
--- (igual que el script working que funciona)
-local function GetClosestPlayer()
-    local closest   = nil
-    local bestDist  = Config.FOV.Enabled and Config.FOV.Radius or 10000
-    local mousePos  = GetMousePos()
+local CurrentSilentTarget = nil
+local CurrentSilentPart   = nil
 
-    for _, plr in next, GetCachedPlayers() do
-        if plr == LocalPlayer then continue end
-        if Config.Silent.TeamCheck and IsTeammate(plr) then continue end
-
-        local char = plr.Character
-        local head = char and char:FindFirstChild("Head")
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-
-        if not head or not hum or hum.Health <= 0 then continue end
-        if char:FindFirstChildOfClass("ForceField") then continue end
-        if Config.Silent.VisibleCheck and not IsVisible(head) then continue end
-
-        local sp, vis = GetScreenPos(head.Position)
-        if not vis then continue end
-
-        local d = (mousePos - sp).Magnitude
-        if d < bestDist then
-            bestDist = d
-            closest  = head
+local function GetClosestTarget(teamCheck, targetPartSetting)
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil, nil end
+    
+    local mobs = GetMobsFolder()
+    if not mobs then return nil, nil end
+    
+    local closestTarget, closestPart = nil, nil
+    local shortestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
+    local mousePos = UserInputService:GetMouseLocation()
+    
+    for _, mob in ipairs(mobs:GetChildren()) do
+        if not mob:IsA("Model") then continue end
+        
+        -- Team check
+        if teamCheck and IsSameTeam(mob) then continue end
+        
+        local humanoid = mob:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        if mob:FindFirstChildOfClass("ForceField") then continue end
+        
+        local part = GetTargetPart(mob, targetPartSetting or "Head")
+        if not part then continue end
+        
+        if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
+        
+        local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
+        if not onScreen then continue end
+        
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+        if dist < shortestDist then
+            shortestDist = dist
+            closestTarget = mob
+            closestPart = part
         end
     end
-
-    -- Si Head no funciona, intentar con HumanoidRootPart
-    if not closest then
-        for _, plr in next, GetCachedPlayers() do
-            if plr == LocalPlayer then continue end
-            local char = plr.Character
-            local rp   = char and char:FindFirstChild("HumanoidRootPart")
-            local hum  = char and char:FindFirstChildOfClass("Humanoid")
-            if not rp or not hum or hum.Health <= 0 then continue end
-            local sp, vis = GetScreenPos(rp.Position)
-            if not vis then continue end
-            local d = (mousePos - sp).Magnitude
-            if d < (Config.FOV.Enabled and Config.FOV.Radius or 10000) then
-                closest = rp
-            end
-        end
-    end
-
-    return closest
+    
+    return closestTarget, closestPart
 end
 
--- ===== HOOK __index: Mouse.Hit / Mouse.Target =====
--- Hypershot tambien puede leer Mouse.Hit para la direccion
-task.delay(2, function()
-    if not LocalPlayer.Character then
-        local t = tick()
-        repeat task.wait(0.5) until LocalPlayer.Character or tick()-t > 15
+-- Para aimbot (usa FOV de aimbot y centro de pantalla)
+local function GetAimbotTarget(teamCheck, targetPartSetting)
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil, nil end
+    
+    local mobs = GetMobsFolder()
+    if not mobs then return nil, nil end
+    
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    
+    local closestTarget, closestPart = nil, nil
+    local shortestDist = Config.Aimbot.FOVRadius or 150
+    
+    for _, mob in ipairs(mobs:GetChildren()) do
+        if not mob:IsA("Model") then continue end
+        if teamCheck and IsSameTeam(mob) then continue end
+        
+        local humanoid = mob:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        if mob:FindFirstChildOfClass("ForceField") then continue end
+        
+        local part = GetTargetPart(mob, targetPartSetting or "Head")
+        if not part then continue end
+        
+        if Config.Aimbot.VisibleCheck and not IsVisible(part) then continue end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - ref).Magnitude
+        if dist < shortestDist then
+            shortestDist = dist
+            closestTarget = mob
+            closestPart = part
+        end
     end
+    
+    return closestTarget, closestPart
+end
 
-    local oldIndex
-    oldIndex = hookmetamethod(game, "__index", function(self, index)
-        if self == Mouse and (index == "Hit" or index == "Target") then
-            if Config.Silent.Enabled and Config.Silent.Active and not checkcaller() then
-                if math.random(100) <= Config.Silent.HitChance then
-                    local target = GetClosestPlayer()
-                    if target then
-                        if index == "Hit" then
-                            return CFrame.new(target.Position)
-                        elseif index == "Target" then
-                            return target
+-- ================== SILENT AIM HOOKS ==================
+local function InstallSilentHooks()
+    if not modulesLoaded then return false end
+    
+    -- Hook GetMousePos
+    if gameUIMod and gameUIMod.GetMousePos and not originalGetMousePos then
+        originalGetMousePos = gameUIMod.GetMousePos
+        gameUIMod.GetMousePos = function(self, ...)
+            if Config.Silent.Enabled and Config.Silent.Active then
+                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
+                if target then
+                    local head = target:FindFirstChild("Head")
+                        or target:FindFirstChild(Config.Silent.TargetPart)
+                        or target:FindFirstChild("HumanoidRootPart")
+                    if head then
+                        if math.random(100) <= Config.Silent.HitChance then
+                            return head.Position
                         end
                     end
                 end
             end
+            return originalGetMousePos(self, ...)
         end
-        return oldIndex(self, index)
-    end)
-end)
-
--- ===== HOOK __namecall: Workspace:Raycast() =====
--- METODO EXACTO del script working encontrado en investigacion:
--- 1. Solo interceptar Raycast (no FindPartOnRay)
--- 2. Verificar que el ultimo argumento es RaycastParams (= disparo real)
--- 3. Sin newcclosure, sin _inHook, sin angle check
--- 4. Arguments[3] = direction (Arguments[1]=self, [2]=origin, [3]=dir, [4]=params)
-task.delay(2, function()
-    if not LocalPlayer.Character then
-        local t = tick()
-        repeat task.wait(0.5) until LocalPlayer.Character or tick()-t > 15
+        warn("[AX HSX] ✅ GetMousePos hooked")
     end
-
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", function(...)
-        local Method    = getnamecallmethod()
-        local Arguments = {...}
-
-        if Arguments[1] == workspace and Method == "Raycast" then
-            -- FILTRO CLAVE: solo raycasts con RaycastParams son disparos reales
-            -- Physics/movement raycasts no pasan RaycastParams
-            if typeof(Arguments[#Arguments]) ~= "RaycastParams" then
-                return oldNamecall(...)
+    
+    -- Hook ConeOfFire
+    if gunModule and gunModule.ConeOfFire and not originalConeOfFire then
+        originalConeOfFire = gunModule.ConeOfFire
+        gunModule.ConeOfFire = function(self, origin, mousePos, spread)
+            if Config.Silent.Enabled and Config.Silent.Active then
+                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
+                if target then
+                    local head = target:FindFirstChild("Head")
+                        or target:FindFirstChild(Config.Silent.TargetPart)
+                        or target:FindFirstChild("HumanoidRootPart")
+                    if head then
+                        if math.random(100) <= Config.Silent.HitChance then
+                            return head.Position
+                        end
+                    end
+                end
             end
-
-            if not (Config.Silent.Enabled and Config.Silent.Active) then
-                return oldNamecall(...)
+            return originalConeOfFire(self, origin, mousePos, spread)
+        end
+        warn("[AX HSX] ✅ ConeOfFire hooked")
+    end
+    
+    -- Hook GetTotalSpread
+    if gunModule and gunModule.GetTotalSpread and not originalGetTotalSpread then
+        originalGetTotalSpread = gunModule.GetTotalSpread
+        gunModule.GetTotalSpread = function(self)
+            if Config.Silent.Enabled and Config.Silent.Active then
+                local target = GetClosestTarget(Config.Silent.TeamCheck, Config.Silent.TargetPart)
+                if target then
+                    return 0
+                end
             end
-
-            if math.random(100) > Config.Silent.HitChance then
-                return oldNamecall(...)
-            end
-
-            local HitPart = GetClosestPlayer()
-            if HitPart then
-                -- Arguments[2] = origin, Arguments[3] = direction
-                Arguments[3] = GetDirection(Arguments[2], HitPart.Position)
-                return oldNamecall(unpack(Arguments))
-            end
+            return originalGetTotalSpread(self)
         end
-
-        return oldNamecall(...)
-    end)
-end)
-
--- ===== AIMBOT =====
-local _aimbotLocked = nil
-local HS_PARTS      = {"Head", "HumanoidRootPart", "UpperTorso"}
-local _aimbotRnd    = "Head"
-local _aimbotSw     = 0
-
-local function IsPlayerValid(p)
-    if not p or not p.Parent or p == LocalPlayer then return false end
-    if Config.Aimbot.TeamCheck and IsTeammate(p) then return false end
-    local c = p.Character
-    if not c or c:FindFirstChildOfClass("ForceField") then return false end
-    local h = c:FindFirstChildOfClass("Humanoid")
-    return h and h.Health > 0
+        warn("[AX HSX] ✅ GetTotalSpread hooked")
+    end
+    
+    return true
 end
 
-local function GetAimbotPart(char)
-    if not char then return nil end
-    local s = Config.Aimbot.TargetPart
-    if s == "Random" then
-        local t = tick()
-        if t - _aimbotSw > (Config.Aimbot.RandomInterval or 0.5) then
-            local v = {}
-            for _, n in ipairs(HS_PARTS) do
-                if char:FindFirstChild(n) then table.insert(v, n) end
-            end
-            if #v > 0 then _aimbotRnd = v[math.random(#v)] end
-            _aimbotSw = t
-        end
-        return char:FindFirstChild(_aimbotRnd) or char:FindFirstChild("Head")
-    end
-    return char:FindFirstChild(s)
-        or char:FindFirstChild("Head")
-        or char:FindFirstChild("HumanoidRootPart")
-end
+-- ================== ESP ==================
+local HyperShotESP = {}
+local HSLastESP = 0
 
-local function GetAimbotTarget()
-    Camera = Workspace.CurrentCamera if not Camera then return nil end
-    local fov    = Config.Aimbot.FOVRadius or 150
-    local vp     = Camera.ViewportSize
-    local center = Vector2.new(vp.X/2, vp.Y/2)
-    local mp     = UserInputService:GetMouseLocation()
-    local ref    = Config.Aimbot.Method == "Aimbot" and center or mp
-
-    if Config.Aimbot.Method == "Aimlock" and _aimbotLocked then
-        if IsPlayerValid(_aimbotLocked) then
-            local tp = GetAimbotPart(_aimbotLocked.Character)
-            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
-                local sp, on = Camera:WorldToViewportPoint(tp.Position)
-                if on then return tp end
-            end
-        end
-        _aimbotLocked = nil
-    end
-
-    local best, bestD, bestP = nil, fov, nil
-    for _, plr in ipairs(GetCachedPlayers()) do
-        if not IsPlayerValid(plr) then continue end
-        local tp = GetAimbotPart(plr.Character)
-        if not tp then continue end
-        if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
-        local sp, on = Camera:WorldToViewportPoint(tp.Position)
-        if not on then continue end
-        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
-        if d < bestD then bestD = d best = tp bestP = plr end
-    end
-    if Config.Aimbot.Method == "Aimlock" and bestP then _aimbotLocked = bestP end
-    return best
-end
-
--- ===== HITBOX EXPANDER =====
-local _origSizes  = {}
-local _origTrans  = {}
-local _origCC     = {}
-local _origMass   = {}
-local _expanded   = {}
-local _lastHB     = 0
-
-local function SaveProps(p, pn, part)
-    if not _origSizes[p]  then _origSizes[p]  = {} end
-    if not _origTrans[p]  then _origTrans[p]  = {} end
-    if not _origCC[p]     then _origCC[p]     = {} end
-    if not _origMass[p]   then _origMass[p]   = {} end
-    if not _origSizes[p][pn] then
-        _origSizes[p][pn] = part.Size
-        _origTrans[p][pn] = part.Transparency
-        _origCC[p][pn]    = part.CanCollide
-        _origMass[p][pn]  = part.Massless
-    end
-end
-
-local function RestoreHitbox(p)
-    if not p then return end
-    local c = pcall(function() return p.Character end) and p.Character
-    if not c then return end
-    if _origSizes[p] then
-        for pn, os in pairs(_origSizes[p]) do
-            local pt = c:FindFirstChild(pn)
-            if pt then pcall(function()
-                pt.Size         = os
-                pt.Transparency = _origTrans[p][pn]
-                pt.Massless     = _origMass[p][pn]
-                pt.CanCollide   = _origCC[p][pn]
-            end) end
-        end
-    end
-    _expanded[p] = nil
-end
-
-local function CleanHitboxes()
-    for p in pairs(_expanded) do RestoreHitbox(p) end
-    _origSizes={} _origTrans={} _origCC={} _origMass={} _expanded={}
-end
-
-local function ExpandHitbox(p, size)
-    local c = p.Character if not c then return end
-    for _, pn in ipairs({"Head","HumanoidRootPart","UpperTorso"}) do
-        local pt = c:FindFirstChild(pn)
-        if pt and pt:IsA("BasePart") then
-            SaveProps(p, pn, pt)
-            pcall(function()
-                pt.CanCollide   = false
-                pt.Massless     = true
-                pt.Size         = Vector3.new(size, size, size)
-                pt.Transparency = Config.Hitbox.Transparency or 0.5
-            end)
-        end
-    end
-    _expanded[p] = true
-end
-
-local function UpdateHitboxes()
-    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
-        CleanHitboxes() return
-    end
-    local t = tick()
-    if t - _lastHB < 0.05 then return end
-    _lastHB = t
-    Camera = Workspace.CurrentCamera if not Camera then return end
-
-    local mp  = UserInputService:GetMouseLocation()
-    local fr  = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
-    local should = {}
-
-    for _, plr in ipairs(GetCachedPlayers()) do
-        if plr == LocalPlayer or not plr.Parent then continue end
-        if Config.Hitbox.TeamCheck and IsTeammate(plr) then continue end
-        local c = plr.Character if not c then continue end
-        local h = c:FindFirstChildOfClass("Humanoid")
-        if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
-
-        local sz = Config.Hitbox.MaxSize
-        if Config.Hitbox.Method == "DHE (Dynamic)" then
-            local rp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head")
-            if not rp then continue end
-            local sp, on = Camera:WorldToViewportPoint(rp.Position)
-            if not on then continue end
-            local d = (mp - Vector2.new(sp.X,sp.Y)).Magnitude
-            if d > fr then continue end
-            sz = 1 + (Config.Hitbox.MaxSize - 1) * (1 - d/fr)
-        end
-        should[plr] = sz
-    end
-
-    for p in pairs(_expanded) do if not should[p] then RestoreHitbox(p) end end
-    for p, sz in pairs(should) do ExpandHitbox(p, sz) end
-end
-
--- ===== ESP =====
-local HSESP  = {}
-local _lastE = 0
-
-local function CreateESP(p)
-    if HSESP[p] then return end
+local function CreateHSESP(key)
+    if HyperShotESP[key] then return end
     local e = {}
-    e.Box     = Drawing.new("Square")
-    e.Box.Thickness=1 e.Box.Filled=false
-    e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Visible=false
-    e.Outline  = Drawing.new("Square")
-    e.Outline.Thickness=3 e.Outline.Filled=false
-    e.Outline.Color=Color3.fromRGB(0,0,0)
-    e.Outline.Transparency=0.5 e.Outline.Visible=false
-    e.Name     = Drawing.new("Text")
-    e.Name.Size=13 e.Name.Center=true e.Name.Outline=true
-    e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1; e.Box.Filled = false
+    e.Box.Color = Color3.fromRGB(255, 255, 255); e.Box.Visible = false
+
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness = 3; e.Outline.Filled = false
+    e.Outline.Color = Color3.fromRGB(0, 0, 0); e.Outline.Transparency = 0.5; e.Outline.Visible = false
+
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255); e.Name.Visible = false
+
     e.Distance = Drawing.new("Text")
-    e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true
-    e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
+    e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200, 200, 200); e.Distance.Visible = false
+
     e.HealthBG = Drawing.new("Square")
-    e.HealthBG.Thickness=1 e.HealthBG.Filled=true
-    e.HealthBG.Color=Color3.fromRGB(0,0,0)
-    e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
-    e.HealthBar= Drawing.new("Square")
-    e.HealthBar.Thickness=1 e.HealthBar.Filled=true
-    e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
-    HSESP[p] = e
+    e.HealthBG.Thickness = 1; e.HealthBG.Filled = true
+    e.HealthBG.Color = Color3.fromRGB(0, 0, 0); e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
+
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness = 1; e.HealthBar.Filled = true
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0); e.HealthBar.Visible = false
+
+    HyperShotESP[key] = e
 end
 
-local function RemoveESP(p)
-    local e = HSESP[p] if not e then return end
+local function RemoveHSESP(key)
+    local e = HyperShotESP[key]
+    if not e then return end
     for _, d in pairs(e) do pcall(function() d:Remove() end) end
-    HSESP[p] = nil
+    HyperShotESP[key] = nil
 end
 
-local function HideESP(p)
-    local e = HSESP[p] if not e then return end
+local function HideHSESP(key)
+    local e = HyperShotESP[key]
+    if not e then return end
     for _, d in pairs(e) do pcall(function() d.Visible = false end) end
 end
 
-local function UpdateESP()
+local function UpdateHyperShotESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(HSESP) do HideESP(p) end return
+        for key in pairs(HyperShotESP) do HideHSESP(key) end
+        return
     end
-    local t = tick()
-    if t - _lastE < 0.08 then return end
-    _lastE = t
-    Camera = Workspace.CurrentCamera if not Camera then return end
 
-    local active = {}
-    for _, plr in ipairs(GetCachedPlayers()) do
-        if plr == LocalPlayer then continue end
-        active[plr] = true
-        local isTm = IsTeammate(plr)
-        if Config.ESP.TeamCheck and isTm then HideESP(plr) continue end
-        if not HSESP[plr] then pcall(function() CreateESP(plr) end) end
-        local esp = HSESP[plr] if not esp then continue end
-        local c    = plr.Character
-        local h    = c and c:FindFirstChildOfClass("Humanoid")
-        local rp   = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
-        local head = c and c:FindFirstChild("Head")
-        if not c or not h or not rp or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then HideESP(plr) continue end
-        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
-        if dist > Config.ESP.MaxDistance then HideESP(plr) continue end
-        local sp, on = Camera:WorldToViewportPoint(rp.Position)
-        if not on then HideESP(plr) continue end
-        local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))) or sp
-        local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0)))
-        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
-        local width  = height / 2
-        local minX   = sp.X - width/2
-        local minY   = hSP.Y
-        local col
-        if isTm then col = Color3.fromRGB(80,150,255)
-        else
-            local vis = head and IsVisible(head) or false
-            col = vis and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50)
-        end
-        if Config.ESP.Boxes then
-            esp.Outline.Size=Vector2.new(width+2,height+2) esp.Outline.Position=Vector2.new(minX-1,minY-1) esp.Outline.Visible=true
-            esp.Box.Size=Vector2.new(width,height) esp.Box.Position=Vector2.new(minX,minY) esp.Box.Color=col esp.Box.Visible=true
-        else esp.Box.Visible=false esp.Outline.Visible=false end
-        if Config.ESP.Names then
-            esp.Name.Text=plr.DisplayName or plr.Name esp.Name.Position=Vector2.new(minX+width/2,minY-16) esp.Name.Color=col esp.Name.Visible=true
-        else esp.Name.Visible=false end
-        if Config.ESP.Distance then
-            esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2) esp.Distance.Visible=true
-        else esp.Distance.Visible=false end
-        if Config.ESP.Boxes and h then
-            local pct = math.clamp(h.Health/math.max(h.MaxHealth,1),0,1)
-            local bh  = height*pct
-            local hc  = pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
-            esp.HealthBG.Size=Vector2.new(3,height) esp.HealthBG.Position=Vector2.new(minX-6,minY) esp.HealthBG.Visible=true
-            esp.HealthBar.Size=Vector2.new(3,bh) esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh)) esp.HealthBar.Color=hc esp.HealthBar.Visible=true
-        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+    local now = tick()
+    if now - HSLastESP < 0.08 then return end
+    HSLastESP = now
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local mobs = GetMobsFolder()
+    if not mobs then
+        for key in pairs(HyperShotESP) do HideHSESP(key) end
+        return
     end
-    for p in pairs(HSESP) do
-        if not active[p] then
-            if not p.Parent then RemoveESP(p) else HideESP(p) end
+
+    local activeKeys = {}
+
+    for _, mob in ipairs(mobs:GetChildren()) do
+        if not mob:IsA("Model") then continue end
+        
+        local key = mob.Name .. "_" .. tostring(mob:GetDebugId())
+        activeKeys[key] = true
+
+        -- Team check
+        local isTeammate = Config.ESP.TeamCheck and IsSameTeam(mob)
+        if isTeammate then
+            HideHSESP(key)
+            continue
+        end
+
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local rp = mob:FindFirstChild("HumanoidRootPart")
+            or mob:FindFirstChild("FakeHRP")
+            or mob:FindFirstChild("UpperTorso")
+        local head = mob:FindFirstChild("Head")
+
+        if not hum or not rp or hum.Health <= 0 then HideHSESP(key); continue end
+        if mob:FindFirstChildOfClass("ForceField") then HideHSESP(key); continue end
+
+        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideHSESP(key); continue end
+
+        local sp, on = Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideHSESP(key); continue end
+
+        if not HyperShotESP[key] then
+            pcall(function() CreateHSESP(key) end)
+        end
+        local esp = HyperShotESP[key]
+        if not esp then continue end
+
+        -- Bounding box
+        local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
+        local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
+        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
+        local width = height / 2
+        local minX = sp.X - width / 2
+        local minY = hSP.Y
+
+        -- Color: visible=verde, no visible=rojo
+        local isBot = mob.Name:find("__Bot") ~= nil
+        local col
+        if isBot then
+            col = head and IsVisible(head) and Color3.fromRGB(255, 200, 50) or Color3.fromRGB(255, 120, 30)
+        elseif head and IsVisible(head) then
+            col = Color3.fromRGB(50, 255, 50)
+        else
+            col = Color3.fromRGB(255, 50, 50)
+        end
+
+        if Config.ESP.Boxes then
+            esp.Outline.Size = Vector2.new(width + 2, height + 2)
+            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+            esp.Outline.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(minX, minY)
+            esp.Box.Color = col
+            esp.Box.Visible = true
+        else
+            esp.Box.Visible = false
+            esp.Outline.Visible = false
+        end
+
+        if Config.ESP.Names then
+            local displayName = mob.Name
+            if isBot then displayName = displayName:gsub("__Bot", "") .. " [BOT]" end
+            esp.Name.Text = displayName
+            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+            esp.Name.Color = col
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+
+        if Config.ESP.Distance then
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+
+        if Config.ESP.Boxes and hum then
+            local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+            local bh = height * pct
+            local hc = pct > 0.5
+                and Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
+                or Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+            esp.HealthBG.Visible = true
+            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
+            esp.HealthBar.Color = hc
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end
+
+    -- Limpiar ESP de mobs que ya no existen
+    for key in pairs(HyperShotESP) do
+        if not activeKeys[key] then
+            RemoveHSESP(key)
         end
     end
 end
 
--- ===== LOOPS =====
-task.delay(2, function()
+-- ================== AIMBOT ==================
+local hsAimbotLocked = nil
+
+local function UpdateHSAimbot()
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        if not Config.Aimbot.Active then hsAimbotLocked = nil end
+        return
+    end
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local target, part
+    
+    -- Aimlock: mantener target
+    if Config.Aimbot.Method == "Aimlock" and hsAimbotLocked then
+        if hsAimbotLocked.Parent then
+            local hum = hsAimbotLocked:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                part = GetTargetPart(hsAimbotLocked, Config.Aimbot.TargetPart)
+                if part and (not Config.Aimbot.VisibleCheck or IsVisible(part)) then
+                    target = hsAimbotLocked
+                end
+            end
+        end
+        if not target then hsAimbotLocked = nil end
+    end
+    
+    if not target then
+        target, part = GetAimbotTarget(Config.Aimbot.TeamCheck, Config.Aimbot.TargetPart)
+        if Config.Aimbot.Method == "Aimlock" and target then
+            hsAimbotLocked = target
+        end
+    end
+
+    if not target or not part then return end
+
+    local pos = part.Position
+    pcall(function()
+        if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+            local vel = part.AssemblyLinearVelocity
+            if vel and vel.Magnitude > 0.5 then
+                pos = pos + vel * Config.Aimbot.Prediction
+            end
+        end
+    end)
+
+    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+    if Config.Aimbot.Method == "Aimbot" then
+        local cur = Camera.CFrame
+        local tgt = CFrame.lookAt(cur.Position, pos)
+        Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+    else
+        local sp, on = Camera:WorldToViewportPoint(pos)
+        if on then
+            local mp = UserInputService:GetMouseLocation()
+            local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+            local d = math.sqrt(dx * dx + dy * dy)
+            if d > 1 then
+                local spd = math.clamp(1 / sm, 0.05, 0.8)
+                local mx = math.clamp(dx * spd, -150, 150)
+                local my = math.clamp(dy * spd, -150, 150)
+                if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                    mousemoverel(mx, my)
+                end
+            end
+        end
+    end
+end
+
+-- ================== INITIALIZATION ==================
+-- Intentar cargar módulos con reintentos
+task.spawn(function()
+    local maxRetries = 20
+    local retryDelay = 2
+    
+    for i = 1, maxRetries do
+        if LoadGameModules() then
+            warn("[AX HSX] ✅ Game modules loaded (attempt " .. i .. ")")
+            
+            if InstallSilentHooks() then
+                warn("[AX HSX] ✅ Silent Aim hooks installed!")
+            else
+                warn("[AX HSX] ⚠ Some hooks failed, retrying...")
+                task.wait(3)
+                InstallSilentHooks()
+            end
+            
+            break
+        else
+            if i < maxRetries then
+                warn("[AX HSX] ⏳ Modules not ready, retry " .. i .. "/" .. maxRetries)
+                task.wait(retryDelay)
+            else
+                warn("[AX HSX] ❌ Failed to load modules after " .. maxRetries .. " attempts")
+            end
+        end
+    end
+end)
+
+-- Reinstalar hooks cuando respawneas (los módulos pueden recargarse)
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(3)
+    Camera = Workspace.CurrentCamera
+    hsAimbotLocked = nil
+    UpdateVisFilter()
+    
+    -- Reintentar cargar módulos (pueden haberse recargado)
+    modulesLoaded = false
+    originalGetMousePos = nil
+    originalConeOfFire = nil
+    originalGetTotalSpread = nil
+    
+    task.wait(2)
+    if LoadGameModules() then
+        InstallSilentHooks()
+        warn("[AX HSX] ✅ Hooks reinstalled after respawn")
+    end
+end)
+
+-- También monitorear cuando aparece el personaje en Workspace
+task.spawn(function()
+    while true do
+        task.wait(3)
+        local myChar = Workspace:FindFirstChild(LocalPlayer.Name)
+        if myChar then
+            UpdateVisFilter()
+        end
+        -- Si los módulos no están cargados, reintentar
+        if not modulesLoaded then
+            if LoadGameModules() then
+                InstallSilentHooks()
+            end
+        end
+    end
+end)
+
+-- ================== MAIN LOOPS ==================
+task.delay(3, function()
     RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
-        if Config.Aimbot.Enabled and Config.Aimbot.Active then
-            local t = GetAimbotTarget()
-            if t then
-                local pos = t.Position
-                pcall(function()
-                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
-                        local v = t.AssemblyLinearVelocity
-                        if v and v.Magnitude > 0.5 then pos = pos + v * Config.Aimbot.Prediction end
-                    end
-                end)
-                local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-                if Config.Aimbot.Method == "Aimbot" then
-                    local cur = Camera.CFrame
-                    local tgt = CFrame.lookAt(cur.Position, pos)
-                    Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
-                else
-                    local sp, on = Camera:WorldToViewportPoint(pos)
-                    if on then
-                        local mp = UserInputService:GetMouseLocation()
-                        local dx,dy = sp.X-mp.X, sp.Y-mp.Y
-                        local d = math.sqrt(dx*dx+dy*dy)
-                        if d > 1 then
-                            local spd = math.clamp(1/sm,0.05,0.8)
-                            local mx = math.clamp(dx*spd,-150,150)
-                            local my = math.clamp(dy*spd,-150,150)
-                            if math.abs(mx)>0.3 or math.abs(my)>0.3 then mousemoverel(mx,my) end
-                        end
-                    end
-                end
-            else if not Config.Aimbot.Active then _aimbotLocked = nil end end
-        else if not Config.Aimbot.Active then _aimbotLocked = nil end end
+        UpdateHSAimbot()
     end)
 end)
 
-task.delay(3, function()
+task.delay(4, function()
     RunService.Heartbeat:Connect(function()
-        UpdateESP()
-        UpdateHitboxes()
+        UpdateHyperShotESP()
     end)
 end)
 
--- ===== FLAGS =====
+-- Monitorear Workspace.Mobs
+task.spawn(function()
+    local mobs = nil
+    while not mobs do
+        mobs = Workspace:FindFirstChild("Mobs")
+        if not mobs then task.wait(1) end
+    end
+    
+    mobs.ChildAdded:Connect(function(child)
+        -- Nuevo mob, ESP se actualizará automáticamente
+    end)
+    
+    mobs.ChildRemoved:Connect(function(child)
+        -- Limpiar ESP del mob removido
+        for key in pairs(HyperShotESP) do
+            if key:find(child.Name) then
+                RemoveHSESP(key)
+            end
+        end
+        if hsAimbotLocked == child then
+            hsAimbotLocked = nil
+        end
+    end)
+end)
+
+-- ================== FLAGS ==================
 getgenv().AX_HyperShotLoaded        = true
-getgenv().AX_HyperShotHandlesAimbot  = true
-getgenv().AX_HyperShotHandlesESP     = true
-getgenv().AX_HyperShotHandlesSilent  = true
+getgenv().AX_HyperShotHandlesAimbot = true
+getgenv().AX_HyperShotHandlesESP    = true
+getgenv().AX_HyperShotHandlesSilent = true
 
--- ===== INIT =====
-task.delay(1, function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then pcall(function() CreateESP(p) end) end
-    end
-end)
+warn("[AX HSX] ✅ HyperShot module v3.0 loaded")
+warn("[AX HSX] Silent: Module hooks (GetMousePos+ConeOfFire+Spread)")
+warn("[AX HSX] ESP: Workspace.Mobs | TeamCheck: globalStuff:SameTeam()")
 
-Players.PlayerAdded:Connect(function(p)
-    task.delay(2, function() pcall(function() CreateESP(p) end) end)
-end)
-
+-- ================== CLEANUP ==================
 Players.PlayerRemoving:Connect(function(p)
-    if _aimbotLocked == p then _aimbotLocked = nil end
-    RemoveESP(p) RestoreHitbox(p)
-    _origSizes[p]=nil _origTrans[p]=nil _origCC[p]=nil _origMass[p]=nil
-    for i,v in ipairs(_cachedPlayers) do
-        if v == p then table.remove(_cachedPlayers,i) break end
-    end
-end)
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    Camera = Workspace.CurrentCamera
-    _aimbotLocked = nil
-    CleanHitboxes()
-    UpdateFilter()
+    RemoveHSESP(p.Name)
 end)
