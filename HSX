@@ -1,15 +1,11 @@
 --[[
-    ANNOMALY X - HyperShot Module v2.0
+    ANNOMALY X - HyperShot Module v2.1 FIXED
     
-    HALLAZGOS DEL DIAGNÓSTICO:
-    - player.Character es NIL — los modelos están en Workspace con el nombre del jugador
-    - Tiene FakeHRP, Head, HumanoidRootPart, UpperTorso, LowerTorso (R15)
-    - Tiene EnemyHighlight en enemigos
-    - Bots tienen __Bot en el nombre en PlayerStats
-    - No usa Teams — usa GameInfo (FFA, TDM, etc.) y PlayerStats
-    - No hay ServerRemotes — disparos son client-side raycasts
-    - Armas son modelos dentro del personaje (ej: MP5)
-    - HP: 200/200
+    FIXES:
+    - TeamCheck arreglado (pcall return bug)
+    - ShouldSkipTarget corregido
+    - Silent Aim funcional
+    - ESP team colors corregido
 ]]
 
 if not getgenv().AX_Config then
@@ -41,14 +37,11 @@ local HITBOX_OFFSET_SCALE  = 0.25
 local MIN_SHOT_INTERVAL    = 0.05
 local _lastShotModified    = 0
 
--- RaycastParams cacheados
 local _visParams = RaycastParams.new()
 _visParams.FilterType = Enum.RaycastFilterType.Exclude
 _visParams.IgnoreWater = true
 
 local function GetHSCharacter(playerOrName)
-    -- En HyperShot, player.Character es nil
-    -- Los modelos están directamente en Workspace con el nombre del jugador
     local name
     if typeof(playerOrName) == "Instance" then
         name = playerOrName.Name
@@ -74,12 +67,9 @@ local function UpdateVisFilter()
 end
 UpdateVisFilter()
 
--- Cache de jugadores + bots
 local _cachedPlayers   = {}
 local _lastPlayerCache = 0
-
--- Cache de todos los targets (jugadores + bots)
-local _cachedTargets   = {} -- {name=string, model=Model, isBot=bool, player=Player?}
+local _cachedTargets   = {}
 local _lastTargetCache = 0
 
 local function GetCachedPlayers()
@@ -91,14 +81,13 @@ local function GetCachedPlayers()
     return _cachedPlayers
 end
 
--- Obtener todos los targets: jugadores reales + bots del workspace
 local function GetAllTargets()
     local t = tick()
     if t - _lastTargetCache > 1 then
         _cachedTargets = {}
         local myName = LocalPlayer.Name
-        
-        -- Jugadores reales
+        local addedModels = {}
+
         for _, player in ipairs(GetCachedPlayers()) do
             if player ~= LocalPlayer then
                 local char = GetHSCharacter(player)
@@ -109,97 +98,104 @@ local function GetAllTargets()
                         isBot = false,
                         player = player
                     })
+                    addedModels[char] = true
                 end
             end
         end
-        
-        -- Bots y otros personajes en workspace
-        -- Buscar modelos con Humanoid que no sean de jugadores reales
+
         for _, child in ipairs(Workspace:GetChildren()) do
             if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-                -- Verificar que no es mi personaje
                 if child.Name == myName then continue end
-                -- Verificar que no es de un jugador real (ya los agregamos)
-                local isRealPlayer = Players:GetPlayerFromCharacter(child)
-                if not isRealPlayer then
-                    -- Verificar si tiene partes de un personaje jugable
-                    local hrp = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("FakeHRP")
-                    local head = child:FindFirstChild("Head")
-                    if hrp or head then
-                        -- Verificar que no es un prop/decoración (los personajes tienen UpperTorso o Torso)
-                        local hasTorso = child:FindFirstChild("UpperTorso") or child:FindFirstChild("Torso") or child:FindFirstChild("LowerTorso")
-                        if hasTorso then
-                            -- Es un bot o personaje válido
-                            -- Verificar también si ya fue agregado como jugador real por nombre
-                            local alreadyAdded = false
-                            for _, target in ipairs(_cachedTargets) do
-                                if target.model == child then
-                                    alreadyAdded = true
-                                    break
-                                end
-                            end
-                            if not alreadyAdded then
-                                table.insert(_cachedTargets, {
-                                    name = child.Name,
-                                    model = child,
-                                    isBot = true,
-                                    player = nil
-                                })
-                            end
-                        end
-                    end
+                if addedModels[child] then continue end
+                local hrp = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("FakeHRP")
+                local hasTorso = child:FindFirstChild("UpperTorso") or child:FindFirstChild("Torso") or child:FindFirstChild("LowerTorso")
+                if (hrp or child:FindFirstChild("Head")) and hasTorso then
+                    table.insert(_cachedTargets, {
+                        name = child.Name,
+                        model = child,
+                        isBot = true,
+                        player = nil
+                    })
                 end
             end
         end
-        
+
         _lastTargetCache = t
     end
     return _cachedTargets
 end
 
--- ================== TEAM CHECK ==================
--- HyperShot no usa Teams estándar
--- En TDM usa GameInfo.TeamScores y PlayerStats con team info
-local function IsHSTeammate(targetName)
-    if not Config.Silent.TeamCheck and not Config.Aimbot.TeamCheck then
-        return false
-    end
-    
-    -- En FFA no hay equipos
+-- ================== TEAM CHECK FIXED ==================
+-- El bug anterior: return dentro de pcall NO retorna de la función externa
+-- Ahora usamos variables para guardar el resultado
+
+local function IsHSTeammate(targetModel)
+    -- Si no hay modelo, no es teammate
+    if not targetModel then return false end
+
+    -- Verificar si es FFA (nadie es teammate en FFA)
+    local isFFA = false
     pcall(function()
         local gi = ReplicatedStorage:FindFirstChild("GameInfo")
         if gi then
-            local ffa = gi:FindFirstChild("FFA")
-            if ffa and ffa:IsA("BoolValue") and ffa.Value then
-                return false -- FFA = no teammates
+            local ffaVal = gi:FindFirstChild("FFA")
+            if ffaVal and ffaVal:IsA("BoolValue") and ffaVal.Value then
+                isFFA = true
             end
         end
     end)
-    
-    -- En TDM, verificar si están en el mismo equipo
-    -- Los equipos se pueden detectar por PlayerStats o por el color del highlight
+    if isFFA then return false end
+
+    -- Si el target tiene EnemyHighlight => es ENEMIGO, no teammate
+    local hasEnemyHL = targetModel:FindFirstChild("EnemyHighlight")
+    if hasEnemyHL then return false end
+
+    -- En TDM: si NO tiene EnemyHighlight, podría ser teammate
+    -- Verificar si estamos en modo TDM/equipo
+    local isTDM = false
     pcall(function()
-        local myChar = GetMyCharacter()
-        local theirChar = Workspace:FindFirstChild(targetName)
-        if myChar and theirChar then
-            -- Si el enemigo tiene EnemyHighlight, NO es teammate
-            if theirChar:FindFirstChild("EnemyHighlight") then
+        local gi = ReplicatedStorage:FindFirstChild("GameInfo")
+        if gi then
+            local tdmVal = gi:FindFirstChild("TDM")
+            if tdmVal and tdmVal:IsA("BoolValue") and tdmVal.Value then
+                isTDM = true
+            end
+            local ctfVal = gi:FindFirstChild("CTF")
+            if ctfVal and ctfVal:IsA("BoolValue") and ctfVal.Value then
+                isTDM = true
+            end
+            local domVal = gi:FindFirstChild("Domination")
+            if domVal and domVal:IsA("BoolValue") and domVal.Value then
+                isTDM = true
+            end
+        end
+    end)
+
+    -- Si es modo equipo y NO tiene EnemyHighlight => es teammate
+    if isTDM then
+        -- Doble verificación: buscar cualquier Highlight
+        local highlight = targetModel:FindFirstChildOfClass("Highlight")
+        if highlight then
+            -- Si tiene highlight con nombre que contiene "Enemy" => enemigo
+            if highlight.Name:lower():find("enemy") then
                 return false
             end
-            -- Si tiene un highlight que no es "Enemy", podría ser teammate
-            local highlight = theirChar:FindFirstChildOfClass("Highlight")
-            if highlight and not highlight.Name:find("Enemy") then
-                return true
-            end
+            -- Otro tipo de highlight en modo equipo => probablemente teammate
+            return true
         end
-    end)
-    
+        -- En TDM sin highlight visible => probablemente teammate
+        return true
+    end
+
+    -- En FFA o modos sin equipo => nadie es teammate
     return false
 end
 
 local function ShouldSkipTarget(target, teamCheck)
+    -- Si team check está desactivado, NUNCA skipear
     if not teamCheck then return false end
-    return IsHSTeammate(target.name)
+    -- Si es teammate, skipear
+    return IsHSTeammate(target.model)
 end
 
 -- ================== VISIBILITY CHECK ==================
@@ -221,7 +217,7 @@ local randomSwitch = 0
 
 local function GetHSTargetPart(model, setting)
     if not model then return nil end
-    
+
     if setting == "Random" then
         if tick() - randomSwitch > 0.5 then
             local valid = {}
@@ -235,7 +231,7 @@ local function GetHSTargetPart(model, setting)
             or model:FindFirstChild("Head")
             or model:FindFirstChild("HumanoidRootPart")
     end
-    
+
     return model:FindFirstChild(setting)
         or model:FindFirstChild("Head")
         or model:FindFirstChild("HumanoidRootPart")
@@ -251,33 +247,39 @@ local function UpdateSilentTarget()
     local now = tick()
     if now - _lastSilentUpdate < 0.05 then return end
     _lastSilentUpdate = now
-    
+
     Camera = Workspace.CurrentCamera
     if not Camera then return end
     if not (Config.Silent.Enabled and Config.Silent.Active) then
         CurrentTarget, CurrentTargetPos, CurrentTargetPart = nil, nil, nil
         return
     end
-    
+
+    -- Actualizar vis filter cada vez que buscamos target
+    UpdateVisFilter()
+
     local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
     local closest, bestPos, bestPart = nil, nil, nil
     local mouse = UserInputService:GetMouseLocation()
-    
-    for _, target in ipairs(GetAllTargets()) do
+
+    local targets = GetAllTargets()
+
+    for _, target in ipairs(targets) do
+        -- Team check
         if ShouldSkipTarget(target, Config.Silent.TeamCheck) then continue end
-        
+
         local model = target.model
         if not model or not model.Parent then continue end
-        
+
         local hum = model:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then continue end
         if model:FindFirstChildOfClass("ForceField") then continue end
-        
+
         local tp = GetHSTargetPart(model, Config.Silent.TargetPart)
         if not tp then continue end
-        
+
         if Config.Silent.VisibleCheck and not IsHSVisible(tp) then continue end
-        
+
         -- Predicción
         local predicted = tp.Position
         pcall(function()
@@ -288,21 +290,21 @@ local function UpdateSilentTarget()
                 end
             end
         end)
-        
-        -- Verificación de ángulo
+
+        -- Ángulo
         local camPos = Camera.CFrame.Position
         local look = Camera.CFrame.LookVector
         local toT = predicted - camPos
         local toTMag = toT.Magnitude
         if toTMag < 0.01 then continue end
-        
+
         local dot = look.X * (toT.X / toTMag) + look.Y * (toT.Y / toTMag) + look.Z * (toT.Z / toTMag)
         local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
         if angle > MAX_SILENT_ANGLE_DEG then continue end
-        
+
         local screen, onScreen = Camera:WorldToViewportPoint(predicted)
         if not onScreen then continue end
-        
+
         local sd = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
         if sd < bestDist then
             bestDist = sd
@@ -311,21 +313,21 @@ local function UpdateSilentTarget()
             bestPart = tp
         end
     end
-    
+
     CurrentTarget = closest
     CurrentTargetPos = bestPos
     CurrentTargetPart = bestPart
 end
 
 -- ================== AIMBOT ==================
-local hsAimbotLocked = nil -- stores target table, not player
+local hsAimbotLocked = nil
 local hsAimbotRandom = "Head"
 local hsAimbotSwitch = 0
 
 local function GetHSAimbotPart(model)
     if not model then return nil end
     local s = Config.Aimbot.TargetPart
-    
+
     if s == "Random" then
         local t = tick()
         if t - hsAimbotSwitch > (Config.Aimbot.RandomInterval or 0.5) then
@@ -339,7 +341,7 @@ local function GetHSAimbotPart(model)
         return model:FindFirstChild(hsAimbotRandom)
             or model:FindFirstChild("Head")
     end
-    
+
     return model:FindFirstChild(s)
         or model:FindFirstChild("Head")
         or model:FindFirstChild("HumanoidRootPart")
@@ -357,14 +359,13 @@ end
 local function GetHSAimbotTarget()
     Camera = Workspace.CurrentCamera
     if not Camera then return nil end
-    
+
     local fov = Config.Aimbot.FOVRadius or 150
     local vp = Camera.ViewportSize
     local center = Vector2.new(vp.X / 2, vp.Y / 2)
     local mousePos = UserInputService:GetMouseLocation()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
-    
-    -- Aimlock: verificar target bloqueado
+
     if Config.Aimbot.Method == "Aimlock" and hsAimbotLocked then
         if IsHSTargetValid(hsAimbotLocked) then
             local tp = GetHSAimbotPart(hsAimbotLocked.model)
@@ -375,7 +376,7 @@ local function GetHSAimbotTarget()
         end
         hsAimbotLocked = nil
     end
-    
+
     local best, bestDist, bestTarget = nil, fov, nil
     for _, target in ipairs(GetAllTargets()) do
         if not IsHSTargetValid(target) then continue end
@@ -387,13 +388,13 @@ local function GetHSAimbotTarget()
         local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
         if d < bestDist then bestDist = d; best = tp; bestTarget = target end
     end
-    
+
     if Config.Aimbot.Method == "Aimlock" and bestTarget then hsAimbotLocked = bestTarget end
     return best
 end
 
 -- ================== ESP ==================
-local HyperShotESP = {} -- keyed by model name since players don't have standard characters
+local HyperShotESP = {}
 local HSLastESP = 0
 
 local function CreateHSESP(key)
@@ -402,31 +403,27 @@ local function CreateHSESP(key)
     e.Box = Drawing.new("Square")
     e.Box.Thickness = 1; e.Box.Filled = false
     e.Box.Color = Color3.fromRGB(255, 255, 255); e.Box.Visible = false
-    
+
     e.Outline = Drawing.new("Square")
     e.Outline.Thickness = 3; e.Outline.Filled = false
     e.Outline.Color = Color3.fromRGB(0, 0, 0); e.Outline.Transparency = 0.5; e.Outline.Visible = false
-    
+
     e.Name = Drawing.new("Text")
     e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true
     e.Name.Color = Color3.fromRGB(255, 255, 255); e.Name.Visible = false
-    
+
     e.Distance = Drawing.new("Text")
     e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true
     e.Distance.Color = Color3.fromRGB(200, 200, 200); e.Distance.Visible = false
-    
+
     e.HealthBG = Drawing.new("Square")
     e.HealthBG.Thickness = 1; e.HealthBG.Filled = true
     e.HealthBG.Color = Color3.fromRGB(0, 0, 0); e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
-    
+
     e.HealthBar = Drawing.new("Square")
     e.HealthBar.Thickness = 1; e.HealthBar.Filled = true
     e.HealthBar.Color = Color3.fromRGB(0, 255, 0); e.HealthBar.Visible = false
-    
-    e.BotTag = Drawing.new("Text")
-    e.BotTag.Size = 10; e.BotTag.Center = true; e.BotTag.Outline = true
-    e.BotTag.Color = Color3.fromRGB(255, 150, 50); e.BotTag.Visible = false
-    
+
     HyperShotESP[key] = e
 end
 
@@ -448,68 +445,70 @@ local function UpdateHyperShotESP()
         for key in pairs(HyperShotESP) do HideHSESP(key) end
         return
     end
-    
+
     local now = tick()
     if now - HSLastESP < 0.08 then return end
     HSLastESP = now
-    
+
     Camera = Workspace.CurrentCamera
     if not Camera then return end
-    
+
     local activeKeys = {}
-    
+
     for _, target in ipairs(GetAllTargets()) do
         local key = target.name
         activeKeys[key] = true
-        
+
+        -- Team check para ESP
         if ShouldSkipTarget(target, Config.ESP.TeamCheck) then
             HideHSESP(key)
             continue
         end
-        
+
         if not HyperShotESP[key] then
             pcall(function() CreateHSESP(key) end)
         end
         local esp = HyperShotESP[key]
         if not esp then continue end
-        
+
         local model = target.model
         if not model or not model.Parent then HideHSESP(key); continue end
-        
+
         local hum = model:FindFirstChildOfClass("Humanoid")
         local rp = model:FindFirstChild("HumanoidRootPart")
             or model:FindFirstChild("FakeHRP")
             or model:FindFirstChild("UpperTorso")
         local head = model:FindFirstChild("Head")
-        
+
         if not hum or not rp or hum.Health <= 0 then HideHSESP(key); continue end
         if model:FindFirstChildOfClass("ForceField") then HideHSESP(key); continue end
-        
+
         local dist = (Camera.CFrame.Position - rp.Position).Magnitude
         if dist > Config.ESP.MaxDistance then HideHSESP(key); continue end
-        
+
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideHSESP(key); continue end
-        
-        -- Bounding box
+
         local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
         local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
         local width = height / 2
         local minX = sp.X - width / 2
         local minY = hSP.Y
-        
-        -- Color: verde=visible, rojo=no visible, naranja=bot
+
+        -- Color: teammate=azul, bot=naranja, visible=verde, no visible=rojo
+        local isTeammate = IsHSTeammate(model)
         local col
-        if target.isBot then
-            col = Color3.fromRGB(255, 170, 50) -- naranja para bots
+        if isTeammate then
+            col = Color3.fromRGB(80, 150, 255)
+        elseif target.isBot then
+            col = head and IsHSVisible(head) and Color3.fromRGB(255, 200, 50) or Color3.fromRGB(255, 120, 30)
         elseif head and IsHSVisible(head) then
-            col = Color3.fromRGB(50, 255, 50) -- verde visible
+            col = Color3.fromRGB(50, 255, 50)
         else
-            col = Color3.fromRGB(255, 50, 50) -- rojo no visible
+            col = Color3.fromRGB(255, 50, 50)
         end
-        
-        -- Box
+
         if Config.ESP.Boxes then
             esp.Outline.Size = Vector2.new(width + 2, height + 2)
             esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
@@ -522,11 +521,10 @@ local function UpdateHyperShotESP()
             esp.Box.Visible = false
             esp.Outline.Visible = false
         end
-        
-        -- Name
+
         if Config.ESP.Names then
             local displayName = target.name
-            if target.isBot then displayName = target.name .. " [BOT]" end
+            if target.isBot then displayName = displayName .. " [BOT]" end
             esp.Name.Text = displayName
             esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
             esp.Name.Color = col
@@ -534,8 +532,7 @@ local function UpdateHyperShotESP()
         else
             esp.Name.Visible = false
         end
-        
-        -- Distance
+
         if Config.ESP.Distance then
             esp.Distance.Text = math.floor(dist) .. "m"
             esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
@@ -543,8 +540,7 @@ local function UpdateHyperShotESP()
         else
             esp.Distance.Visible = false
         end
-        
-        -- Health bar
+
         if Config.ESP.Boxes and hum then
             local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
             local bh = height * pct
@@ -563,8 +559,7 @@ local function UpdateHyperShotESP()
             esp.HealthBar.Visible = false
         end
     end
-    
-    -- Limpiar ESP de targets que ya no existen
+
     for key in pairs(HyperShotESP) do
         if not activeKeys[key] then
             RemoveHSESP(key)
@@ -589,8 +584,7 @@ local function SafeACBypass()
             getgenv()._AX_KickHooked = true
         end)
     end
-    
-    -- Neutralizar GameAnalytics remotes
+
     pcall(function()
         local gaRC = ReplicatedStorage:FindFirstChild("GameAnalyticsRemoteConfigs")
         if gaRC and gaRC:IsA("RemoteEvent") and getconnections then
@@ -612,7 +606,6 @@ local function SafeACBypass()
 end
 task.delay(4, SafeACBypass)
 
--- Limpieza periódica
 task.spawn(function()
     task.wait(30)
     while true do
@@ -630,38 +623,35 @@ task.spawn(function()
 end)
 
 -- ================== NAMECALL HOOK ==================
--- HyperShot usa raycasts client-side para hit detection
--- Interceptamos Workspace:Raycast y redirigimos al target
 task.delay(6, function()
-    -- Esperar a que tengamos personaje
     local waitStart = tick()
     while not GetMyCharacter() and tick() - waitStart < 15 do
         task.wait(0.5)
     end
     UpdateVisFilter()
-    
+
     local _inHook = false
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if _inHook or checkcaller() then return oldNamecall(self, ...) end
-        
+
         local method = getnamecallmethod()
         local isRaycast = method == "Raycast" or method == "FindPartOnRay"
             or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist"
-        
+
         if not isRaycast then return oldNamecall(self, ...) end
         if not (Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart) then
             return oldNamecall(self, ...)
         end
         if math.random(100) > Config.Silent.HitChance then return oldNamecall(self, ...) end
         if tick() - _lastShotModified < MIN_SHOT_INTERVAL then return oldNamecall(self, ...) end
-        
+
         _inHook = true
         local args = {...}
-        
+
         if (self == Workspace or self == workspace) then
             local cam = Workspace.CurrentCamera
-            
+
             if method == "Raycast" then
                 local origin, direction = args[1], args[2]
                 if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and cam then
@@ -696,7 +686,7 @@ task.delay(6, function()
                         end
                     end
                 end
-                
+
             elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
                 local ray = args[1]
                 if typeof(ray) == "Ray" and cam then
@@ -733,12 +723,12 @@ task.delay(6, function()
                 end
             end
         end
-        
+
         _inHook = false
         return oldNamecall(self, ...)
     end))
-    
-    warn("[AX HSX] ✅ Namecall hook instalado")
+
+    warn("[AX HSX] ✅ Namecall hook installed")
 end)
 
 -- ================== MAIN LOOPS ==================
@@ -746,7 +736,7 @@ task.delay(3, function()
     RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
         UpdateSilentTarget()
-        
+
         if Config.Aimbot.Enabled and Config.Aimbot.Active then
             local t = GetHSAimbotTarget()
             if t then
@@ -759,7 +749,7 @@ task.delay(3, function()
                         end
                     end
                 end)
-                
+
                 local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
                 if Config.Aimbot.Method == "Aimbot" then
                     local cur = Camera.CFrame
@@ -790,7 +780,6 @@ task.delay(3, function()
     end)
 end)
 
--- ESP loop
 task.delay(4, function()
     RunService.Heartbeat:Connect(function()
         UpdateHyperShotESP()
@@ -803,8 +792,7 @@ getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot module loaded")
-warn("[AX HSX] Characters: Workspace models | Bots: auto-detected | Silent: Raycast hook")
+warn("[AX HSX] ✅ HyperShot module v2.1 loaded")
 
 -- ================== CLEANUP ==================
 Players.PlayerRemoving:Connect(function(p)
@@ -815,12 +803,9 @@ Players.PlayerRemoving:Connect(function(p)
     for i, v in ipairs(_cachedPlayers) do
         if v == p then table.remove(_cachedPlayers, i); break end
     end
-    -- Forzar refresh de targets
     _lastTargetCache = 0
 end)
 
--- Cuando mi personaje aparece (respawn)
--- En HyperShot no hay CharacterAdded estándar, así que monitoreamos Workspace
 task.spawn(function()
     while true do
         task.wait(2)
@@ -831,11 +816,10 @@ task.spawn(function()
     end
 end)
 
--- Monitorear nuevos modelos en workspace (nuevos jugadores/bots que aparecen)
 Workspace.ChildAdded:Connect(function(child)
     task.wait(0.5)
     if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-        _lastTargetCache = 0 -- forzar refresh
+        _lastTargetCache = 0
     end
 end)
 
