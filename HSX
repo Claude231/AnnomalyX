@@ -1,7 +1,8 @@
 --[[
-    ANNOMALY X - HSX Module v1.2
-    Frosted Studio - Hypershot
-    Fix: _inHook guard, angulo 45deg, sin filtro distToCam
+    ANNOMALY X - HSX Module v2.0
+    Fix REAL: Hook __index en Mouse.Hit/Mouse.Target
+    Hypershot usa Mouse.Hit para la direccion de disparos
+    Metodo descubierto analizando scripts universales que funcionan
 ]]
 
 if not getgenv().AX_Config then
@@ -24,9 +25,10 @@ local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local Camera           = Workspace.CurrentCamera
 local LocalPlayer      = Players.LocalPlayer
+local Mouse            = LocalPlayer:GetMouse()
 
-local MAX_ANGLE  = 45   -- grados maximos para redirigir raycast
-local MIN_INTERV = 0.05 -- intervalo minimo entre shots modificados
+local MAX_ANGLE  = 45
+local MIN_INTERV = 0.05
 local _lastShot  = 0
 
 -- ===== RAYCASTPARAMS CACHEADOS =====
@@ -76,6 +78,7 @@ local function IsVisible(part)
 end
 
 -- ===== TARGET PARTS =====
+-- Hypershot usa partes estandar de Roblox
 local HS_PARTS = {"Head", "HumanoidRootPart", "UpperTorso"}
 
 local _silentRandom = "Head"
@@ -100,7 +103,10 @@ local function GetHSTargetPart(char, setting)
 end
 
 -- ===== SILENT TARGET =====
+-- _curTarget: BasePart para raycast hook
+-- _curTargetCF: CFrame para Mouse.Hit hook
 local _curTarget     = nil
+local _curTargetCF   = nil
 local _lastTargetUpd = 0
 
 local function UpdateTarget()
@@ -112,7 +118,9 @@ local function UpdateTarget()
     if not Camera then return end
 
     if not (Config.Silent.Enabled and Config.Silent.Active) then
-        _curTarget = nil return
+        _curTarget   = nil
+        _curTargetCF = nil
+        return
     end
 
     local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
@@ -131,6 +139,7 @@ local function UpdateTarget()
         if not tp then continue end
         if Config.Silent.VisibleCheck and not IsVisible(tp) then continue end
 
+        -- Prediccion de movimiento
         local predicted = tp.Position
         pcall(function()
             if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
@@ -144,10 +153,29 @@ local function UpdateTarget()
         local sp, on = Camera:WorldToViewportPoint(predicted)
         if not on then continue end
         local sd = (Vector2.new(sp.X, sp.Y) - mouse).Magnitude
-        if sd < bestDist then bestDist = sd bestPart = tp end
+        if sd < bestDist then
+            bestDist = sd
+            bestPart = tp
+        end
     end
 
     _curTarget = bestPart
+    -- CFrame apuntando al target, con prediccion incluida
+    -- Esto es lo que devuelve el hook de Mouse.Hit
+    if bestPart then
+        local predicted = bestPart.Position
+        pcall(function()
+            if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                local vel = bestPart.AssemblyLinearVelocity
+                if vel and vel.Magnitude > 0.5 then
+                    predicted = predicted + vel * Config.Aimbot.Prediction
+                end
+            end
+        end)
+        _curTargetCF = CFrame.new(predicted)
+    else
+        _curTargetCF = nil
+    end
 end
 
 -- ===== AIMBOT =====
@@ -218,6 +246,115 @@ local function GetAimbotTarget()
     return best
 end
 
+-- ===== HITBOX EXPANDER =====
+-- Hypershot usa HumanoidRootPart y Head estandar
+local _originalSizes         = {}
+local _originalTransparencies = {}
+local _originalCanCollide    = {}
+local _originalMassless      = {}
+local _expandedPlayers       = {}
+local _lastHitboxUpdate      = 0
+
+local function SaveHitboxProps(player, partName, part)
+    if not _originalSizes[player]          then _originalSizes[player]          = {} end
+    if not _originalTransparencies[player] then _originalTransparencies[player] = {} end
+    if not _originalCanCollide[player]     then _originalCanCollide[player]     = {} end
+    if not _originalMassless[player]       then _originalMassless[player]       = {} end
+    if not _originalSizes[player][partName] then
+        _originalSizes[player][partName]          = part.Size
+        _originalTransparencies[player][partName] = part.Transparency
+        _originalCanCollide[player][partName]     = part.CanCollide
+        _originalMassless[player][partName]       = part.Massless
+    end
+end
+
+local function RestoreHitbox(player)
+    if not player then return end
+    local ok, char = pcall(function() return player.Character end)
+    if not ok or not char then return end
+    if _originalSizes[player] then
+        for pn, os in pairs(_originalSizes[player]) do
+            local p = char:FindFirstChild(pn)
+            if p then pcall(function()
+                p.Size         = os
+                p.Transparency = _originalTransparencies[player][pn]
+                p.Massless     = _originalMassless[player][pn]
+                p.CanCollide   = _originalCanCollide[player][pn]
+            end) end
+        end
+    end
+    _expandedPlayers[player] = nil
+end
+
+local function CleanupAllHitboxes()
+    for player in pairs(_expandedPlayers) do RestoreHitbox(player) end
+    _originalSizes={} _originalTransparencies={}
+    _originalCanCollide={} _originalMassless={}
+    _expandedPlayers={}
+end
+
+local function ExpandHitbox(player, size)
+    local char = player.Character if not char then return end
+    -- Partes a expandir en Hypershot
+    local parts = {"Head", "HumanoidRootPart", "UpperTorso"}
+    for _, pn in ipairs(parts) do
+        local part = char:FindFirstChild(pn)
+        if part and part:IsA("BasePart") then
+            SaveHitboxProps(player, pn, part)
+            pcall(function()
+                part.CanCollide   = false
+                part.Massless     = true
+                part.Size         = Vector3.new(size, size, size)
+                part.Transparency = Config.Hitbox.Transparency
+            end)
+        end
+    end
+    _expandedPlayers[player] = true
+end
+
+local function UpdateHitboxes()
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
+        CleanupAllHitboxes() return
+    end
+    local t = tick()
+    if t - _lastHitboxUpdate < 0.05 then return end
+    _lastHitboxUpdate = t
+
+    local mouse    = UserInputService:GetMouseLocation()
+    local shouldEx = {}
+    local fr       = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+
+    for _, plr in ipairs(GetCachedPlayers()) do
+        if plr == LocalPlayer or not plr.Parent then continue end
+        if Config.Hitbox.TeamCheck and IsTeammate(plr) then continue end
+        local c = plr.Character if not c then continue end
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
+
+        local size = Config.Hitbox.MaxSize
+
+        if Config.Hitbox.Method == "DHE (Dynamic)" then
+            local cp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head")
+            if not cp then continue end
+            local sp, on = Camera:WorldToViewportPoint(cp.Position)
+            if not on then continue end
+            local sd = (mouse - Vector2.new(sp.X, sp.Y)).Magnitude
+            if sd > fr then continue end
+            local pf = 1 - (sd/fr)
+            size = 1 + (Config.Hitbox.MaxSize - 1) * pf
+        end
+
+        shouldEx[plr] = size
+    end
+
+    for plr in pairs(_expandedPlayers) do
+        if not shouldEx[plr] then RestoreHitbox(plr) end
+    end
+    for plr, sz in pairs(shouldEx) do
+        ExpandHitbox(plr, sz)
+    end
+end
+
 -- ===== ESP =====
 local HSESP    = {}
 local _lastESP = 0
@@ -272,7 +409,6 @@ local function UpdateESP()
     local now = tick()
     if now - _lastESP < 0.08 then return end
     _lastESP = now
-
     Camera = Workspace.CurrentCamera if not Camera then return end
 
     local active = {}
@@ -304,7 +440,6 @@ local function UpdateESP()
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideESP(plr) continue end
 
-        -- Calcular altura del box usando head y feet
         local hSP = head
             and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0)))
             or sp
@@ -374,10 +509,8 @@ local function UpdateESP()
     end
 end
 
--- ===== NAMECALL HOOK =====
--- Delay 2s: suficiente para que el personaje exista
--- _inHook guard evita C stack overflow por recursion
--- Angulo 45deg: captura disparos sin interceptar raycasts de fisica
+-- ===== HOOK 1: __namecall — Raycast / FindPartOnRay =====
+-- Para juegos que usan Workspace:Raycast() para detectar impactos
 task.delay(2, function()
     if not LocalPlayer.Character then
         local t = tick()
@@ -387,64 +520,39 @@ task.delay(2, function()
     local _inHook = false
     local oldNC
     oldNC = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        -- Guard anti-recursion: si ya estamos dentro del hook, pasar directo
         if _inHook or checkcaller() then return oldNC(self, ...) end
 
         local method = getnamecallmethod()
-
-        -- Early exit para metodos irrelevantes (SIN activar _inHook)
-        -- Esto evita que el guard se active innecesariamente
-        local isRaycast   = method == "Raycast"
+        local isRaycast = method == "Raycast"
             or method == "FindPartOnRay"
             or method == "FindPartOnRayWithIgnoreList"
             or method == "FindPartOnRayWithWhitelist"
-        local isFireServer = method == "FireServer"
 
-        if not isRaycast and not isFireServer then
-            return oldNC(self, ...)
-        end
-
-        -- Verificar condiciones de silent aim
+        -- Early exit sin activar guard
+        if not isRaycast then return oldNC(self, ...) end
         if not (Config.Silent.Enabled and Config.Silent.Active
             and _curTarget and _curTarget.Parent) then
             return oldNC(self, ...)
         end
+        if math.random(100) > Config.Silent.HitChance then return oldNC(self, ...) end
+        if tick() - _lastShot < MIN_INTERV then return oldNC(self, ...) end
 
-        -- Hit chance
-        if math.random(100) > Config.Silent.HitChance then
-            return oldNC(self, ...)
-        end
-
-        -- Rate limit entre shots modificados
-        if tick() - _lastShot < MIN_INTERV then
-            return oldNC(self, ...)
-        end
-
-        -- ACTIVAR GUARD antes de cualquier operacion que pueda llamar __namecall
+        -- Activar guard
         _inHook = true
         local args = {...}
         local targetPos = _curTarget.Position
 
-        -- ===== WORKSPACE RAYCAST =====
-        if isRaycast and (self == Workspace or self == workspace) then
-
+        if self == Workspace or self == workspace then
             if method == "Raycast" then
-                local origin    = args[1]
-                local direction = args[2]
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                    -- Calcular angulo manual sin :Dot() para evitar recursion
-                    local tx,ty,tz = targetPos.X-origin.X, targetPos.Y-origin.Y, targetPos.Z-origin.Z
-                    local tMag = math.sqrt(tx*tx+ty*ty+tz*tz)
-                    local dMag = math.sqrt(direction.X*direction.X+direction.Y*direction.Y+direction.Z*direction.Z)
-                    if tMag > 0 and dMag > 0 then
-                        local dot = (direction.X/dMag)*(tx/tMag)
-                                  + (direction.Y/dMag)*(ty/tMag)
-                                  + (direction.Z/dMag)*(tz/tMag)
-                        -- 45 grados: amplio para capturar disparos, estrecho para ignorar fisica
+                local o, d = args[1], args[2]
+                if typeof(o) == "Vector3" and typeof(d) == "Vector3" then
+                    local tx,ty,tz = targetPos.X-o.X, targetPos.Y-o.Y, targetPos.Z-o.Z
+                    local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                    local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                    if tM > 0 and dM > 0 then
+                        local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
                         if math.deg(math.acos(math.clamp(dot,-1,1))) <= MAX_ANGLE then
-                            -- Redirigir direccion hacia el target manteniendo la magnitud original
-                            local sc = dMag / tMag
-                            args[2] = Vector3.new(tx*sc, ty*sc, tz*sc)
+                            args[2] = Vector3.new(tx/tM*dM, ty/tM*dM, tz/tM*dM)
                             _lastShot = tick()
                             _inHook = false
                             return oldNC(self, unpack(args))
@@ -456,68 +564,17 @@ task.delay(2, function()
                 or method == "FindPartOnRayWithWhitelist" then
                 local ray = args[1]
                 if typeof(ray) == "Ray" then
-                    local origin    = ray.Origin
-                    local direction = ray.Direction
-                    local tx,ty,tz = targetPos.X-origin.X, targetPos.Y-origin.Y, targetPos.Z-origin.Z
-                    local tMag = math.sqrt(tx*tx+ty*ty+tz*tz)
-                    local dMag = math.sqrt(direction.X*direction.X+direction.Y*direction.Y+direction.Z*direction.Z)
-                    if tMag > 0 and dMag > 0 then
-                        local dot = (direction.X/dMag)*(tx/tMag)
-                                  + (direction.Y/dMag)*(ty/tMag)
-                                  + (direction.Z/dMag)*(tz/tMag)
+                    local o, d = ray.Origin, ray.Direction
+                    local tx,ty,tz = targetPos.X-o.X, targetPos.Y-o.Y, targetPos.Z-o.Z
+                    local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                    local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                    if tM > 0 and dM > 0 then
+                        local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
                         if math.deg(math.acos(math.clamp(dot,-1,1))) <= MAX_ANGLE then
-                            local sc = dMag / tMag
-                            args[1] = Ray.new(origin, Vector3.new(tx*sc,ty*sc,tz*sc))
+                            args[1] = Ray.new(o, Vector3.new(tx/tM*dM,ty/tM*dM,tz/tM*dM))
                             _lastShot = tick()
                             _inHook = false
                             return oldNC(self, unpack(args))
-                        end
-                    end
-                end
-            end
-
-        -- ===== FIRESERVER (para juegos que mandan posicion por remote) =====
-        elseif isFireServer then
-            local isRemote = false
-            pcall(function()
-                isRemote = typeof(self) == "Instance"
-                    and self.ClassName == "RemoteEvent"
-            end)
-
-            if isRemote then
-                local cam = Workspace.CurrentCamera
-                if cam then
-                    -- Verificar angulo de camara hacia target (sin metodos que causen recursion)
-                    local cl = cam.CFrame.LookVector
-                    local cp = cam.CFrame.Position
-                    local tx,ty,tz = targetPos.X-cp.X, targetPos.Y-cp.Y, targetPos.Z-cp.Z
-                    local tMag = math.sqrt(tx*tx+ty*ty+tz*tz)
-                    local lMag = math.sqrt(cl.X*cl.X+cl.Y*cl.Y+cl.Z*cl.Z)
-                    if tMag > 0 and lMag > 0 then
-                        local dot = (cl.X/lMag)*(tx/tMag)
-                                  + (cl.Y/lMag)*(ty/tMag)
-                                  + (cl.Z/lMag)*(tz/tMag)
-                        if math.deg(math.acos(math.clamp(dot,-1,1))) <= MAX_ANGLE then
-                            local modified = false
-                            for i, arg in ipairs(args) do
-                                if typeof(arg) == "CFrame" then
-                                    args[i] = CFrame.new(arg.Position, targetPos)
-                                    modified = true
-                                elseif typeof(arg) == "Vector3" then
-                                    -- Solo modificar si parece ser una posicion de impacto
-                                    local ax,ay,az = arg.X-cp.X, arg.Y-cp.Y, arg.Z-cp.Z
-                                    local argDist = math.sqrt(ax*ax+ay*ay+az*az)
-                                    if argDist > 5 and argDist < 2000 then
-                                        args[i] = targetPos
-                                        modified = true
-                                    end
-                                end
-                            end
-                            if modified then
-                                _lastShot = tick()
-                                _inHook = false
-                                return oldNC(self, unpack(args))
-                            end
                         end
                     end
                 end
@@ -529,12 +586,45 @@ task.delay(2, function()
     end))
 end)
 
+-- ===== HOOK 2: __index — Mouse.Hit / Mouse.Target =====
+-- ESTE ES EL HOOK CRITICO para Hypershot
+-- Hypershot lee Mouse.Hit para saber donde apunta el jugador
+-- Al interceptar Mouse.Hit devolvemos CFrame apuntando al target
+-- Esto es lo que hace funcionar el Silent Aim en este juego
+task.delay(2, function()
+    if not LocalPlayer.Character then
+        local t = tick()
+        repeat task.wait(0.5) until LocalPlayer.Character or tick()-t > 15
+    end
+
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, index)
+        -- Solo interceptar Mouse.Hit y Mouse.Target
+        if self == Mouse and (index == "Hit" or index == "Target") then
+            if Config.Silent.Enabled and Config.Silent.Active
+                and _curTargetCF and not checkcaller() then
+                -- Hit chance
+                if math.random(100) <= Config.Silent.HitChance then
+                    if index == "Hit" then
+                        -- Mouse.Hit: devolver CFrame en posicion del target
+                        return _curTargetCF
+                    elseif index == "Target" then
+                        -- Mouse.Target: devolver la BasePart del target
+                        return _curTarget
+                    end
+                end
+            end
+        end
+        return oldIndex(self, index)
+    end))
+end)
+
 -- ===== LOOPS =====
 task.delay(2, function()
     RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
 
-        -- Actualizar silent target (throttled a 20fps)
+        -- Actualizar target (throttled a 20fps)
         UpdateTarget()
 
         -- Aimbot
@@ -583,10 +673,11 @@ end)
 task.delay(3, function()
     RunService.Heartbeat:Connect(function()
         UpdateESP()
+        UpdateHitboxes()
     end)
 end)
 
--- ===== FLAGS para el main script =====
+-- ===== FLAGS =====
 getgenv().AX_HyperShotLoaded        = true
 getgenv().AX_HyperShotHandlesAimbot  = true
 getgenv().AX_HyperShotHandlesESP     = true
@@ -606,6 +697,9 @@ end)
 Players.PlayerRemoving:Connect(function(p)
     if _aimbotLocked == p then _aimbotLocked = nil end
     RemoveESP(p)
+    RestoreHitbox(p)
+    _originalSizes[p]=nil _originalTransparencies[p]=nil
+    _originalCanCollide[p]=nil _originalMassless[p]=nil
     for i,v in ipairs(_cachedPlayers) do
         if v == p then table.remove(_cachedPlayers,i) break end
     end
@@ -615,6 +709,8 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera        = Workspace.CurrentCamera
     _curTarget    = nil
+    _curTargetCF  = nil
     _aimbotLocked = nil
+    CleanupAllHitboxes()
     UpdateFilter()
 end)
