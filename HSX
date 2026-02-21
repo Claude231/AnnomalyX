@@ -1,11 +1,12 @@
 --[[
-    ANNOMALY X - HyperShot Module v2.1 FIXED
+    ANNOMALY X - HyperShot Module v2.2 FIXED
     
-    FIXES:
-    - TeamCheck arreglado (pcall return bug)
-    - ShouldSkipTarget corregido
-    - Silent Aim funcional
-    - ESP team colors corregido
+    HALLAZGOS:
+    - Raycasts de disparo: Exclude, magnitude ~500, origin desde cámara/arma
+    - Raycasts de hitbox: Include, magnitude ~2-3, origin en cuerpos (NO TOCAR)
+    - player.Character es NIL — modelos en Workspace
+    - Tiene FakeHRP, EnemyHighlight
+    - No usa Teams, no usa ServerRemotes para disparos
 ]]
 
 if not getgenv().AX_Config then
@@ -32,9 +33,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera            = Workspace.CurrentCamera
 local LocalPlayer       = Players.LocalPlayer
 
-local MAX_SILENT_ANGLE_DEG = 20
-local HITBOX_OFFSET_SCALE  = 0.25
-local MIN_SHOT_INTERVAL    = 0.05
+-- Silent aim config para HyperShot
+local MIN_BULLET_MAGNITUDE = 50   -- raycasts de bala son ~500, los de hitbox son ~2-3
+local MAX_SILENT_ANGLE_DEG = 30   -- más generoso porque los disparos son largos
+local HITBOX_OFFSET_SCALE  = 0.2
+local MIN_SHOT_INTERVAL    = 0.04
 local _lastShotModified    = 0
 
 local _visParams = RaycastParams.new()
@@ -110,12 +113,18 @@ local function GetAllTargets()
                 local hrp = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("FakeHRP")
                 local hasTorso = child:FindFirstChild("UpperTorso") or child:FindFirstChild("Torso") or child:FindFirstChild("LowerTorso")
                 if (hrp or child:FindFirstChild("Head")) and hasTorso then
-                    table.insert(_cachedTargets, {
-                        name = child.Name,
-                        model = child,
-                        isBot = true,
-                        player = nil
-                    })
+                    local alreadyAdded = false
+                    for _, target in ipairs(_cachedTargets) do
+                        if target.model == child then alreadyAdded = true break end
+                    end
+                    if not alreadyAdded then
+                        table.insert(_cachedTargets, {
+                            name = child.Name,
+                            model = child,
+                            isBot = true,
+                            player = nil
+                        })
+                    end
                 end
             end
         end
@@ -125,15 +134,10 @@ local function GetAllTargets()
     return _cachedTargets
 end
 
--- ================== TEAM CHECK FIXED ==================
--- El bug anterior: return dentro de pcall NO retorna de la función externa
--- Ahora usamos variables para guardar el resultado
-
+-- ================== TEAM CHECK ==================
 local function IsHSTeammate(targetModel)
-    -- Si no hay modelo, no es teammate
     if not targetModel then return false end
 
-    -- Verificar si es FFA (nadie es teammate en FFA)
     local isFFA = false
     pcall(function()
         local gi = ReplicatedStorage:FindFirstChild("GameInfo")
@@ -146,55 +150,39 @@ local function IsHSTeammate(targetModel)
     end)
     if isFFA then return false end
 
-    -- Si el target tiene EnemyHighlight => es ENEMIGO, no teammate
     local hasEnemyHL = targetModel:FindFirstChild("EnemyHighlight")
     if hasEnemyHL then return false end
 
-    -- En TDM: si NO tiene EnemyHighlight, podría ser teammate
-    -- Verificar si estamos en modo TDM/equipo
     local isTDM = false
     pcall(function()
         local gi = ReplicatedStorage:FindFirstChild("GameInfo")
         if gi then
-            local tdmVal = gi:FindFirstChild("TDM")
-            if tdmVal and tdmVal:IsA("BoolValue") and tdmVal.Value then
-                isTDM = true
-            end
-            local ctfVal = gi:FindFirstChild("CTF")
-            if ctfVal and ctfVal:IsA("BoolValue") and ctfVal.Value then
-                isTDM = true
-            end
-            local domVal = gi:FindFirstChild("Domination")
-            if domVal and domVal:IsA("BoolValue") and domVal.Value then
-                isTDM = true
+            for _, modeName in ipairs({"TDM", "CTF", "Domination"}) do
+                local val = gi:FindFirstChild(modeName)
+                if val and val:IsA("BoolValue") and val.Value then
+                    isTDM = true
+                    break
+                end
             end
         end
     end)
 
-    -- Si es modo equipo y NO tiene EnemyHighlight => es teammate
     if isTDM then
-        -- Doble verificación: buscar cualquier Highlight
         local highlight = targetModel:FindFirstChildOfClass("Highlight")
         if highlight then
-            -- Si tiene highlight con nombre que contiene "Enemy" => enemigo
             if highlight.Name:lower():find("enemy") then
                 return false
             end
-            -- Otro tipo de highlight en modo equipo => probablemente teammate
             return true
         end
-        -- En TDM sin highlight visible => probablemente teammate
         return true
     end
 
-    -- En FFA o modos sin equipo => nadie es teammate
     return false
 end
 
 local function ShouldSkipTarget(target, teamCheck)
-    -- Si team check está desactivado, NUNCA skipear
     if not teamCheck then return false end
-    -- Si es teammate, skipear
     return IsHSTeammate(target.model)
 end
 
@@ -245,7 +233,7 @@ local _lastSilentUpdate = 0
 
 local function UpdateSilentTarget()
     local now = tick()
-    if now - _lastSilentUpdate < 0.05 then return end
+    if now - _lastSilentUpdate < 0.03 then return end
     _lastSilentUpdate = now
 
     Camera = Workspace.CurrentCamera
@@ -255,17 +243,13 @@ local function UpdateSilentTarget()
         return
     end
 
-    -- Actualizar vis filter cada vez que buscamos target
     UpdateVisFilter()
 
     local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
     local closest, bestPos, bestPart = nil, nil, nil
     local mouse = UserInputService:GetMouseLocation()
 
-    local targets = GetAllTargets()
-
-    for _, target in ipairs(targets) do
-        -- Team check
+    for _, target in ipairs(GetAllTargets()) do
         if ShouldSkipTarget(target, Config.Silent.TeamCheck) then continue end
 
         local model = target.model
@@ -280,7 +264,6 @@ local function UpdateSilentTarget()
 
         if Config.Silent.VisibleCheck and not IsHSVisible(tp) then continue end
 
-        -- Predicción
         local predicted = tp.Position
         pcall(function()
             if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
@@ -290,17 +273,6 @@ local function UpdateSilentTarget()
                 end
             end
         end)
-
-        -- Ángulo
-        local camPos = Camera.CFrame.Position
-        local look = Camera.CFrame.LookVector
-        local toT = predicted - camPos
-        local toTMag = toT.Magnitude
-        if toTMag < 0.01 then continue end
-
-        local dot = look.X * (toT.X / toTMag) + look.Y * (toT.Y / toTMag) + look.Z * (toT.Z / toTMag)
-        local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
-        if angle > MAX_SILENT_ANGLE_DEG then continue end
 
         local screen, onScreen = Camera:WorldToViewportPoint(predicted)
         if not onScreen then continue end
@@ -459,7 +431,6 @@ local function UpdateHyperShotESP()
         local key = target.name
         activeKeys[key] = true
 
-        -- Team check para ESP
         if ShouldSkipTarget(target, Config.ESP.TeamCheck) then
             HideHSESP(key)
             continue
@@ -496,7 +467,6 @@ local function UpdateHyperShotESP()
         local minX = sp.X - width / 2
         local minY = hSP.Y
 
-        -- Color: teammate=azul, bot=naranja, visible=verde, no visible=rojo
         local isTeammate = IsHSTeammate(model)
         local col
         if isTeammate then
@@ -586,19 +556,13 @@ local function SafeACBypass()
     end
 
     pcall(function()
-        local gaRC = ReplicatedStorage:FindFirstChild("GameAnalyticsRemoteConfigs")
-        if gaRC and gaRC:IsA("RemoteEvent") and getconnections then
-            for _, conn in pairs(getconnections(gaRC.OnClientEvent)) do
-                if conn.Function then
-                    pcall(function() hookfunction(conn.Function, newcclosure(function() end)) end)
-                end
-            end
-        end
-        local gaE = ReplicatedStorage:FindFirstChild("GameAnalyticsError")
-        if gaE and gaE:IsA("RemoteEvent") and getconnections then
-            for _, conn in pairs(getconnections(gaE.OnClientEvent)) do
-                if conn.Function then
-                    pcall(function() hookfunction(conn.Function, newcclosure(function() end)) end)
+        for _, remoteName in ipairs({"GameAnalyticsRemoteConfigs", "GameAnalyticsError"}) do
+            local remote = ReplicatedStorage:FindFirstChild(remoteName)
+            if remote and remote:IsA("RemoteEvent") and getconnections then
+                for _, conn in pairs(getconnections(remote.OnClientEvent)) do
+                    if conn.Function then
+                        pcall(function() hookfunction(conn.Function, newcclosure(function() end)) end)
+                    end
                 end
             end
         end
@@ -622,7 +586,23 @@ task.spawn(function()
     end
 end)
 
--- ================== NAMECALL HOOK ==================
+-- ================== NAMECALL HOOK - REWRITTEN FOR HYPERSHOT ==================
+--[[
+    HyperShot raycast analysis:
+    
+    BULLET RAYCASTS (the ones we need to redirect):
+    - FilterType = Exclude
+    - Magnitude ~500 studs
+    - Origin near camera/player position
+    
+    HITBOX RAYCASTS (DO NOT TOUCH):
+    - FilterType = Include  
+    - Magnitude ~2-3 studs
+    - Origin near enemy body parts
+    
+    Strategy: Only hook Exclude raycasts with magnitude > 50
+]]
+
 task.delay(6, function()
     local waitStart = tick()
     while not GetMyCharacter() and tick() - waitStart < 15 do
@@ -636,99 +616,83 @@ task.delay(6, function()
         if _inHook or checkcaller() then return oldNamecall(self, ...) end
 
         local method = getnamecallmethod()
-        local isRaycast = method == "Raycast" or method == "FindPartOnRay"
-            or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist"
 
-        if not isRaycast then return oldNamecall(self, ...) end
-        if not (Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart) then
+        -- Solo interceptar Raycast en Workspace
+        if method ~= "Raycast" then return oldNamecall(self, ...) end
+        if self ~= Workspace and self ~= workspace then return oldNamecall(self, ...) end
+
+        -- Verificar que silent aim está activo y hay target
+        if not (Config.Silent.Enabled and Config.Silent.Active) then return oldNamecall(self, ...) end
+        if not CurrentTargetPos or not CurrentTargetPart then return oldNamecall(self, ...) end
+
+        local args = {...}
+        local origin = args[1]
+        local direction = args[2]
+        local rayParams = args[3]
+
+        -- Validar tipos
+        if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
             return oldNamecall(self, ...)
         end
-        if math.random(100) > Config.Silent.HitChance then return oldNamecall(self, ...) end
-        if tick() - _lastShotModified < MIN_SHOT_INTERVAL then return oldNamecall(self, ...) end
+
+        local dMag = direction.Magnitude
+
+        -- FILTRO CLAVE: Solo hookear raycasts de BALA (Exclude, magnitude grande)
+        -- NO tocar raycasts de hitbox (Include, magnitude pequeña)
+        if dMag < MIN_BULLET_MAGNITUDE then
+            return oldNamecall(self, ...)
+        end
+
+        -- Verificar que es FilterType.Exclude (raycasts de bala)
+        if rayParams and typeof(rayParams) == "RaycastParams" then
+            if rayParams.FilterType ~= Enum.RaycastFilterType.Exclude then
+                return oldNamecall(self, ...)
+            end
+        end
+
+        -- Hit chance
+        if math.random(100) > Config.Silent.HitChance then
+            return oldNamecall(self, ...)
+        end
+
+        -- Rate limit
+        if tick() - _lastShotModified < MIN_SHOT_INTERVAL then
+            return oldNamecall(self, ...)
+        end
 
         _inHook = true
-        local args = {...}
 
-        if (self == Workspace or self == workspace) then
-            local cam = Workspace.CurrentCamera
+        -- Calcular nueva dirección hacia el target
+        local tp = CurrentTargetPos
+        local part = CurrentTargetPart
+        local size = part.Size
 
-            if method == "Raycast" then
-                local origin, direction = args[1], args[2]
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and cam then
-                    local cp = cam.CFrame.Position
-                    local dx, dy, dz = origin.X - cp.X, origin.Y - cp.Y, origin.Z - cp.Z
-                    if math.sqrt(dx * dx + dy * dy + dz * dz) <= 10 then
-                        local tp = CurrentTargetPos
-                        local tx, ty, tz = tp.X - origin.X, tp.Y - origin.Y, tp.Z - origin.Z
-                        local tMag = math.sqrt(tx * tx + ty * ty + tz * tz)
-                        local dMag = math.sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z)
-                        if tMag > 0 and dMag > 0 then
-                            local dot = (direction.X / dMag) * (tx / tMag) + (direction.Y / dMag) * (ty / tMag) + (direction.Z / dMag) * (tz / tMag)
-                            if math.deg(math.acos(math.clamp(dot, -1, 1))) <= MAX_SILENT_ANGLE_DEG then
-                                local part = CurrentTargetPart
-                                local size = part.Size
-                                local off = Vector3.new(
-                                    (math.random() - 0.5) * size.X * HITBOX_OFFSET_SCALE,
-                                    (math.random() - 0.5) * size.Y * HITBOX_OFFSET_SCALE,
-                                    (math.random() - 0.5) * size.Z * HITBOX_OFFSET_SCALE
-                                )
-                                local ft = tp + off
-                                local nx, ny, nz = ft.X - origin.X, ft.Y - origin.Y, ft.Z - origin.Z
-                                local nMag = math.sqrt(nx * nx + ny * ny + nz * nz)
-                                if nMag > 0 then
-                                    local sc = dMag / nMag
-                                    args[2] = Vector3.new(nx * sc, ny * sc, nz * sc)
-                                    _lastShotModified = tick()
-                                    _inHook = false
-                                    return oldNamecall(self, unpack(args))
-                                end
-                            end
-                        end
-                    end
-                end
+        -- Offset aleatorio dentro del hitbox del target
+        local off = Vector3.new(
+            (math.random() - 0.5) * size.X * HITBOX_OFFSET_SCALE,
+            (math.random() - 0.5) * size.Y * HITBOX_OFFSET_SCALE,
+            (math.random() - 0.5) * size.Z * HITBOX_OFFSET_SCALE
+        )
+        local finalTarget = tp + off
 
-            elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
-                local ray = args[1]
-                if typeof(ray) == "Ray" and cam then
-                    local origin, direction = ray.Origin, ray.Direction
-                    local cp = cam.CFrame.Position
-                    local dx, dy, dz = origin.X - cp.X, origin.Y - cp.Y, origin.Z - cp.Z
-                    if math.sqrt(dx * dx + dy * dy + dz * dz) <= 10 then
-                        local tp = CurrentTargetPos
-                        local tx, ty, tz = tp.X - origin.X, tp.Y - origin.Y, tp.Z - origin.Z
-                        local tMag = math.sqrt(tx * tx + ty * ty + tz * tz)
-                        local dMag = math.sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z)
-                        if tMag > 0 and dMag > 0 then
-                            local dot = (direction.X / dMag) * (tx / tMag) + (direction.Y / dMag) * (ty / tMag) + (direction.Z / dMag) * (tz / tMag)
-                            if math.deg(math.acos(math.clamp(dot, -1, 1))) <= MAX_SILENT_ANGLE_DEG then
-                                local part = CurrentTargetPart
-                                local size = part.Size
-                                local ft = tp + Vector3.new(
-                                    (math.random() - 0.5) * size.X * HITBOX_OFFSET_SCALE,
-                                    (math.random() - 0.5) * size.Y * HITBOX_OFFSET_SCALE,
-                                    (math.random() - 0.5) * size.Z * HITBOX_OFFSET_SCALE
-                                )
-                                local nx, ny, nz = ft.X - origin.X, ft.Y - origin.Y, ft.Z - origin.Z
-                                local nMag = math.sqrt(nx * nx + ny * ny + nz * nz)
-                                if nMag > 0 then
-                                    local sc = dMag / nMag
-                                    args[1] = Ray.new(origin, Vector3.new(nx * sc, ny * sc, nz * sc))
-                                    _lastShotModified = tick()
-                                    _inHook = false
-                                    return oldNamecall(self, unpack(args))
-                                end
-                            end
-                        end
-                    end
-                end
-            end
+        -- Nueva dirección: misma magnitud, apuntando al target
+        local newDir = finalTarget - origin
+        local newDirMag = newDir.Magnitude
+
+        if newDirMag > 0.01 then
+            -- Mantener la magnitud original del raycast
+            local scale = dMag / newDirMag
+            args[2] = Vector3.new(newDir.X * scale, newDir.Y * scale, newDir.Z * scale)
+            _lastShotModified = tick()
+            _inHook = false
+            return oldNamecall(self, unpack(args))
         end
 
         _inHook = false
         return oldNamecall(self, ...)
     end))
 
-    warn("[AX HSX] ✅ Namecall hook installed")
+    warn("[AX HSX] ✅ Silent Aim hook installed (Exclude only, mag>" .. MIN_BULLET_MAGNITUDE .. ")")
 end)
 
 -- ================== MAIN LOOPS ==================
@@ -792,7 +756,8 @@ getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot module v2.1 loaded")
+warn("[AX HSX] ✅ HyperShot module v2.2 loaded")
+warn("[AX HSX] Silent: Exclude raycasts only (mag>50) | ESP: Workspace models + Bots")
 
 -- ================== CLEANUP ==================
 Players.PlayerRemoving:Connect(function(p)
@@ -809,8 +774,7 @@ end)
 task.spawn(function()
     while true do
         task.wait(2)
-        local myChar = GetMyCharacter()
-        if myChar then
+        if GetMyCharacter() then
             UpdateVisFilter()
         end
     end
