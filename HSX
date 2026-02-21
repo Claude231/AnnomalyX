@@ -1,7 +1,7 @@
 --[[
-    ANNOMALY X - HyperShot Module v4.3 FIXED
-    Silent Aim ahora detecta: Workspace.Mobs + jugadores reales en Workspace
-    ESP = Workspace.Mobs + jugadores reales
+    ANNOMALY X - HyperShot Module v4.6
+    Silent/Aimbot/Hitbox = ONLY BOTS (Workspace.Mobs)
+    ESP = Bots + Jugadores reales
 ]]
 
 if not getgenv().AX_Config then
@@ -75,74 +75,27 @@ local function IsVisible(part)
     return result.Instance and result.Instance:IsDescendantOf(part.Parent)
 end
 
--- ================== FUNCIÓN PARA OBTENER TODOS LOS ENEMIGOS ==================
-local function getAllEnemies()
-    local enemies = {}
-    local added = {}
-
-    -- 1. Buscar en Workspace.Mobs
-    local mobs = workspace:FindFirstChild("Mobs")
-    if mobs then
-        for _, mob in ipairs(mobs:GetChildren()) do
-            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
-                table.insert(enemies, mob)
-                added[mob] = true
-            end
-        end
-    end
-
-    -- 2. Buscar jugadores reales en Workspace directamente
-    for _, player in ipairs(players:GetPlayers()) do
-        if player == localPlayer then continue end
-        
-        -- Buscar por nombre en Workspace
-        local char = workspace:FindFirstChild(player.Name)
-        if char and char:IsA("Model") and char:FindFirstChildOfClass("Humanoid") and not added[char] then
-            table.insert(enemies, char)
-            added[char] = true
-        end
-        
-        -- Buscar en player.Character por si acaso
-        local pChar = player.Character
-        if pChar and pChar.Parent and pChar ~= char and not added[pChar] then
-            local hum = pChar:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                table.insert(enemies, pChar)
-                added[pChar] = true
-            end
-        end
-    end
-
-    return enemies
-end
-
--- ================== SILENT AIM TARGET (CORREGIDO - Ahora busca en TODOS lados) ==================
+-- ================== SILENT AIM TARGET (WORKSPACE.MOBS - BOTS ONLY) ==================
 local function getClosestTarget()
-    local closestTarget, shortestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or 300
+    local closestTarget, shortestDist = nil, Config.FOV.Enabled and Config.FOV.Radius or 9999
     local mousePos = userInput:GetMouseLocation()
-    
-    -- Usar la nueva función que busca en todos lados
-    for _, mob in ipairs(getAllEnemies()) do
+    local mobs = workspace:FindFirstChild("Mobs")
+    if not mobs then return nil end
+    for _, mob in ipairs(mobs:GetChildren()) do
         if globalStuff:SameTeam(localPlayer, mob) then continue end
-        
         local humanoid = mob:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then continue end
-        
         local part = mob:FindFirstChild("Head") or mob:FindFirstChild("HumanoidRootPart")
         if not part then continue end
-        
         if Config.Silent.VisibleCheck and not IsVisible(part) then continue end
-        
         local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
         if not onScreen then continue end
-        
         local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         if dist < shortestDist then
             shortestDist = dist
             closestTarget = mob
         end
     end
-    
     return closestTarget
 end
 
@@ -189,9 +142,10 @@ gunModule.GetTotalSpread = function(self)
     return originalGetTotalSpread(self)
 end
 
-warn("[AX HSX] ✅ Silent Aim hooks instalados (ahora detecta jugadores reales)")
+warn("[AX HSX] ✅ Silent Aim hooks instalados (BOTS ONLY)")
+warn("[AX HSX] ⚠️ Silent Aim, Aimbot & Hitbox Expander: ONLY WORKING ON BOTS")
 
--- ================== AIMBOT (CORREGIDO - usa getAllEnemies) ==================
+-- ================== AIMBOT (BOTS ONLY) ==================
 local hsAimbotLocked = nil
 
 runService.RenderStepped:Connect(function()
@@ -202,8 +156,11 @@ runService.RenderStepped:Connect(function()
         return
     end
 
+    local mobs = workspace:FindFirstChild("Mobs")
+    if not mobs then return end
+
     local vp = camera.ViewportSize
-    local center = Vector2.new(vp.X/2, vp.Y/2)
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
     local mousePos = userInput:GetMouseLocation()
     local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
     local bestPart, bestDist = nil, Config.Aimbot.FOVRadius or 150
@@ -221,8 +178,7 @@ runService.RenderStepped:Connect(function()
     end
 
     if not bestPart then
-        -- Usar getAllEnemies en lugar de solo Mobs
-        for _, mob in ipairs(getAllEnemies()) do
+        for _, mob in ipairs(mobs:GetChildren()) do
             if Config.Aimbot.TeamCheck and globalStuff:SameTeam(localPlayer, mob) then continue end
             local hum = mob:FindFirstChildOfClass("Humanoid")
             if not hum or hum.Health <= 0 then continue end
@@ -254,23 +210,54 @@ runService.RenderStepped:Connect(function()
     if Config.Aimbot.Method == "Aimbot" then
         local cur = camera.CFrame
         local tgt = CFrame.lookAt(cur.Position, pos)
-        camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+        camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
     else
         local sp, on = camera:WorldToViewportPoint(pos)
         if on then
             local mp = userInput:GetMouseLocation()
             local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-            if math.sqrt(dx*dx + dy*dy) > 1 then
-                local spd = math.clamp(1/sm, 0.05, 0.8)
-                local mx = math.clamp(dx*spd, -150, 150)
-                local my = math.clamp(dy*spd, -150, 150)
+            if math.sqrt(dx * dx + dy * dy) > 1 then
+                local spd = math.clamp(1 / sm, 0.05, 0.8)
+                local mx = math.clamp(dx * spd, -150, 150)
+                local my = math.clamp(dy * spd, -150, 150)
                 if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then mousemoverel(mx, my) end
             end
         end
     end
 end)
 
--- ================== ESP (ya usaba getAllEnemies, está bien) ==================
+-- ================== ESP (BOTS + JUGADORES REALES) ==================
+local function getAllEnemiesForESP()
+    local enemies = {}
+    local added = {}
+    local myName = localPlayer.Name
+
+    local mobs = workspace:FindFirstChild("Mobs")
+    if mobs then
+        for _, mob in ipairs(mobs:GetChildren()) do
+            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
+                table.insert(enemies, mob)
+                added[mob] = true
+            end
+        end
+    end
+
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if added[obj] then continue end
+        if not obj:IsA("Model") then continue end
+        if obj.Name == myName then continue end
+        local hum = obj:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local head = obj:FindFirstChild("Head")
+        local hrp = obj:FindFirstChild("HumanoidRootPart")
+        if not head and not hrp then continue end
+        table.insert(enemies, obj)
+        added[obj] = true
+    end
+
+    return enemies
+end
+
 local HSESP = {}
 local lastESP = 0
 
@@ -285,12 +272,12 @@ local function MakeESP(key)
         HBar = Drawing.new("Square")
     }
     local e = HSESP[key]
-    e.Box.Thickness=1; e.Box.Filled=false; e.Box.Visible=false
-    e.Outline.Thickness=3; e.Outline.Filled=false; e.Outline.Color=Color3.fromRGB(0,0,0); e.Outline.Transparency=0.5; e.Outline.Visible=false
-    e.Name.Size=13; e.Name.Center=true; e.Name.Outline=true; e.Name.Visible=false
-    e.Dist.Size=12; e.Dist.Center=true; e.Dist.Outline=true; e.Dist.Color=Color3.fromRGB(200,200,200); e.Dist.Visible=false
-    e.HBG.Thickness=1; e.HBG.Filled=true; e.HBG.Color=Color3.fromRGB(0,0,0); e.HBG.Transparency=0.5; e.HBG.Visible=false
-    e.HBar.Thickness=1; e.HBar.Filled=true; e.HBar.Visible=false
+    e.Box.Thickness = 1; e.Box.Filled = false; e.Box.Visible = false
+    e.Outline.Thickness = 3; e.Outline.Filled = false; e.Outline.Color = Color3.fromRGB(0, 0, 0); e.Outline.Transparency = 0.5; e.Outline.Visible = false
+    e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true; e.Name.Visible = false
+    e.Dist.Size = 12; e.Dist.Center = true; e.Dist.Outline = true; e.Dist.Color = Color3.fromRGB(200, 200, 200); e.Dist.Visible = false
+    e.HBG.Thickness = 1; e.HBG.Filled = true; e.HBG.Color = Color3.fromRGB(0, 0, 0); e.HBG.Transparency = 0.5; e.HBG.Visible = false
+    e.HBar.Thickness = 1; e.HBar.Filled = true; e.HBar.Visible = false
 end
 
 local function KillESP(key)
@@ -319,7 +306,7 @@ runService.Heartbeat:Connect(function()
     UpdateVisFilter()
 
     local active = {}
-    for _, mob in ipairs(getAllEnemies()) do
+    for _, mob in ipairs(getAllEnemiesForESP()) do
         if not mob:IsA("Model") then continue end
         local key = mob.Name
         active[key] = true
@@ -341,38 +328,38 @@ runService.Heartbeat:Connect(function()
         local e = HSESP[key]
         if not e then continue end
 
-        local hSP = head and select(1, camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))) or sp
-        local fSP = select(1, camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0)))
+        local hSP = head and select(1, camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
+        local fSP = select(1, camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
         local h = math.max(math.abs(hSP.Y - fSP.Y), 10)
         local w = h / 2
-        local mx = sp.X - w/2
+        local mx = sp.X - w / 2
         local my = hSP.Y
 
         local isBot = key:find("__Bot") ~= nil
-        local col = isBot and Color3.fromRGB(255,200,50)
-            or (head and IsVisible(head) and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50))
+        local col = isBot and Color3.fromRGB(255, 200, 50)
+            or (head and IsVisible(head) and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50))
 
         if Config.ESP.Boxes then
-            e.Outline.Size=Vector2.new(w+2,h+2); e.Outline.Position=Vector2.new(mx-1,my-1); e.Outline.Visible=true
-            e.Box.Size=Vector2.new(w,h); e.Box.Position=Vector2.new(mx,my); e.Box.Color=col; e.Box.Visible=true
-        else e.Box.Visible=false; e.Outline.Visible=false end
+            e.Outline.Size = Vector2.new(w + 2, h + 2); e.Outline.Position = Vector2.new(mx - 1, my - 1); e.Outline.Visible = true
+            e.Box.Size = Vector2.new(w, h); e.Box.Position = Vector2.new(mx, my); e.Box.Color = col; e.Box.Visible = true
+        else e.Box.Visible = false; e.Outline.Visible = false end
 
         if Config.ESP.Names then
-            local dn = isBot and key:gsub("__Bot","").." [BOT]" or key
-            e.Name.Text=dn; e.Name.Position=Vector2.new(mx+w/2,my-16); e.Name.Color=col; e.Name.Visible=true
-        else e.Name.Visible=false end
+            local dn = isBot and key:gsub("__Bot", "") .. " [BOT]" or key
+            e.Name.Text = dn; e.Name.Position = Vector2.new(mx + w / 2, my - 16); e.Name.Color = col; e.Name.Visible = true
+        else e.Name.Visible = false end
 
         if Config.ESP.Distance then
-            e.Dist.Text=math.floor(dist).."m"; e.Dist.Position=Vector2.new(mx+w/2,my+h+2); e.Dist.Visible=true
-        else e.Dist.Visible=false end
+            e.Dist.Text = math.floor(dist) .. "m"; e.Dist.Position = Vector2.new(mx + w / 2, my + h + 2); e.Dist.Visible = true
+        else e.Dist.Visible = false end
 
         if Config.ESP.Boxes then
-            local pct = math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
+            local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
             local bh = h * pct
-            local hc = pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
-            e.HBG.Size=Vector2.new(3,h); e.HBG.Position=Vector2.new(mx-6,my); e.HBG.Visible=true
-            e.HBar.Size=Vector2.new(3,bh); e.HBar.Position=Vector2.new(mx-6,my+(h-bh)); e.HBar.Color=hc; e.HBar.Visible=true
-        else e.HBG.Visible=false; e.HBar.Visible=false end
+            local hc = pct > 0.5 and Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0) or Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+            e.HBG.Size = Vector2.new(3, h); e.HBG.Position = Vector2.new(mx - 6, my); e.HBG.Visible = true
+            e.HBar.Size = Vector2.new(3, bh); e.HBar.Position = Vector2.new(mx - 6, my + (h - bh)); e.HBar.Color = hc; e.HBar.Visible = true
+        else e.HBG.Visible = false; e.HBar.Visible = false end
     end
 
     for k in pairs(HSESP) do
@@ -393,4 +380,8 @@ getgenv().AX_HyperShotHandlesAimbot = true
 getgenv().AX_HyperShotHandlesESP    = true
 getgenv().AX_HyperShotHandlesSilent = true
 
-warn("[AX HSX] ✅ HyperShot v4.3 FIXED - Ahora detecta jugadores reales")
+-- Flag para que el UI sepa que es BOTS ONLY
+getgenv().AX_BotsOnly = true
+
+warn("[AX HSX] ✅ HyperShot v4.6 LOADED")
+warn("[AX HSX] ⚠️ Silent Aim, Aimbot & Hitbox Expander: ONLY WORKING ON BOTS")
