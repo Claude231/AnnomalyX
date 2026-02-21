@@ -1,6 +1,7 @@
 --[[
-    ANNOMALY X - Rivals Module v3.5 COMPLETE
+    ANNOMALY X - Rivals Module v3.6
     RONIX SAFE - Silent Aim + ESP + Aimbot FUNCIONAL
+    Compatible con main v17.6
 ]]
 
 if not getgenv().AX_Config then
@@ -9,33 +10,32 @@ end
 
 local Config = getgenv().AX_Config
 
-local hookfunction = hookfunction or replaceclosure or detour_function
-local hookmetamethod = hookmetamethod
+local hookfunction    = hookfunction or replaceclosure or detour_function
+local hookmetamethod  = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
-local checkcaller = checkcaller or function() return false end
-local getconnections = getconnections
-local mousemoverel = mousemoverel or function() end
-local newcclosure = newcclosure or function(f) return f end
+local checkcaller     = checkcaller or function() return false end
+local getconnections  = getconnections
+local mousemoverel    = mousemoverel or function() end
+local newcclosure     = newcclosure or function(f) return f end
 
-if not hookfunction or not hookmetamethod or not getnamecallmethod then
-    return
-end
+if not hookfunction or not hookmetamethod or not getnamecallmethod then return end
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local Camera           = Workspace.CurrentCamera
+local LocalPlayer      = Players.LocalPlayer
 
-local MAX_SILENT_ANGLE_DEG = 15
-local HITBOX_OFFSET_SCALE = 0.3
-local MIN_SHOT_INTERVAL = 0.06
-local _lastShotModified = 0
+local MAX_SILENT_ANGLE_DEG  = 15
+local HITBOX_OFFSET_SCALE   = 0.3
+local MIN_SHOT_INTERVAL     = 0.06
+local _lastShotModified     = 0
 
--- ================== AC BYPASS SEGURO ==================
+-- ================== AC BYPASS (con delay para no freeze) ==================
 local function SafeACBypass()
+    -- Analytics pipeline
     pcall(function()
         local remotes = ReplicatedStorage:FindFirstChild("Remotes")
         if not remotes then return end
@@ -54,6 +54,7 @@ local function SafeACBypass()
         end
     end)
 
+    -- ScriptContext.Error
     pcall(function()
         if getconnections then
             for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
@@ -62,14 +63,16 @@ local function SafeACBypass()
         end
     end)
 
+    -- Kick hook (solo si no fue hookeado ya por el main)
     if not getgenv()._AX_KickHooked then
         pcall(function()
             for _, name in ipairs({"Kick", "kick"}) do
                 local fn = LocalPlayer[name]
                 if typeof(fn) == "function" then
+                    local oldFn = fn
                     hookfunction(fn, newcclosure(function(self, ...)
                         if self == LocalPlayer then return end
-                        return fn(self, ...)
+                        return oldFn(self, ...)
                     end))
                 end
             end
@@ -78,14 +81,26 @@ local function SafeACBypass()
     end
 end
 
-SafeACBypass()
+-- DELAY antes de SafeACBypass para evitar freeze en Rivals
+task.delay(1, SafeACBypass)
 
+-- Loop de mantenimiento cada 20s
 task.spawn(function()
-    while task.wait(15) do
+    while task.wait(20) do
         pcall(function()
             if getconnections then
                 for _, conn in pairs(getconnections(game:GetService("ScriptContext").Error)) do
                     pcall(function() conn:Disable() end)
+                end
+            end
+        end)
+        -- Re-limpieza global ligera
+        pcall(function()
+            local sk = {"signature","checksum","exploit","detect","anticheat"}
+            for k in pairs(_G) do
+                local ks = tostring(k):lower()
+                for _, s in ipairs(sk) do
+                    if ks:find(s) then _G[k] = nil break end
                 end
             end
         end)
@@ -95,9 +110,13 @@ end)
 -- ================== TEAM CHECK ==================
 local function IsRivalsTeammate(p)
     if not p or p == LocalPlayer then return false end
-    local ok1, r1 = pcall(function() return p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team end)
+    local ok1, r1 = pcall(function()
+        return p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team
+    end)
     if ok1 and r1 then return true end
-    local ok2, r2 = pcall(function() return p.TeamColor and LocalPlayer.TeamColor and p.TeamColor == LocalPlayer.TeamColor end)
+    local ok2, r2 = pcall(function()
+        return p.TeamColor and LocalPlayer.TeamColor and p.TeamColor == LocalPlayer.TeamColor
+    end)
     if ok2 and r2 then return true end
     return false
 end
@@ -118,8 +137,8 @@ local function IsRivalsVisible(part)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.IgnoreWater = true
     local origin = cam.CFrame.Position
-    local dir = part.Position - origin
-    local dist = dir.Magnitude
+    local dir    = part.Position - origin
+    local dist   = dir.Magnitude
     if dist < 3 then return true end
     local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
     if not result then return true end
@@ -130,12 +149,11 @@ end
 -- ================== ANGLE CHECK ==================
 local function GetAngleToTarget(origin, direction, target)
     local toTarget = (target - origin).Unit
-    local dot = direction.Unit:Dot(toTarget)
-    dot = math.clamp(dot, -1, 1)
+    local dot = math.clamp(direction.Unit:Dot(toTarget), -1, 1)
     return math.deg(math.acos(dot))
 end
 
--- ================== HUMANIZATION ==================
+-- ================== HUMANIZACIÓN ==================
 local function HumanizeTargetPos(pos, part)
     if not part then return pos end
     local size = part.Size
@@ -149,7 +167,7 @@ end
 
 -- ================== TARGET PART ==================
 local RIVALS_PARTS = {"Head","HumanoidRootPart","UpperTorso","LowerTorso"}
-local randomPart = "Head"
+local randomPart   = "Head"
 local randomSwitch = 0
 
 local function GetRivalsTargetPart(char, setting)
@@ -165,7 +183,9 @@ local function GetRivalsTargetPart(char, setting)
         end
         return char:FindFirstChild(randomPart) or char:FindFirstChild("Head")
     end
-    return char:FindFirstChild(setting) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+    return char:FindFirstChild(setting)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
 end
 
 -- ================== SILENT AIM TARGET ==================
@@ -179,8 +199,9 @@ local function UpdateSilentTarget()
         return
     end
 
-    local closest, dist = nil, Config.FOV.Enabled and Config.FOV.Radius or 9e9
-    local pos, part = nil, nil
+    local closest = nil
+    local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 9e9
+    local bestPos, bestPart = nil, nil
     local mouse = UserInputService:GetMouseLocation()
 
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -209,20 +230,20 @@ local function UpdateSilentTarget()
         if angle > MAX_SILENT_ANGLE_DEG then continue end
 
         local screen, onScreen = Camera:WorldToViewportPoint(predicted)
-        if onScreen then
-            local screenDist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
-            if screenDist < dist then
-                dist = screenDist
-                closest = plr
-                pos = predicted
-                part = tp
-            end
+        if not onScreen then continue end
+
+        local screenDist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
+        if screenDist < bestDist then
+            bestDist    = screenDist
+            closest     = plr
+            bestPos     = predicted
+            bestPart    = tp
         end
     end
 
-    CurrentTarget = closest
-    CurrentTargetPos = pos
-    CurrentTargetPart = part
+    CurrentTarget     = closest
+    CurrentTargetPos  = bestPos
+    CurrentTargetPart = bestPart
 end
 
 -- ================== AIMBOT ==================
@@ -245,7 +266,9 @@ local function GetRivalsAimbotPart(character)
         end
         return character:FindFirstChild(rivalsAimbotRandom) or character:FindFirstChild("Head")
     end
-    return character:FindFirstChild(s) or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+    return character:FindFirstChild(s)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
 end
 
 local function IsRivalsPlayerValid(player)
@@ -262,12 +285,13 @@ end
 local function GetRivalsAimbotTarget()
     Camera = Workspace.CurrentCamera
     if not Camera then return nil end
-    local fov = Config.Aimbot.FOVRadius or 150
-    local vp = Camera.ViewportSize
-    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local fov    = Config.Aimbot.FOVRadius or 150
+    local vp     = Camera.ViewportSize
+    local center = Vector2.new(vp.X/2, vp.Y/2)
     local mousePos = UserInputService:GetMouseLocation()
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    local ref    = Config.Aimbot.Method == "Aimbot" and center or mousePos
 
+    -- Aimlock: mantener locked si sigue siendo válido
     if Config.Aimbot.Method == "Aimlock" and rivalsAimbotLocked then
         if IsRivalsPlayerValid(rivalsAimbotLocked) then
             local tp = GetRivalsAimbotPart(rivalsAimbotLocked.Character)
@@ -290,22 +314,47 @@ local function GetRivalsAimbotTarget()
         local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
         if d < bestDist then bestDist = d best = tp bestP = player end
     end
-    if Config.Aimbot.Method == "Aimlock" and bestP then rivalsAimbotLocked = bestP end
+
+    if Config.Aimbot.Method == "Aimlock" and bestP then
+        rivalsAimbotLocked = bestP
+    end
     return best
 end
--- ================== ESP COMPLETO ==================
-local RivalsESP = {}
+
+-- ================== ESP ==================
+local RivalsESP    = {}
 local RivalsLastESP = 0
 
 local function CreateRivalsESP(player)
     if RivalsESP[player] then return end
     local e = {}
-    e.Box = Drawing.new("Square") e.Box.Thickness = 1 e.Box.Filled = false e.Box.Color = Color3.fromRGB(255,255,255) e.Box.Visible = false
-    e.Outline = Drawing.new("Square") e.Outline.Thickness = 3 e.Outline.Filled = false e.Outline.Color = Color3.fromRGB(0,0,0) e.Outline.Transparency = 0.5 e.Outline.Visible = false
-    e.Name = Drawing.new("Text") e.Name.Size = 13 e.Name.Center = true e.Name.Outline = true e.Name.Color = Color3.fromRGB(255,255,255) e.Name.Visible = false
-    e.Distance = Drawing.new("Text") e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
-    e.HealthBG = Drawing.new("Square") e.HealthBG.Thickness = 1 e.HealthBG.Filled = true e.HealthBG.Color = Color3.fromRGB(0,0,0) e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
-    e.HealthBar = Drawing.new("Square") e.HealthBar.Thickness = 1 e.HealthBar.Filled = true e.HealthBar.Color = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+
+    e.Box           = Drawing.new("Square")
+    e.Box.Thickness = 1 e.Box.Filled = false
+    e.Box.Color     = Color3.fromRGB(255,255,255) e.Box.Visible = false
+
+    e.Outline           = Drawing.new("Square")
+    e.Outline.Thickness = 3 e.Outline.Filled = false
+    e.Outline.Color     = Color3.fromRGB(0,0,0)
+    e.Outline.Transparency = 0.5 e.Outline.Visible = false
+
+    e.Name          = Drawing.new("Text")
+    e.Name.Size     = 13 e.Name.Center = true e.Name.Outline = true
+    e.Name.Color    = Color3.fromRGB(255,255,255) e.Name.Visible = false
+
+    e.Distance      = Drawing.new("Text")
+    e.Distance.Size = 12 e.Distance.Center = true e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200,200,200) e.Distance.Visible = false
+
+    e.HealthBG           = Drawing.new("Square")
+    e.HealthBG.Thickness = 1 e.HealthBG.Filled = true
+    e.HealthBG.Color     = Color3.fromRGB(0,0,0)
+    e.HealthBG.Transparency = 0.5 e.HealthBG.Visible = false
+
+    e.HealthBar        = Drawing.new("Square")
+    e.HealthBar.Thickness = 1 e.HealthBar.Filled = true
+    e.HealthBar.Color  = Color3.fromRGB(0,255,0) e.HealthBar.Visible = false
+
     RivalsESP[player] = e
 end
 
@@ -327,7 +376,6 @@ local function UpdateRivalsESP()
         for p in pairs(RivalsESP) do HideRivalsESP(p) end
         return
     end
-
     local now = tick()
     if now - RivalsLastESP < 0.08 then return end
     RivalsLastESP = now
@@ -347,19 +395,21 @@ local function UpdateRivalsESP()
             continue
         end
 
-        if not RivalsESP[player] then CreateRivalsESP(player) end
+        if not RivalsESP[player] then
+            pcall(function() CreateRivalsESP(player) end)
+        end
         local esp = RivalsESP[player]
         if not esp then continue end
 
-        local c = player.Character
-        if not c then HideRivalsESP(player) continue end
-        local h = c:FindFirstChildOfClass("Humanoid")
-        if not h or h.Health <= 0 then HideRivalsESP(player) continue end
-        if c:FindFirstChildOfClass("ForceField") then HideRivalsESP(player) continue end
+        local c  = player.Character
+        local h  = c and c:FindFirstChildOfClass("Humanoid")
+        local rp = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
+        local head = c and c:FindFirstChild("Head")
 
-        local rp = c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
-        local head = c:FindFirstChild("Head")
-        if not rp then HideRivalsESP(player) continue end
+        if not c or not h or not rp or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then
+            HideRivalsESP(player)
+            continue
+        end
 
         local dist = (Camera.CFrame.Position - rp.Position).Magnitude
         if dist > Config.ESP.MaxDistance then HideRivalsESP(player) continue end
@@ -367,72 +417,80 @@ local function UpdateRivalsESP()
         local sp, on = Camera:WorldToViewportPoint(rp.Position)
         if not on then HideRivalsESP(player) continue end
 
-        local hSP = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0)) or sp
-        local fSP = Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0))
+        -- Calcular dimensiones del box
+        local hSP = head and select(1, Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))) or sp
+        local fSP = select(1, Camera:WorldToViewportPoint(rp.Position - Vector3.new(0, 3, 0)))
         local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
-        local width = height / 2
-        local minX, minY = sp.X - width / 2, hSP.Y
+        local width  = height / 2
+        local minX   = sp.X - width / 2
+        local minY   = hSP.Y
 
+        -- Color por equipo/visibilidad
         local col
         if isTm then
             col = Color3.fromRGB(80, 150, 255)
         else
             local isVis = head and IsRivalsVisible(head) or false
-            col = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+            col = isVis and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50)
         end
 
+        -- Box
         if Config.ESP.Boxes then
-            esp.Outline.Size = Vector2.new(width + 2, height + 2)
-            esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
-            esp.Outline.Visible = true
-            esp.Box.Size = Vector2.new(width, height)
-            esp.Box.Position = Vector2.new(minX, minY)
-            esp.Box.Color = col
-            esp.Box.Visible = true
+            esp.Outline.Size     = Vector2.new(width+2, height+2)
+            esp.Outline.Position = Vector2.new(minX-1, minY-1)
+            esp.Outline.Visible  = true
+            esp.Box.Size         = Vector2.new(width, height)
+            esp.Box.Position     = Vector2.new(minX, minY)
+            esp.Box.Color        = col
+            esp.Box.Visible      = true
         else
-            esp.Box.Visible = false
+            esp.Box.Visible     = false
             esp.Outline.Visible = false
         end
 
+        -- Nombre
         if Config.ESP.Names then
-            esp.Name.Text = player.DisplayName or player.Name
-            esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
-            esp.Name.Color = col
-            esp.Name.Visible = true
+            esp.Name.Text     = player.DisplayName or player.Name
+            esp.Name.Position = Vector2.new(minX + width/2, minY - 16)
+            esp.Name.Color    = col
+            esp.Name.Visible  = true
         else
             esp.Name.Visible = false
         end
 
+        -- Distancia
         if Config.ESP.Distance then
-            esp.Distance.Text = math.floor(dist) .. "m"
-            esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
-            esp.Distance.Visible = true
+            esp.Distance.Text     = math.floor(dist).."m"
+            esp.Distance.Position = Vector2.new(minX + width/2, minY + height + 2)
+            esp.Distance.Visible  = true
         else
             esp.Distance.Visible = false
         end
 
+        -- Health bar
         if Config.ESP.Boxes and h then
-            local pct = math.clamp(h.Health / h.MaxHealth, 0, 1)
-            local bh = height * pct
+            local pct = math.clamp(h.Health / math.max(h.MaxHealth, 1), 0, 1)
+            local bh  = height * pct
             local hc
             if pct > 0.5 then
-                hc = Color3.fromRGB(math.floor(255 * (1 - pct) * 2), 255, 0)
+                hc = Color3.fromRGB(math.floor(255*(1-pct)*2), 255, 0)
             else
-                hc = Color3.fromRGB(255, math.floor(255 * pct * 2), 0)
+                hc = Color3.fromRGB(255, math.floor(255*pct*2), 0)
             end
-            esp.HealthBG.Size = Vector2.new(3, height)
+            esp.HealthBG.Size     = Vector2.new(3, height)
             esp.HealthBG.Position = Vector2.new(minX - 6, minY)
-            esp.HealthBG.Visible = true
-            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBG.Visible  = true
+            esp.HealthBar.Size     = Vector2.new(3, bh)
             esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - bh))
-            esp.HealthBar.Color = hc
-            esp.HealthBar.Visible = true
+            esp.HealthBar.Color    = hc
+            esp.HealthBar.Visible  = true
         else
-            esp.HealthBG.Visible = false
+            esp.HealthBG.Visible  = false
             esp.HealthBar.Visible = false
         end
     end
 
+    -- Limpiar jugadores que ya no existen
     for p in pairs(RivalsESP) do
         if not active[p] then
             if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end
@@ -440,24 +498,31 @@ local function UpdateRivalsESP()
     end
 end
 
--- ================== NAMECALL HOOK (8 SEGUNDOS) ==================
+-- ================== NAMECALL HOOK (8s delay — sync con main) ==================
 task.delay(8, function()
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
-        local args = {...}
+        local args   = {...}
 
         if checkcaller() then return oldNamecall(self, ...) end
 
         if Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart then
-            if math.random(100) > Config.Silent.HitChance then return oldNamecall(self, ...) end
-            if tick() - _lastShotModified < MIN_SHOT_INTERVAL then return oldNamecall(self, ...) end
+            -- Hit chance check
+            if math.random(100) > Config.Silent.HitChance then
+                return oldNamecall(self, ...)
+            end
+            -- Rate limit
+            if tick() - _lastShotModified < MIN_SHOT_INTERVAL then
+                return oldNamecall(self, ...)
+            end
 
             local targetPos = HumanizeTargetPos(CurrentTargetPos, CurrentTargetPart)
 
-            if self == Workspace then
+            -- Workspace raycasts
+            if self == Workspace or self == workspace then
                 if method == "Raycast" then
-                    local origin = args[1]
+                    local origin    = args[1]
                     local direction = args[2]
                     if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
                         local angle = GetAngleToTarget(origin, direction, targetPos)
@@ -467,7 +532,9 @@ task.delay(8, function()
                             return oldNamecall(self, unpack(args))
                         end
                     end
-                elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+                elseif method == "FindPartOnRay"
+                    or method == "FindPartOnRayWithIgnoreList"
+                    or method == "FindPartOnRayWithWhitelist" then
                     local ray = args[1]
                     if typeof(ray) == "Ray" then
                         local angle = GetAngleToTarget(ray.Origin, ray.Direction, targetPos)
@@ -480,13 +547,19 @@ task.delay(8, function()
                 end
             end
 
-            if self:IsA("RemoteEvent") and method == "FireServer" then
+            -- RemoteEvent CFrame (solo si está activado silent y hay target)
+            -- Solo modificar si el ángulo es válido para evitar detección
+            if typeof(self) == "Instance" and self:IsA("RemoteEvent") and method == "FireServer" then
                 local modified = false
                 for i, arg in ipairs(args) do
                     if typeof(arg) == "CFrame" then
-                        local angle = GetAngleToTarget(arg.Position, arg.LookVector, targetPos)
+                        local angle = GetAngleToTarget(
+                            Camera and Camera.CFrame.Position or Vector3.zero,
+                            Camera and Camera.CFrame.LookVector or Vector3.zAxis,
+                            targetPos
+                        )
                         if angle <= MAX_SILENT_ANGLE_DEG then
-                            args[i] = CFrame.new(arg.Position, targetPos)
+                            args[i]  = CFrame.new(arg.Position, targetPos)
                             modified = true
                         end
                     end
@@ -503,11 +576,12 @@ task.delay(8, function()
 end)
 
 -- ================== MAIN LOOPS ==================
+-- RenderStepped: Silent target + Aimbot (alta frecuencia)
 RunService.RenderStepped:Connect(function()
     Camera = Workspace.CurrentCamera
-    
+
     UpdateSilentTarget()
-    
+
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
         local t = GetRivalsAimbotTarget()
         if t then
@@ -515,25 +589,29 @@ RunService.RenderStepped:Connect(function()
             pcall(function()
                 if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
                     local v = t.AssemblyLinearVelocity
-                    if v and v.Magnitude > 0.5 then pos = pos + v * Config.Aimbot.Prediction end
+                    if v and v.Magnitude > 0.5 then
+                        pos = pos + v * Config.Aimbot.Prediction
+                    end
                 end
             end)
             local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
             if Config.Aimbot.Method == "Aimbot" then
                 local cur = Camera.CFrame
                 local tgt = CFrame.lookAt(cur.Position, pos)
-                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+                Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
             else
                 local sp, on = Camera:WorldToViewportPoint(pos)
                 if on then
                     local mp = UserInputService:GetMouseLocation()
                     local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-                    local d = math.sqrt(dx * dx + dy * dy)
+                    local d = math.sqrt(dx*dx + dy*dy)
                     if d > 1 then
-                        local spd = math.clamp(1 / sm, 0.05, 0.8)
-                        local mx = math.clamp(dx * spd, -150, 150)
-                        local my = math.clamp(dy * spd, -150, 150)
-                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then mousemoverel(mx, my) end
+                        local spd = math.clamp(1/sm, 0.05, 0.8)
+                        local mx  = math.clamp(dx*spd, -150, 150)
+                        local my  = math.clamp(dy*spd, -150, 150)
+                        if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                            mousemoverel(mx, my)
+                        end
                     end
                 end
             end
@@ -545,15 +623,18 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- Heartbeat: ESP (menor frecuencia)
 RunService.Heartbeat:Connect(function()
     UpdateRivalsESP()
 end)
 
--- ================== FLAGS + INIT ==================
-getgenv().AX_RivalsLoaded = true
-getgenv().AX_RivalsHandlesAimbot = true
-getgenv().AX_RivalsHandlesESP = true
+-- ================== FLAGS ==================
+getgenv().AX_RivalsLoaded         = true
+getgenv().AX_RivalsHandlesAimbot  = true
+getgenv().AX_RivalsHandlesESP     = true
+getgenv().AX_RivalsHandlesSilent  = true  -- NUEVO: evita doble hook desde main
 
+-- ================== INIT PLAYERS ==================
 for _, p in ipairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then
         pcall(function() CreateRivalsESP(p) end)
@@ -561,7 +642,9 @@ for _, p in ipairs(Players:GetPlayers()) do
 end
 
 Players.PlayerAdded:Connect(function(p)
-    task.delay(2, function() pcall(function() CreateRivalsESP(p) end) end)
+    task.delay(2, function()
+        pcall(function() CreateRivalsESP(p) end)
+    end)
 end)
 
 Players.PlayerRemoving:Connect(function(p)
@@ -571,10 +654,10 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    Camera = Workspace.CurrentCamera
-    CurrentTarget = nil
-    CurrentTargetPos = nil
-    CurrentTargetPart = nil
+    Camera             = Workspace.CurrentCamera
+    CurrentTarget      = nil
+    CurrentTargetPos   = nil
+    CurrentTargetPart  = nil
     rivalsAimbotLocked = nil
     task.wait(2)
     pcall(SafeACBypass)
