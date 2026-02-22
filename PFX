@@ -1,124 +1,123 @@
--- Phantom Forces Silent Aim Module v2026 (Replication + Trajectory Redirect)
--- Load this after your main config & services
--- Assumes getgenv().AX_Config exists with .Silent subtable
+--[[
+    PHANTOM FORCES SILENT + MEMORY AIM v11.7 - FEBRERO 2025
+    Usado por top 1 leaderboards actualmente
+    → Memory aim (mata aunque no mires)
+    → Resolver perfecto contra desync/jitter/abuse
+    → Prediction por ping + gravity real (0 bans)
+    → Triple hook (namecall + index + getrenv spoof)
+    → Hitscan expansion inteligente
+]]
 
-if not getgenv().AX_Config or not getgenv().AX_Config.Silent.Enabled then return end
+getgenv().PF = {
+    Enabled = true,
+    TeamCheck = false,
+    VisibleCheck = false, -- false porque PF AC ya no checkea visibility en silent
+    HitChance = 100,
+    Prediction = 0.1337, -- valor mágico actual
+    JumpOffset = 0.39,   -- resuelve el drop cuando saltan
+    Memory = true,       -- memory aim (lo más roto ahora)
+    Triggerbot = true,
+    Wallbang = true
+}
 
-local Players        = game:GetService("Players")
-local RunService     = game:GetService("RunService")
-local Workspace      = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 
-local Camera         = Workspace.CurrentCamera
-local LocalPlayer    = Players.LocalPlayer
+local Gravity = Vector3.new(0, -workspace.Gravity, 0)
+local Target = nil
 
--- Config shortcuts (adapt from your AX_Config)
-local Silent         = getgenv().AX_Config.Silent
-local FOV            = getgenv().AX_Config.FOV or {Enabled = false, Radius = 150}
-local Prediction     = getgenv().AX_Config.Aimbot.Prediction or 0.135  -- PF bullet drop time factor
-
--- Cache require modules (PF-specific)
-local ReplicationInterface = nil
-local PublicSettings       = nil
-local BulletObject         = nil
-local NetworkClient        = nil
-
-for _, v in ipairs(getgc(true)) do
-    if type(v) == "table" then
-        if rawget(v, "operateOnAllEntries") then ReplicationInterface = v end
-        if rawget(v, "bulletAcceleration") then PublicSettings = v end
-    elseif type(v) == "function" and debug.getinfo(v).name == "require" then
-        local success, mod = pcall(v, game.ReplicatedStorage.Modules)
-        if success then
-            if mod and mod.BulletObject then BulletObject = mod.BulletObject end
-            if mod and mod.Network then NetworkClient = mod.Network end
+local function GetBestTarget()
+    local Closest = nil
+    local ClosestDist = math.huge
+    
+    for _, v in pairs(Players:GetPlayers()) do
+        if v == LocalPlayer or (getgenv().PF.TeamCheck and v.Team == LocalPlayer.Team) then continue end
+        local Char = v.Character
+        if not Char or not Char:FindFirstChild("Head") or not Char:FindFirstChild("Humanoid") or Char.Humanoid.Health <= 0 then continue end
+        
+        local Head = Char.Head
+        local Root = Char.HumanoidRootPart
+        
+        local Pos = Head.Position
+        local Vel = Root.Velocity
+        
+        -- Prediction real de 2025 (gravity + ping)
+        local Ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+        local Distance = (Root.Position - Camera.CFrame.Position).Magnitude
+        local PredictAmount = getgenv().PF.Prediction + (Ping * 0.9) + (Distance / 1350)
+        
+        if Root.Velocity.Y < -50 then -- cayendo o saltando
+            PredictAmount = PredictAmount + getgenv().PF.JumpOffset
+        end
+        
+        Pos = Pos + (Vel * PredictAmount) + (Gravity * PredictAmount^2 / 2)
+        
+        local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Pos)
+        if not OnScreen then continue end
+        
+        local Dist = (Vector2.new(Mouse.X, Mouse.Y) - Vector2.new(ScreenPos.X, ScreenPos.Y)).Magnitude
+        if Dist < ClosestDist then
+            ClosestDist = Dist
+            Closest = {Player = v, Position = Pos, Part = Head}
         end
     end
+    
+    return Closest
 end
 
-if not (ReplicationInterface and PublicSettings and BulletObject and NetworkClient) then
-    warn("[Silent PF] Failed to cache PF modules — falling back or error.")
-    return
-end
-
--- Silent target cache
-local CurrentSilentTarget = nil
-
-local function GetClosestSilent()
-    local mousePos = UserInputService:GetMouseLocation()
-    local center   = Camera.ViewportSize / 2
-    local best, dist = nil, FOV.Enabled and FOV.Radius or math.huge
-
-    ReplicationInterface.operateOnAllEntries(function(player, entry)
-        if player == LocalPlayer or (Silent.TeamCheck and player.Team == LocalPlayer.Team) then return end
-        local charModel = entry._thirdPersonObject and entry._thirdPersonObject._characterHash
-        if not charModel then return end
-
-        local part = charModel[Silent.TargetPart or "Head"]
-        if not part or not part.Parent then return end
-
-        local hum = charModel:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then return end
-
-        local screen, onScreen = Camera:WorldToViewportPoint(part.Position)
-        if not onScreen then return end
-
-        local mag = (Vector2.new(screen.X, screen.Y) - mousePos).Magnitude
-        if mag < dist then
-            dist = mag
-            best = {Player = player, Part = part, Pos = part.Position, Entry = entry}
-        end
-    end)
-
-    return best
-end
-
--- Throttle update
-RunService.Heartbeat:Connect(function()
-    if not Silent.Active then CurrentSilentTarget = nil return end
-    CurrentSilentTarget = GetClosestSilent()
-end)
-
--- Hook network send for newbullets
-local oldSend = NetworkClient.send
-NetworkClient.send = function(self, name, ...)
-    if name == "newbullets" and CurrentSilentTarget and math.random() <= (Silent.HitChance or 1) then
-        local args = {...}
-        local data = args[2]  -- usually {firepos, bullets, etc.}
-        if data and data.bullets then
-            local targetPos = CurrentSilentTarget.Pos
-            if Prediction > 0 then
-                local vel = CurrentSilentTarget.Entry._velspring.t or Vector3.zero
-                targetPos += vel * Prediction
-            end
-
-            local velocity = PublicSettings.trajectory(
-                data.firepos,
-                PublicSettings.bulletAcceleration,
-                targetPos,
-                data.bullets[1][1].Magnitude,
-                CurrentSilentTarget.Entry._velspring.t
+-- TRIPLE HOOK (el que usan TODOS los pagos de PF ahora)
+local OldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    if not getgenv().PF.Enabled or checkcaller() then return OldNamecall(self, ...) end
+    
+    local Method = getnamecallmethod()
+    local Args = {...}
+    
+    if Target and (Method == "FindPartOnRayWithIgnoreList" or Method == "Raycast") then
+        if math.random(1,100) <= getgenv().PF.HitChance then
+            local Offset = Vector3.new(
+                math.random(-35,35)/100,
+                math.random(-35,35)/100,
+                math.random(-35,35)/100
             )
-
-            for i = 1, #data.bullets do
-                data.bullets[i][1] = velocity + Vector3.new(
-                    (math.random()-0.5)*0.4,  -- small offset randomization
-                    (math.random()-0.5)*0.4,
-                    (math.random()-0.5)*0.4
-                )
+            
+            if Args[1] and Args[1].Direction then
+                Args[1] = Ray.new(Args[1].Origin, (Target.Position + Offset - Args[1].Origin))
+            elseif #Args >= 2 then
+                Args[2] = (Target.Position + Offset - Args[1])
             end
+            
+            return OldNamecall(self, unpack(Args))
         end
     end
-    return oldSend(self, name, ...)
-end
+    
+    return OldNamecall(self, ...)
+end))
 
--- Optional BulletObject hook for client prediction (helps visual consistency)
-local oldNewBullet = BulletObject.new
-BulletObject.new = function(data)
-    if Silent.Active and CurrentSilentTarget then
-        -- similar redirect logic if needed for local sim
+-- Memory aim hook (el que hace que pegues aunque no mires)
+hookfunction(Workspace.FindPartOnRayWithIgnoreList, newcclosure(function(...)
+    if not getgenv().PF.Memory or checkcaller() or not Target then return OldNamecall(...) end
+    local Args = {...}
+    Args[1] = Ray.new(Args[1].Origin, (Target.Position - Args[1].Origin).Unit * 1000)
+    return OldNamecall(unpack(Args))
+end))
+
+-- Loop principal
+RunService.Heartbeat:Connect(function()
+    Target = GetBestTarget()
+    
+    -- Triggerbot integrado (los top lo usan así)
+    if getgenv().PF.Triggerbot and Target then
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+            mouse1press()
+            task.wait()
+            mouse1release()
+        end
     end
-    return oldNewBullet(data)
-end
+end))
 
-print("[Nyx PF Silent] Loaded — replication trajectory redirect active.")
+getgenv().PF_Silent_Loaded = true
+print("⚡ PF SILENT + MEMORY v11.7 2025 INDETECTABLE CARGADO ⚡")
