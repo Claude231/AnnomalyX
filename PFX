@@ -1029,6 +1029,7 @@ end)
 -- ============================================
 -- SECTION 14: SIGNALS TO MAIN SCRIPT
 -- ============================================
+getgenv().AX_PF_HandlesSilent = true  -- ← AGREGAR ESTO
 getgenv().AX_PF_HandlesESP = true
 getgenv().AX_PF_HandlesHitbox = true
 getgenv().AX_PF_HandlesAimbot = true
