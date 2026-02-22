@@ -1,0 +1,1277 @@
+--[[
+    ANNOMALY X v17.7 OPTIMIZED
+    Compatible: PF Module v4.0 (internal hooks)
+    Fix: GameId correcto para Fate Trigger (122291041295001)
+    Fix: _inHook guard en hook universal
+    Soporte: Universal, Flick, PF, Rivals, CA, Arsenal, BSX, HyperShot, Fate Trigger
+]]
+
+local cloneref    = cloneref    or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local checkcaller = checkcaller or function() return false end
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local hookfunction    = hookfunction    or replaceclosure
+local hookmetamethod  = hookmetamethod
+local mousemoverel    = mousemoverel    or function() end
+
+if not hookfunction or not hookmetamethod or not getnamecallmethod then return end
+
+local Players         = cloneref(game:GetService("Players"))
+local Workspace       = cloneref(game:GetService("Workspace"))
+local RunService      = cloneref(game:GetService("RunService"))
+local UserInputService= cloneref(game:GetService("UserInputService"))
+local CoreGui         = cloneref(game:GetService("CoreGui"))
+local LocalPlayer     = Players.LocalPlayer
+local Camera          = Workspace.CurrentCamera
+
+local _pid = game.PlaceId
+local _gid = game.GameId
+
+local IS_FLICK   = (_pid == 136801880565837)
+local IS_PF      = (_pid == 292439477)
+local IS_RIVALS  = (_gid == 6035872082)
+local IS_CA      = (_gid == 5421899973)
+local IS_ARSENAL = (_pid == 286090429)
+local IS_BSX     = (_pid == 114234929420007)
+
+local IS_HYPERSHOT = (_pid == 86696142930150) or (_gid == 5995470825)
+if not IS_HYPERSHOT then
+    pcall(function()
+        local info = game:GetService("MarketplaceService"):GetProductInfo(_pid)
+        if info and info.Name and info.Name:lower():find("hypershot") then
+            IS_HYPERSHOT = true
+        end
+    end)
+end
+
+local IS_FATETRIGGER = (_pid == 134784668468620) or (_gid == 122291041295001)
+if not IS_FATETRIGGER then
+    pcall(function()
+        if tostring(_gid) == "122291041295001" or tostring(_pid) == "134784668468620" then
+            IS_FATETRIGGER = true
+        end
+    end)
+end
+if not IS_FATETRIGGER then
+    pcall(function()
+        local info = game:GetService("MarketplaceService"):GetProductInfo(_pid)
+        if info and info.Name then
+            local nameLower = info.Name:lower()
+            if nameLower:find("fate trigger") or nameLower:find("fatetrigger") or nameLower:find("fate_trigger") then
+                IS_FATETRIGGER = true
+            end
+        end
+    end)
+end
+
+warn(string.format("[AX] PlaceId: %s | GameId: %s", tostring(_pid), tostring(_gid)))
+warn(string.format("[AX] IS_FATETRIGGER: %s | IS_HYPERSHOT: %s", tostring(IS_FATETRIGGER), tostring(IS_HYPERSHOT)))
+
+local HAS_DEDICATED_MODULE = IS_FLICK or IS_PF or IS_RIVALS or IS_CA
+    or IS_ARSENAL or IS_BSX or IS_HYPERSHOT or IS_FATETRIGGER
+local NO_METAMETHOD     = IS_CA or IS_BSX
+local NO_PROTECTION     = IS_CA or IS_BSX
+local BSX_NO_SILENT     = IS_BSX
+local BSX_NO_HITBOX     = IS_BSX
+local BSX_CUSTOM_AIMBOT = IS_BSX
+local CA_NO_SILENT      = IS_CA
+
+local GAME_MODE_NAME = "Universal"
+if IS_FATETRIGGER   then GAME_MODE_NAME = "Fate Trigger"
+elseif IS_HYPERSHOT then GAME_MODE_NAME = "HyperShot"
+elseif IS_FLICK     then GAME_MODE_NAME = "Flick"
+elseif IS_PF        then GAME_MODE_NAME = "Phantom Forces"
+elseif IS_RIVALS    then GAME_MODE_NAME = "Rivals"
+elseif IS_CA        then GAME_MODE_NAME = "Combat Arena"
+elseif IS_ARSENAL   then GAME_MODE_NAME = "Arsenal"
+elseif IS_BSX       then GAME_MODE_NAME = "Blox Strike"
+end
+
+warn("[AX] Game Mode: " .. GAME_MODE_NAME)
+
+local CurrentTarget       = nil
+local ESPObjects          = {}
+local OriginalSizes       = {}
+local OriginalTransparencies = {}
+local OriginalCanCollide  = {}
+local OriginalMassless    = {}
+local RandomPartSelection = {}
+local LastRandomSwitch    = {}
+local LastHitboxUpdate    = 0
+local LastESPUpdate       = 0
+local ExpandedPlayers     = {}
+local AimbotCurrentTarget = nil
+local AimbotLockedPlayer  = nil
+local AimbotRandomPart    = "Head"
+local AimbotLastRandomSwitch = 0
+local LastSilentUpdate    = 0
+local SILENT_UPDATE_RATE  = 0.05
+local LastAimbotUpdate    = 0
+local AIMBOT_UPDATE_RATE  = 0.016
+
+local Config = {
+    Silent = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.E, KeybindMode = "Toggle",
+        TargetPart = "Head", HitChance = 100,
+        TeamCheck = false, VisibleCheck = false
+    },
+    Aimbot = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.Q, KeybindMode = "Hold",
+        Method = "Aimbot", TargetPart = "Head",
+        TeamCheck = false, VisibleCheck = false,
+        Smoothness = 5, FOVRadius = 150, FOVVisible = true,
+        FOVColor = Color3.fromRGB(255, 200, 0),
+        RandomInterval = 0.5, Prediction = 0
+    },
+    Hitbox = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.H, KeybindMode = "Toggle",
+        Method = "DHE (Dynamic)", MaxSize = 8,
+        TargetPart = "Head", Transparency = 0.7,
+        RandomInterval = 0.5, TeamCheck = false,
+        FOVEnabled = true, FOVRadius = 150,
+        FOVVisible = false, FOVColor = Color3.fromRGB(0, 255, 150)
+    },
+    FOV = {
+        Enabled = true, Radius = 150,
+        Visible = true, Color = Color3.fromRGB(255, 255, 255)
+    },
+    ESP = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.V, KeybindMode = "Toggle",
+        Boxes = true, Names = true, Distance = true,
+        MaxDistance = 1000, TeamCheck = false
+    },
+    Triggerbot = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.T, KeybindMode = "Toggle",
+        TeamCheck = true, Delay = 0.05,
+        FOVBased = true, UseScreenRay = true
+    },
+    GUI = { ToggleKey = Enum.KeyCode.End }
+}
+getgenv().AX_Config = Config
+
+local _visRayParams = RaycastParams.new()
+_visRayParams.FilterType = Enum.RaycastFilterType.Exclude
+_visRayParams.FilterDescendantsInstances = {}
+
+local _triggerRayParams = RaycastParams.new()
+_triggerRayParams.FilterType = Enum.RaycastFilterType.Exclude
+_triggerRayParams.FilterDescendantsInstances = {}
+
+local _cachedPlayers    = {}
+local _lastPlayerCache  = 0
+local PLAYER_CACHE_RATE = 2
+
+local function GetCachedPlayers()
+    local t = tick()
+    if t - _lastPlayerCache > PLAYER_CACHE_RATE then
+        _cachedPlayers   = Players:GetPlayers()
+        _lastPlayerCache = t
+    end
+    return _cachedPlayers
+end
+
+local _acKeys = {"__acsignature","__checksum","__hash","__integrity",
+                 "__validation","__exploit_flag","_ac_token","_security_hash",
+                 "__anticheat","__detect","__banflag"}
+
+if not getgenv()._AX_KickHooked then
+    pcall(function()
+        for _, kickName in ipairs({"Kick","kick"}) do
+            local fn = LocalPlayer[kickName]
+            if typeof(fn) == "function" then
+                local oldFn = fn
+                hookfunction(fn, newcclosure(function(self, ...)
+                    if self == LocalPlayer then return end
+                    return oldFn(self, ...)
+                end))
+            end
+        end
+        getgenv()._AX_KickHooked = true
+    end)
+end
+
+if not IS_RIVALS and not NO_PROTECTION then
+    pcall(function()
+        local SC = cloneref(game:GetService("ScriptContext"))
+        if getconnections then
+            for _, conn in ipairs(getconnections(SC.Error)) do pcall(function() conn:Disable() end) end
+            for _, c in ipairs(getconnections(SC.ScriptAdded))   do pcall(function() c:Disable() end) end
+            for _, c in ipairs(getconnections(SC.ScriptRemoved)) do pcall(function() c:Disable() end) end
+        end
+    end)
+end
+
+pcall(function()
+    local sk = {"signature","checksum","hash","exploit","cheat","hack","detect","anticheat","ban"}
+    for k in pairs(_G) do
+        local ks = tostring(k):lower()
+        for _, s in ipairs(sk) do if ks:find(s) then _G[k] = nil break end end
+    end
+end)
+
+if not IS_RIVALS and getgc then
+    pcall(function()
+        local gc = getgc(true)
+        for i = 1, math.min(#gc, 2000) do
+            local obj = gc[i]
+            if type(obj) == "table" then
+                pcall(function()
+                    for _, k in ipairs(_acKeys) do
+                        if rawget(obj, k) then rawset(obj, k, nil) end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+-- ================== CARGA DE MODULOS ==================
+task.spawn(function()
+    task.wait(IS_RIVALS and 2 or 0.5)
+    if IS_FATETRIGGER then
+        warn("[AX] Cargando modulo Fate Trigger...")
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/FTX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando FTX: " .. tostring(err)) end
+    elseif IS_HYPERSHOT then
+        warn("[AX] Cargando modulo HyperShot...")
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/HSX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando HSX: " .. tostring(err)) end
+    elseif IS_FLICK then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/FlickX"))() end)
+    elseif IS_PF then
+        warn("[AX] Cargando modulo Phantom Forces v4.0...") -- [CHANGED v4.0]
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/PFX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando PFX: " .. tostring(err)) end -- [CHANGED v4.0]
+    elseif IS_RIVALS then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/RivalsX"))() end)
+    elseif IS_CA then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/CAX"))() end)
+    elseif IS_ARSENAL then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/ArsenalX"))() end)
+    elseif IS_BSX then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/BSX"))() end)
+    end
+end)
+
+local FOVCircle, AimbotFOVCircle, HitboxFOVCircle
+
+task.delay(5, function()
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Thickness=1.5 FOVCircle.NumSides=100
+    FOVCircle.Radius=Config.FOV.Radius FOVCircle.Filled=false
+    FOVCircle.Visible=false FOVCircle.Color=Config.FOV.Color FOVCircle.Transparency=1
+
+    AimbotFOVCircle = Drawing.new("Circle")
+    AimbotFOVCircle.Thickness=1.5 AimbotFOVCircle.NumSides=100
+    AimbotFOVCircle.Radius=Config.Aimbot.FOVRadius AimbotFOVCircle.Filled=false
+    AimbotFOVCircle.Visible=false AimbotFOVCircle.Color=Config.Aimbot.FOVColor AimbotFOVCircle.Transparency=1
+
+    HitboxFOVCircle = Drawing.new("Circle")
+    HitboxFOVCircle.Thickness=1.5 HitboxFOVCircle.NumSides=100
+    HitboxFOVCircle.Radius=Config.Hitbox.FOVRadius HitboxFOVCircle.Filled=false
+    HitboxFOVCircle.Visible=false HitboxFOVCircle.Color=Config.Hitbox.FOVColor HitboxFOVCircle.Transparency=1
+end)
+
+local function GetMouseLocation()  return UserInputService:GetMouseLocation() end
+local function GetViewportCenter()
+    local vp = Camera.ViewportSize
+    return Vector2.new(vp.X/2, vp.Y/2)
+end
+
+local function ModuleHandlesAimbot()
+    return getgenv().AX_BSX_HandlesAimbot or getgenv().AX_PF_HandlesAimbot
+        or getgenv().AX_RivalsHandlesAimbot or getgenv().AX_FlickHandlesAimbot
+        or getgenv().AX_ArsenalHandlesAimbot or getgenv().AX_CAHandlesAimbot
+        or getgenv().AX_HyperShotHandlesAimbot or getgenv().AX_FateTriggerHandlesAimbot
+        or BSX_CUSTOM_AIMBOT
+end
+local function ModuleHandlesESP()
+    return getgenv().AX_PF_HandlesESP or getgenv().AX_RivalsHandlesESP
+        or getgenv().AX_FlickHandlesESP or getgenv().AX_ArsenalHandlesESP
+        or getgenv().AX_CAHandlesESP or getgenv().AX_HyperShotHandlesESP
+        or getgenv().AX_FateTriggerHandlesESP
+end
+local function ModuleHandlesSilent()
+    return getgenv().AX_RivalsHandlesSilent or getgenv().AX_FlickHandlesSilent
+        or getgenv().AX_PF_HandlesSilent or getgenv().AX_ArsenalHandlesSilent
+        or getgenv().AX_CAHandlesSilent or getgenv().AX_HyperShotHandlesSilent
+        or getgenv().AX_FateTriggerHandlesSilent
+end
+local function ModuleHandlesHitbox()
+    return getgenv().AX_PF_HandlesHitbox or BSX_NO_HITBOX
+end
+
+local function ShouldSkipPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    if IS_BSX and getgenv().AX_BSX_AreTeammates then
+        local ok, result = pcall(getgenv().AX_BSX_AreTeammates, LocalPlayer, player)
+        if ok then return result end
+    end
+    local ok, result = pcall(function()
+        return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+    end)
+    return ok and result
+end
+
+local function UpdateVisFilterCache()
+    local char = LocalPlayer.Character
+    local instances = {Camera}
+    if char then table.insert(instances, char) end
+    _visRayParams.FilterDescendantsInstances = instances
+end
+UpdateVisFilterCache()
+
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local origin    = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result    = Workspace:Raycast(origin, direction, _visRayParams)
+    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    return true
+end
+
+local function GetTargetPart(character, setting)
+    if not character then return nil end
+    if setting == "Random" then
+        local valid = {}
+        for _, name in ipairs({"HeadHB","Head","HumanoidRootPart","UpperTorso","Torso"}) do
+            local p = character:FindFirstChild(name)
+            if p then table.insert(valid, p) end
+        end
+        if #valid > 0 then return valid[math.random(1,#valid)] end
+    end
+    return character:FindFirstChild(setting)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetClosestPlayer()
+    local closest, distance = nil, Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mousePos = GetMouseLocation()
+    for _, player in ipairs(GetCachedPlayers()) do
+        if player == LocalPlayer then continue end
+        if ShouldSkipPlayer(player, Config.Silent.TeamCheck) then continue end
+        local character = player.Character
+        if not character then continue end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        if character:FindFirstChildOfClass("ForceField") then continue end
+        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        if not targetPart then continue end
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        local sd = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+        if sd < distance then distance = sd closest = targetPart end
+    end
+    return closest
+end
+
+local function GetAimbotTargetPart(character)
+    if not character then return nil end
+    if Config.Aimbot.TargetPart == "Random" then
+        local t = tick()
+        if t - AimbotLastRandomSwitch >= Config.Aimbot.RandomInterval then
+            local opts = {}
+            for _, n in ipairs({"Head","HeadHB","HumanoidRootPart","UpperTorso","Torso"}) do
+                if character:FindFirstChild(n) then table.insert(opts, n) end
+            end
+            if #opts > 0 then AimbotRandomPart = opts[math.random(1,#opts)] end
+            AimbotLastRandomSwitch = t
+        end
+        return character:FindFirstChild(AimbotRandomPart)
+            or character:FindFirstChild("Head")
+            or character:FindFirstChild("HumanoidRootPart")
+    end
+    return character:FindFirstChild(Config.Aimbot.TargetPart)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c or c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetAimbotTarget()
+    local method = Config.Aimbot.Method
+    if method == "Aimbot" then
+        local center = GetViewportCenter()
+        local closestPart, closestDist = nil, Config.Aimbot.FOVRadius
+        for _, player in ipairs(GetCachedPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = Camera:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then closestDist = d closestPart = tp end
+        end
+        return closestPart
+    elseif method == "Aimlock" then
+        if AimbotLockedPlayer and IsPlayerValid(AimbotLockedPlayer) then
+            local tp = GetAimbotTargetPart(AimbotLockedPlayer.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
+                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+            AimbotLockedPlayer = nil
+        end
+        local mousePos = GetMouseLocation()
+        local closestPart, closestDist, closestPlayer = nil, Config.Aimbot.FOVRadius, nil
+        for _, player in ipairs(GetCachedPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = Camera:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then closestDist = d closestPart = tp closestPlayer = player end
+        end
+        if closestPlayer then AimbotLockedPlayer = closestPlayer end
+        return closestPart
+    end
+end
+
+local function UpdateAimbot()
+    if ModuleHandlesAimbot() then return end
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        AimbotCurrentTarget = nil
+        if not Config.Aimbot.Active then AimbotLockedPlayer = nil end
+        return
+    end
+    local tp = GetAimbotTarget()
+    AimbotCurrentTarget = tp
+    if not tp then return end
+    local pos = tp.Position
+    if Config.Aimbot.Prediction > 0 then
+        pcall(function()
+            local vel = tp.AssemblyLinearVelocity
+            if vel and vel.Magnitude > 0.5 then pos = pos + vel * Config.Aimbot.Prediction end
+        end)
+    end
+    local sm = Config.Aimbot.Smoothness
+    if Config.Aimbot.Method == "Aimbot" then
+        local cur = Camera.CFrame
+        local tgt = CFrame.lookAt(cur.Position, pos)
+        Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+    elseif Config.Aimbot.Method == "Aimlock" then
+        local sp, on = Camera:WorldToViewportPoint(pos)
+        if not on then return end
+        local mp = GetMouseLocation()
+        local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        if dist < 2 then return end
+        local spd = math.clamp(1/math.max(sm,1), 0.05, 0.8)
+        local mx  = math.clamp(dx*spd, -150, 150)
+        local my  = math.clamp(dy*spd, -150, 150)
+        if math.abs(mx) > 0.5 or math.abs(my) > 0.5 then mousemoverel(mx, my) end
+    end
+end
+
+local TriggerLastShot = 0
+local function UpdateTriggerbot()
+    if not Config.Triggerbot.Enabled or not Config.Triggerbot.Active then return end
+    local now = tick()
+    if now - TriggerLastShot < Config.Triggerbot.Delay then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    _triggerRayParams.FilterDescendantsInstances = {character, Camera}
+    local foundTarget = false
+    if Config.Triggerbot.UseScreenRay then
+        local mousePos = GetMouseLocation()
+        local screenRay = Camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+        local result = Workspace:Raycast(screenRay.Origin, screenRay.Direction * 5000, _triggerRayParams)
+        if result and result.Instance then
+            local hitPlayer = Players:GetPlayerFromCharacter(result.Instance.Parent)
+                or Players:GetPlayerFromCharacter(result.Instance.Parent and result.Instance.Parent.Parent)
+            if hitPlayer and hitPlayer ~= LocalPlayer
+                and not ShouldSkipPlayer(hitPlayer, Config.Triggerbot.TeamCheck) then
+                local hitChar = hitPlayer.Character
+                if hitChar and not hitChar:FindFirstChildOfClass("ForceField") then
+                    local hitHum = hitChar:FindFirstChildOfClass("Humanoid")
+                    if hitHum and hitHum.Health > 0 then foundTarget = true end
+                end
+            end
+        end
+    end
+    if not foundTarget and Config.Triggerbot.FOVBased then
+        local mousePos  = GetMouseLocation()
+        local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or 150
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer then continue end
+            if ShouldSkipPlayer(player, Config.Triggerbot.TeamCheck) then continue end
+            local pChar = player.Character if not pChar then continue end
+            local pHum = pChar:FindFirstChildOfClass("Humanoid")
+            if not pHum or pHum.Health <= 0 or pChar:FindFirstChildOfClass("ForceField") then continue end
+            local targetPart = pChar:FindFirstChild("HeadHB") or pChar:FindFirstChild("Head") or pChar:FindFirstChild("HumanoidRootPart")
+            if not targetPart then continue end
+            local sp, on = Camera:WorldToViewportPoint(targetPart.Position)
+            if not on then continue end
+            if (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude <= fovRadius then
+                if IsVisible(targetPart) then foundTarget = true break end
+            end
+        end
+    end
+    if foundTarget then
+        TriggerLastShot = now
+        pcall(function()
+            if mouse1press and mouse1release then
+                mouse1press()
+                task.delay(0.02 + math.random()*0.02, function() pcall(mouse1release) end)
+            elseif mouse1click then mouse1click() end
+        end)
+    end
+end
+
+local function GetRandomPartForPlayer(player)
+    local t = tick()
+    if not LastRandomSwitch[player] or (t - LastRandomSwitch[player]) >= Config.Hitbox.RandomInterval then
+        RandomPartSelection[player] = math.random(1,2) == 1 and "Head" or "HumanoidRootPart"
+        LastRandomSwitch[player] = t
+    end
+    return RandomPartSelection[player] or "Head"
+end
+
+local function SaveOriginalProperties(player, partName, part)
+    if not OriginalSizes[player]          then OriginalSizes[player]          = {} end
+    if not OriginalTransparencies[player] then OriginalTransparencies[player] = {} end
+    if not OriginalCanCollide[player]     then OriginalCanCollide[player]     = {} end
+    if not OriginalMassless[player]       then OriginalMassless[player]       = {} end
+    if not OriginalSizes[player][partName] then
+        OriginalSizes[player][partName]          = part.Size
+        OriginalTransparencies[player][partName] = part.Transparency
+        OriginalCanCollide[player][partName]     = part.CanCollide
+        OriginalMassless[player][partName]       = part.Massless
+    end
+end
+
+local function RestoreOriginalSize(player)
+    if not player then return end
+    local ok, character = pcall(function() return player.Character end)
+    if not ok or not character then return end
+    if OriginalSizes[player] then
+        for pn, os in pairs(OriginalSizes[player]) do
+            local p = character:FindFirstChild(pn)
+            if p then pcall(function()
+                p.Size         = os
+                p.Transparency = OriginalTransparencies[player][pn]
+                p.Massless     = OriginalMassless[player][pn]
+                p.CanCollide   = OriginalCanCollide[player][pn]
+            end) end
+        end
+    end
+    ExpandedPlayers[player] = nil
+end
+
+local function CleanupPlayerHitbox(player)
+    RestoreOriginalSize(player)
+    OriginalSizes[player]=nil OriginalTransparencies[player]=nil
+    OriginalCanCollide[player]=nil OriginalMassless[player]=nil
+    RandomPartSelection[player]=nil LastRandomSwitch[player]=nil
+    ExpandedPlayers[player]=nil
+end
+
+local function CleanupAllHitboxes()
+    for player in pairs(ExpandedPlayers) do RestoreOriginalSize(player) end
+    OriginalSizes={} OriginalTransparencies={} OriginalCanCollide={} OriginalMassless={} ExpandedPlayers={}
+end
+
+local function ExpandPlayerHitbox(player, partToModify, size)
+    if BSX_NO_HITBOX then return end
+    local character = player.Character if not character then return end
+    local partsToCheck = {"Head","HeadHB","HumanoidRootPart"}
+    if IS_ARSENAL then partsToCheck = {"Head","HeadHB","HumanoidRootPart","Hitbox","RightUpperLeg","LeftUpperLeg"} end
+    for _, pn in ipairs(partsToCheck) do
+        local part = character:FindFirstChild(pn)
+        if part and part:IsA("BasePart") then
+            SaveOriginalProperties(player, pn, part)
+            local shouldMod = (pn == partToModify)
+                or (partToModify == "Head" and (pn == "HeadHB" or pn == "Hitbox"))
+            pcall(function()
+                if shouldMod then
+                    part.CanCollide=false part.Massless=true
+                    part.Size=Vector3.new(size,size,size) part.Transparency=Config.Hitbox.Transparency
+                elseif OriginalSizes[player] and OriginalSizes[player][pn] then
+                    part.Size=OriginalSizes[player][pn]
+                    part.Transparency=OriginalTransparencies[player][pn]
+                    part.CanCollide=OriginalCanCollide[player][pn]
+                    part.Massless=OriginalMassless[player][pn]
+                end
+            end)
+        end
+    end
+    ExpandedPlayers[player] = true
+end
+
+local function UpdateDynamicHitboxes()
+    if ModuleHandlesHitbox() then return end
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then CleanupAllHitboxes() return end
+    local t = tick() if t - LastHitboxUpdate < 0.05 then return end LastHitboxUpdate = t
+    local shouldBeExpanded = {}
+    if Config.Hitbox.Method == "HE (Static)" then
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer or not player.Parent then continue end
+            if ShouldSkipPlayer(player, Config.Hitbox.TeamCheck) then continue end
+            local c = player.Character if not c then continue end
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
+            local ptm = Config.Hitbox.TargetPart=="Random" and GetRandomPartForPlayer(player) or Config.Hitbox.TargetPart
+            shouldBeExpanded[player] = {partToModify=ptm, dynamicSize=Config.Hitbox.MaxSize}
+        end
+    else
+        local mp = GetMouseLocation()
+        local fr = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer or not player.Parent then continue end
+            if ShouldSkipPlayer(player, Config.Hitbox.TeamCheck) then continue end
+            local c = player.Character if not c then continue end
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
+            local ptm = Config.Hitbox.TargetPart=="Random" and GetRandomPartForPlayer(player) or Config.Hitbox.TargetPart
+            local cp = c:FindFirstChild(ptm) or c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
+            if not cp then continue end
+            local sp, on = Camera:WorldToViewportPoint(cp.Position)
+            if not on then continue end
+            local sd = (mp - Vector2.new(sp.X, sp.Y)).Magnitude
+            if sd > fr then continue end
+            local pf = 1 - (sd/fr)
+            shouldBeExpanded[player] = {partToModify=ptm, dynamicSize=1+(Config.Hitbox.MaxSize-1)*pf}
+        end
+    end
+    for player in pairs(ExpandedPlayers) do
+        if not shouldBeExpanded[player] then RestoreOriginalSize(player) end
+    end
+    for player, data in pairs(shouldBeExpanded) do
+        ExpandPlayerHitbox(player, data.partToModify, data.dynamicSize)
+    end
+end
+
+local function CreateESP(player)
+    if ESPObjects[player] then return end
+    ESPObjects[player] = {Box=Drawing.new("Square"),Name=Drawing.new("Text"),Distance=Drawing.new("Text")}
+    local e = ESPObjects[player]
+    e.Box.Thickness=1 e.Box.Filled=false e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Transparency=1 e.Box.Visible=false
+    e.Name.Size=13 e.Name.Center=true e.Name.Outline=true e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Transparency=1 e.Name.Visible=false
+    e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Transparency=1 e.Distance.Visible=false
+end
+
+local function UpdateESP()
+    if ModuleHandlesESP() then return end
+    if not Config.ESP.Enabled or not Config.ESP.Active then return end
+    local t = tick() if t - LastESPUpdate < 0.1 then return end LastESPUpdate = t
+    for player, esp in pairs(ESPObjects) do
+        if not player or not player.Parent then for _,d in pairs(esp) do d.Visible=false end continue end
+        if ShouldSkipPlayer(player, Config.ESP.TeamCheck) then for _,d in pairs(esp) do d.Visible=false end continue end
+        local c  = player.Character
+        local h  = c and c:FindFirstChildOfClass("Humanoid")
+        local rp = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso"))
+        if c and h and rp and h.Health > 0 and not c:FindFirstChildOfClass("ForceField") then
+            local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+            if dist <= Config.ESP.MaxDistance then
+                local sp, on = Camera:WorldToViewportPoint(rp.Position)
+                if on then
+                    local bs = Vector2.new(2000/dist, 2500/dist)
+                    esp.Box.Size=bs esp.Box.Position=Vector2.new(sp.X-bs.X/2, sp.Y-bs.Y/2) esp.Box.Visible=Config.ESP.Boxes
+                    esp.Name.Text=player.DisplayName or player.Name esp.Name.Position=Vector2.new(sp.X, sp.Y-bs.Y/2-15) esp.Name.Visible=Config.ESP.Names
+                    esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(sp.X, sp.Y+bs.Y/2+5) esp.Distance.Visible=Config.ESP.Distance
+                    continue
+                end
+            end
+        end
+        for _,d in pairs(esp) do d.Visible=false end
+    end
+end
+
+-- ================== HOOK UNIVERSAL (con _inHook guard) ==================
+task.delay(IS_RIVALS and 2 or 0.3, function()
+    if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT then
+        local _inHook = false
+        local oldNc
+        oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            if _inHook or checkcaller() then return oldNc(self, ...) end
+            local m = getnamecallmethod()
+            if m ~= "Raycast" and m ~= "FindPartOnRay"
+                and m ~= "FindPartOnRayWithIgnoreList"
+                and m ~= "FindPartOnRayWithWhitelist" then
+                return oldNc(self, ...)
+            end
+            if not (Config.Silent.Enabled and Config.Silent.Active
+                and CurrentTarget and CurrentTarget.Parent) then
+                return oldNc(self, ...)
+            end
+            if math.random(1,100) > Config.Silent.HitChance then
+                return oldNc(self, ...)
+            end
+            _inHook = true
+            local args = {...}
+            if self == Workspace or self == workspace then
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    if m == "Raycast" then
+                        local o, d = args[1], args[2]
+                        if typeof(o) == "Vector3" and typeof(d) == "Vector3" then
+                            local cp = cam.CFrame.Position
+                            local dx2,dy2,dz2 = o.X-cp.X, o.Y-cp.Y, o.Z-cp.Z
+                            if math.sqrt(dx2*dx2+dy2*dy2+dz2*dz2) <= 10 then
+                                local tp = CurrentTarget.Position
+                                local tx,ty,tz = tp.X-o.X, tp.Y-o.Y, tp.Z-o.Z
+                                local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                                local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                                if tM > 0 and dM > 0 then
+                                    local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
+                                    if math.deg(math.acos(math.clamp(dot,-1,1))) <= 20 then
+                                        args[2] = Vector3.new(tx/tM*dM, ty/tM*dM, tz/tM*dM)
+                                        _inHook = false
+                                        return oldNc(self, unpack(args))
+                                    end
+                                end
+                            end
+                        end
+                    elseif m == "FindPartOnRay" or m == "FindPartOnRayWithIgnoreList"
+                        or m == "FindPartOnRayWithWhitelist" then
+                        local ray = args[1]
+                        if typeof(ray) == "Ray" then
+                            local o, d = ray.Origin, ray.Direction
+                            local cp = cam.CFrame.Position
+                            local dx2,dy2,dz2 = o.X-cp.X, o.Y-cp.Y, o.Z-cp.Z
+                            if math.sqrt(dx2*dx2+dy2*dy2+dz2*dz2) <= 10 then
+                                local tp = CurrentTarget.Position
+                                local tx,ty,tz = tp.X-o.X, tp.Y-o.Y, tp.Z-o.Z
+                                local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                                local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                                if tM > 0 and dM > 0 then
+                                    local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
+                                    if math.deg(math.acos(math.clamp(dot,-1,1))) <= 20 then
+                                        args[1] = Ray.new(o, Vector3.new(tx/tM*dM,ty/tM*dM,tz/tM*dM))
+                                        _inHook = false
+                                        return oldNc(self, unpack(args))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            _inHook = false
+            return oldNc(self, ...)
+        end))
+    end
+end)
+
+-- ================== GUI ==================
+task.delay(3, function()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AX"..math.random(100000,999999)
+    ScreenGui.ResetOnSpawn = false
+    pcall(function() if syn then syn.protect_gui(ScreenGui) end end)
+    pcall(function() ScreenGui.Parent = gethui and gethui() or CoreGui end)
+    if not ScreenGui.Parent then ScreenGui.Parent = CoreGui end
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "M"..math.random(1000,9999) MainFrame.Parent = ScreenGui
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20,20,20) MainFrame.BorderSizePixel = 0
+    MainFrame.Position = UDim2.new(0.3,0,0.15,0) MainFrame.Size = UDim2.new(0,490,0,620)
+    MainFrame.Active = true MainFrame.Draggable = true
+    Instance.new("UICorner",MainFrame).CornerRadius = UDim.new(0,10)
+
+    local TitleBar = Instance.new("Frame",MainFrame)
+    TitleBar.BackgroundColor3=Color3.fromRGB(30,30,30) TitleBar.BorderSizePixel=0
+    TitleBar.Size=UDim2.new(1,0,0,40)
+    Instance.new("UICorner",TitleBar).CornerRadius=UDim.new(0,10)
+
+    local TitleText = Instance.new("TextLabel",TitleBar)
+    TitleText.BackgroundTransparency=1 TitleText.Position=UDim2.new(0,15,0,0)
+    TitleText.Size=UDim2.new(1,-80,1,0) TitleText.Font=Enum.Font.GothamBold
+    TitleText.Text="⚡ ANNOMALY X v17.7" TitleText.TextColor3=Color3.fromRGB(255,255,255) -- [CHANGED v4.0]
+    TitleText.TextSize=16 TitleText.TextXAlignment=Enum.TextXAlignment.Left
+
+    local CreatorText = Instance.new("TextLabel",TitleBar)
+    CreatorText.BackgroundTransparency=1 CreatorText.Position=UDim2.new(1,-200,0,0)
+    CreatorText.Size=UDim2.new(0,160,1,0) CreatorText.Font=Enum.Font.Gotham
+    CreatorText.Text="by ElSacaLeche" CreatorText.TextColor3=Color3.fromRGB(150,150,150)
+    CreatorText.TextSize=12 CreatorText.TextXAlignment=Enum.TextXAlignment.Right
+
+    local CloseBtn = Instance.new("TextButton",TitleBar)
+    CloseBtn.BackgroundColor3=Color3.fromRGB(220,50,50) CloseBtn.BorderSizePixel=0
+    CloseBtn.Position=UDim2.new(1,-35,0,7) CloseBtn.Size=UDim2.new(0,26,0,26)
+    CloseBtn.Font=Enum.Font.GothamBold CloseBtn.Text="✕"
+    CloseBtn.TextColor3=Color3.fromRGB(255,255,255) CloseBtn.TextSize=14
+    Instance.new("UICorner",CloseBtn).CornerRadius=UDim.new(0,6)
+
+    local TabHolder = Instance.new("Frame",MainFrame)
+    TabHolder.BackgroundColor3=Color3.fromRGB(25,25,25) TabHolder.BorderSizePixel=0
+    TabHolder.Position=UDim2.new(0,0,0,40) TabHolder.Size=UDim2.new(1,0,0,40)
+
+    local PagesContainer = Instance.new("Frame",MainFrame)
+    PagesContainer.BackgroundTransparency=1 PagesContainer.Position=UDim2.new(0,0,0,80)
+    PagesContainer.Size=UDim2.new(1,0,1,-80)
+
+    local Pages,TabButtons = {},{}
+    local function SelectTab(name)
+        for n,p in pairs(Pages) do p.Visible=(n==name) end
+        for n,b in pairs(TabButtons) do
+            b.BackgroundColor3=n==name and Color3.fromRGB(55,55,55) or Color3.fromRGB(25,25,25)
+            b.TextColor3=n==name and Color3.fromRGB(255,255,255) or Color3.fromRGB(140,140,140)
+        end
+    end
+
+    local totalTabs,tabCount=6,0
+    local function CreateTab(name,icon)
+        local idx=tabCount tabCount=tabCount+1
+        local btn=Instance.new("TextButton",TabHolder)
+        btn.BackgroundColor3=Color3.fromRGB(25,25,25) btn.BorderSizePixel=0
+        btn.Position=UDim2.new(idx/totalTabs,0,0,0) btn.Size=UDim2.new(1/totalTabs,0,1,0)
+        btn.Font=Enum.Font.GothamBold btn.Text=icon.." "..name
+        btn.TextColor3=Color3.fromRGB(140,140,140) btn.TextSize=9
+        TabButtons[name]=btn
+        local page=Instance.new("ScrollingFrame",PagesContainer)
+        page.BackgroundTransparency=1 page.Position=UDim2.new(0,8,0,8)
+        page.Size=UDim2.new(1,-16,1,-16) page.CanvasSize=UDim2.new(0,0,0,0)
+        page.ScrollBarThickness=5 page.ScrollBarImageColor3=Color3.fromRGB(80,80,80)
+        page.BorderSizePixel=0 page.Visible=false
+        local layout=Instance.new("UIListLayout",page) layout.Padding=UDim.new(0,8)
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            page.CanvasSize=UDim2.new(0,0,0,layout.AbsoluteContentSize.Y+10)
+        end)
+        Pages[name]=page
+        btn.MouseButton1Click:Connect(function() SelectTab(name) end)
+        if idx==0 then SelectTab(name) end
+        return page
+    end
+
+    local function Sec(p,t)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(35,35,35)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,28)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Size=UDim2.new(1,0,1,0) l.Font=Enum.Font.GothamBold
+        l.Text=t l.TextColor3=Color3.fromRGB(255,255,255) l.TextSize=13
+    end
+
+    local function Tog(p,t,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.68,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f)
+        b.BackgroundColor3=d and Color3.fromRGB(50,200,100) or Color3.fromRGB(200,60,60)
+        b.BorderSizePixel=0 b.Position=UDim2.new(1,-58,0.5,-11) b.Size=UDim2.new(0,48,0,22)
+        b.Font=Enum.Font.GothamBold b.Text=d and"ON"or"OFF"
+        b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=10
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local e=d b.MouseButton1Click:Connect(function()
+            e=not e b.Text=e and"ON"or"OFF"
+            b.BackgroundColor3=e and Color3.fromRGB(50,200,100) or Color3.fromRGB(200,60,60)
+            c(e)
+        end)
+    end
+
+    local function Sli(p,t,mi,ma,d,c,dec)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,52)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local function fmt(v) return dec and string.format("%."..dec.."f",v) or tostring(math.floor(v)) end
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,4) l.Size=UDim2.new(1,-24,0,18)
+        l.Font=Enum.Font.Gotham l.Text=t..": "..fmt(d)
+        l.TextColor3=Color3.fromRGB(240,240,240) l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local bg=Instance.new("Frame",f) bg.BackgroundColor3=Color3.fromRGB(45,45,45)
+        bg.BorderSizePixel=0 bg.Position=UDim2.new(0,12,0,30) bg.Size=UDim2.new(1,-24,0,10)
+        Instance.new("UICorner",bg).CornerRadius=UDim.new(1,0)
+        local fi=Instance.new("Frame",bg) fi.BackgroundColor3=Color3.fromRGB(100,150,255)
+        fi.BorderSizePixel=0 fi.Size=UDim2.new((d-mi)/(ma-mi),0,1,0)
+        Instance.new("UICorner",fi).CornerRadius=UDim.new(1,0)
+        local k=Instance.new("TextButton",bg) k.BackgroundColor3=Color3.fromRGB(255,255,255)
+        k.BorderSizePixel=0 k.Position=UDim2.new((d-mi)/(ma-mi),-7,0.5,-7)
+        k.Size=UDim2.new(0,14,0,14) k.Text=""
+        Instance.new("UICorner",k).CornerRadius=UDim.new(1,0)
+        local dr=false
+        k.MouseButton1Down:Connect(function() dr=true end)
+        local function onMove()
+            if not dr then return end
+            local m=UserInputService:GetMouseLocation()
+            local r=math.clamp((m.X-bg.AbsolutePosition.X)/bg.AbsoluteSize.X,0,1)
+            local v=dec and(math.floor((mi+(ma-mi)*r)*(10^dec))/(10^dec)) or math.floor(mi+(ma-mi)*r)
+            fi.Size=UDim2.new(r,0,1,0) k.Position=UDim2.new(r,-7,0.5,-7)
+            l.Text=t..": "..fmt(v) c(v)
+        end
+        UserInputService.InputChanged:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.MouseMovement then onMove() end
+        end)
+        UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.MouseButton1 then dr=false end
+        end)
+    end
+
+    local function Drop(p,t,o,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.42,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f) b.BackgroundColor3=Color3.fromRGB(40,40,40)
+        b.BorderSizePixel=0 b.Position=UDim2.new(0.46,0,0.5,-11) b.Size=UDim2.new(0.52,-12,0,22)
+        b.Font=Enum.Font.Gotham b.Text=d b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=10
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local i=table.find(o,d) or 1
+        b.MouseButton1Click:Connect(function() i=i%#o+1 b.Text=o[i] c(o[i]) end)
+    end
+
+    local function Key(p,t,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.5,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f) b.BackgroundColor3=Color3.fromRGB(40,40,40)
+        b.BorderSizePixel=0 b.Position=UDim2.new(0.54,0,0.5,-11) b.Size=UDim2.new(0.44,-12,0,22)
+        b.Font=Enum.Font.GothamBold b.Text=d.Name
+        b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=9
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local li=false
+        b.MouseButton1Click:Connect(function()
+            if li then return end li=true b.Text="..."
+            b.BackgroundColor3=Color3.fromRGB(100,150,255)
+            local co co=UserInputService.InputBegan:Connect(function(input,gp)
+                if not gp and input.UserInputType==Enum.UserInputType.Keyboard then
+                    li=false b.Text=input.KeyCode.Name
+                    b.BackgroundColor3=Color3.fromRGB(40,40,40)
+                    c(input.KeyCode) co:Disconnect()
+                end
+            end)
+        end)
+    end
+
+    local function AddBanner(page,color,text)
+        local f=Instance.new("Frame",page) f.BackgroundColor3=color
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,36)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text=text l.TextColor3=Color3.fromRGB(220,255,220)
+        l.TextSize=10 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    end
+
+    local SilentPage  = CreateTab("Silent","🎯")
+    local AimbotPage  = CreateTab("Aimbot","🔫")
+    local HitboxPage  = CreateTab("Hitbox","📦")
+    local ESPPage     = CreateTab("ESP","👁")
+    local TriggerPage = CreateTab("Trigger","🔥")
+    local InfoPage    = CreateTab("Info","ℹ")
+
+    -- ===== SILENT PAGE =====
+    if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+        Sec(SilentPage,"⚡ Silent Aim (Disabled)")
+        local msg=IS_BSX and"⚠ Silent DISABLED para BSX.\nUsa Aimbot (Q)!"
+            or IS_ARSENAL and"⚠ Silent no disponible en Arsenal.\nUsa DHE+Aimbot!"
+            or"⚠ Silent no disponible.\nUsa Aimbot (Q)!"
+        local f=Instance.new("Frame",SilentPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text=msg l.TextColor3=Color3.fromRGB(255,200,100)
+        l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    else
+        local tag=IS_FATETRIGGER and" (Fate Trigger)"
+            or IS_RIVALS and" (Rivals)" or IS_FLICK and" (Flick)"
+            or IS_PF and" (Phantom Forces)" or IS_HYPERSHOT and" (HyperShot)" or"" -- [CHANGED v4.0]
+        Sec(SilentPage,"⚡ Silent Aim"..tag)
+        if IS_FATETRIGGER then
+            AddBanner(SilentPage,Color3.fromRGB(40,20,20),"✅ FTX: Raycast + Mouse.Hit + FireServer hooks")
+        end
+        if IS_HYPERSHOT then
+            AddBanner(SilentPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported")
+        end
+        -- [ADDED v4.0] PF Silent Aim banner
+        if IS_PF then
+            AddBanner(SilentPage,Color3.fromRGB(25,30,45),"✅ PF v4.0: Internal hooks (network.send + bulletObject.new)\nTrajectory prediction with bullet drop + enemy velocity")
+        end
+        Tog(SilentPage,"Enable Silent Aim",false,function(v) Config.Silent.Enabled=v if not v then Config.Silent.Active=false end end)
+        Drop(SilentPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Silent.KeybindMode=v end)
+        Key(SilentPage,"Keybind",Config.Silent.Keybind,function(v) Config.Silent.Keybind=v end)
+        Drop(SilentPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Silent.TargetPart=v end)
+        Sli(SilentPage,"Hit Chance %",0,100,100,function(v) Config.Silent.HitChance=v end)
+        Tog(SilentPage,"Team Check",false,function(v) Config.Silent.TeamCheck=v end)
+        Tog(SilentPage,"Visible Check",false,function(v) Config.Silent.VisibleCheck=v end)
+    end
+    Sec(SilentPage,"🎯 FOV")
+    Tog(SilentPage,"Enable FOV",true,function(v) Config.FOV.Enabled=v end)
+    Tog(SilentPage,"Show FOV Circle",true,function(v) Config.FOV.Visible=v end)
+    Sli(SilentPage,"FOV Radius",30,500,150,function(v) Config.FOV.Radius=v end)
+
+    -- ===== AIMBOT PAGE =====
+    Sec(AimbotPage,"🔫 Aimbot / Aimlock")
+    if IS_FATETRIGGER    then AddBanner(AimbotPage,Color3.fromRGB(40,20,20),"✅ FTX: Silent + Aimbot + ESP dedicado")
+    elseif IS_BSX        then AddBanner(AimbotPage,Color3.fromRGB(25,35,25),"✅ BSX: mousemoverel (AC safe)")
+    elseif IS_PF         then AddBanner(AimbotPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Trajectory prediction + cameraInterface angles + replicationInterface") -- [CHANGED v4.0]
+    elseif IS_RIVALS     then AddBanner(AimbotPage,Color3.fromRGB(40,25,35),"✅ Rivals: Custom aimbot + AC bypass")
+    elseif IS_FLICK      then AddBanner(AimbotPage,Color3.fromRGB(35,25,40),"✅ Flick: Custom aimbot + HeadHB")
+    elseif IS_ARSENAL    then AddBanner(AimbotPage,Color3.fromRGB(40,35,25),"✅ Arsenal: Custom aimbot")
+    elseif IS_CA         then AddBanner(AimbotPage,Color3.fromRGB(25,40,35),"✅ CA: Custom aimbot")
+    elseif IS_HYPERSHOT  then AddBanner(AimbotPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported")
+    end
+    Tog(AimbotPage,"Enable",false,function(v) Config.Aimbot.Enabled=v if not v then Config.Aimbot.Active=false AimbotLockedPlayer=nil AimbotCurrentTarget=nil end end)
+    Drop(AimbotPage,"Method",{"Aimbot","Aimlock"},"Aimbot",function(v) Config.Aimbot.Method=v AimbotLockedPlayer=nil end)
+    Drop(AimbotPage,"Keybind Mode",{"Toggle","Hold"},"Hold",function(v) Config.Aimbot.KeybindMode=v end)
+    Key(AimbotPage,"Keybind",Config.Aimbot.Keybind,function(v) Config.Aimbot.Keybind=v end)
+    Drop(AimbotPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Aimbot.TargetPart=v end)
+    Tog(AimbotPage,"Team Check",false,function(v) Config.Aimbot.TeamCheck=v end)
+    Tog(AimbotPage,"Visible Check",false,function(v) Config.Aimbot.VisibleCheck=v end)
+    Sec(AimbotPage,"⚙ Settings")
+    Sli(AimbotPage,"Smoothness",1,20,5,function(v) Config.Aimbot.Smoothness=v end)
+    Sli(AimbotPage,"Prediction",0,0.5,0,function(v) Config.Aimbot.Prediction=v end,2)
+    Sli(AimbotPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Aimbot.RandomInterval=v end,1)
+    Sec(AimbotPage,"🎯 Aimbot FOV")
+    Sli(AimbotPage,"FOV Radius",30,500,150,function(v) Config.Aimbot.FOVRadius=v end)
+    Tog(AimbotPage,"Show FOV Circle",true,function(v) Config.Aimbot.FOVVisible=v end)
+
+    -- ===== HITBOX PAGE =====
+    if BSX_NO_HITBOX then
+        Sec(HitboxPage,"📦 Hitbox (Disabled)")
+        local f=Instance.new("Frame",HitboxPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text="⚠ DHE/HE DISABLED para BSX."
+        l.TextColor3=Color3.fromRGB(255,200,100) l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    else
+        Sec(HitboxPage,"📦 Hitbox Expander")
+        if IS_FATETRIGGER then AddBanner(HitboxPage,Color3.fromRGB(40,20,20),"ℹ FTX: one-shot game, hitbox opcional") end
+        if IS_PF then AddBanner(HitboxPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Hitbox via replicationInterface") end -- [CHANGED v4.0]
+        if IS_HYPERSHOT then AddBanner(HitboxPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported") end
+        Tog(HitboxPage,"Enable Hitbox",false,function(v) Config.Hitbox.Enabled=v if not v then Config.Hitbox.Active=false CleanupAllHitboxes() end end)
+        Drop(HitboxPage,"Method",{"DHE (Dynamic)","HE (Static)"},"DHE (Dynamic)",function(v) Config.Hitbox.Method=v CleanupAllHitboxes() end)
+        Drop(HitboxPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Hitbox.KeybindMode=v end)
+        Key(HitboxPage,"Keybind",Config.Hitbox.Keybind,function(v) Config.Hitbox.Keybind=v end)
+        Tog(HitboxPage,"Team Check",false,function(v) Config.Hitbox.TeamCheck=v end)
+        Drop(HitboxPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Hitbox.TargetPart=v end)
+        Sli(HitboxPage,"Max Size",1,15,8,function(v) Config.Hitbox.MaxSize=v end)
+        Sec(HitboxPage,"🎨 Appearance")
+        Sli(HitboxPage,"Transparency",0,1,0.7,function(v) Config.Hitbox.Transparency=v end,1)
+        Sli(HitboxPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Hitbox.RandomInterval=v end,1)
+        Sec(HitboxPage,"🎯 DHE FOV")
+        Tog(HitboxPage,"Use Custom FOV",true,function(v) Config.Hitbox.FOVEnabled=v end)
+        Sli(HitboxPage,"DHE FOV Radius",30,500,150,function(v) Config.Hitbox.FOVRadius=v end)
+        Tog(HitboxPage,"Show DHE FOV Circle",false,function(v) Config.Hitbox.FOVVisible=v end)
+    end
+
+    -- ===== ESP PAGE =====
+    Sec(ESPPage,"👁 ESP")
+    if HAS_DEDICATED_MODULE then
+        local em=IS_FATETRIGGER and"FT: Custom+health bars"
+            or IS_PF and"PF v4.0: replicationInterface + health + weapon" -- [CHANGED v4.0]
+            or IS_BSX and"BSX: Custom+health"
+            or IS_RIVALS and"Rivals: Custom+health" or IS_FLICK and"Flick: Custom+HeadHB"
+            or IS_ARSENAL and"Arsenal: Custom" or IS_CA and"CA: Custom"
+            or IS_HYPERSHOT and"HyperShot: Custom+health" or""
+        if em~="" then AddBanner(ESPPage,Color3.fromRGB(30,30,40),"✅ "..em) end
+    end
+    Tog(ESPPage,"Enable ESP",false,function(v)
+        Config.ESP.Enabled=v
+        if not v then Config.ESP.Active=false for _,e in pairs(ESPObjects) do for _,d in pairs(e) do d.Visible=false end end end
+    end)
+    Drop(ESPPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.ESP.KeybindMode=v end)
+    Key(ESPPage,"Keybind",Config.ESP.Keybind,function(v) Config.ESP.Keybind=v end)
+    Tog(ESPPage,"Team Check",false,function(v) Config.ESP.TeamCheck=v end)
+    Tog(ESPPage,"Show Boxes",true,function(v) Config.ESP.Boxes=v end)
+    Tog(ESPPage,"Show Names",true,function(v) Config.ESP.Names=v end)
+    Tog(ESPPage,"Show Distance",true,function(v) Config.ESP.Distance=v end)
+    Sli(ESPPage,"Max Distance",100,2000,1000,function(v) Config.ESP.MaxDistance=v end)
+
+    -- ===== TRIGGER PAGE =====
+    Sec(TriggerPage,"🔥 Triggerbot")
+    Tog(TriggerPage,"Enable Triggerbot",false,function(v) Config.Triggerbot.Enabled=v if not v then Config.Triggerbot.Active=false end end)
+    Drop(TriggerPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Triggerbot.KeybindMode=v end)
+    Key(TriggerPage,"Keybind",Config.Triggerbot.Keybind,function(v) Config.Triggerbot.Keybind=v end)
+    Tog(TriggerPage,"Team Check",true,function(v) Config.Triggerbot.TeamCheck=v end)
+    Sec(TriggerPage,"⚙ Settings")
+    Tog(TriggerPage,"Screen Ray Detection",true,function(v) Config.Triggerbot.UseScreenRay=v end)
+    Tog(TriggerPage,"FOV Based Detection",true,function(v) Config.Triggerbot.FOVBased=v end)
+    Sli(TriggerPage,"Fire Delay (s)",0.01,0.5,0.05,function(v) Config.Triggerbot.Delay=v end,2)
+
+    -- ===== INFO PAGE =====
+    Sec(InfoPage,"🔒 Info & Settings")
+    Key(InfoPage,"Toggle GUI",Config.GUI.ToggleKey,function(v) Config.GUI.ToggleKey=v end)
+    local info=Instance.new("Frame",InfoPage) info.BackgroundColor3=Color3.fromRGB(30,30,30)
+    info.BorderSizePixel=0 info.Size=UDim2.new(1,0,0,200)
+    Instance.new("UICorner",info).CornerRadius=UDim.new(0,6)
+    local infoText=Instance.new("TextLabel",info) infoText.BackgroundTransparency=1
+    infoText.Position=UDim2.new(0,12,0,10) infoText.Size=UDim2.new(1,-24,1,-20)
+    infoText.Font=Enum.Font.Gotham infoText.TextColor3=Color3.fromRGB(200,200,200)
+    infoText.TextSize=10 infoText.TextWrapped=true infoText.TextYAlignment=Enum.TextYAlignment.Top
+    -- [CHANGED v4.0] Updated info text
+    infoText.Text="⚡ AX v17.7 OPT | by ElSacaLeche\n\n✅ "..GAME_MODE_NAME.." MODE\n\n"
+        .."[End]=GUI | [E]=Silent | [Q]=Aimbot\n[H]=Hitbox | [V]=ESP | [T]=Trigger\n\n"
+        .."✅ PF v4.0: Internal hooks method\n✅ _inHook guard anti-stack overflow\n✅ RaycastParams cacheados\n✅ GetPlayers cacheado cada 2s"
+
+    CloseBtn.MouseButton1Click:Connect(function()
+        CleanupAllHitboxes() ScreenGui:Destroy()
+        if FOVCircle       then FOVCircle:Remove()       end
+        if AimbotFOVCircle then AimbotFOVCircle:Remove() end
+        if HitboxFOVCircle then HitboxFOVCircle:Remove() end
+        for _,e in pairs(ESPObjects) do for _,d in pairs(e) do d:Remove() end end
+        -- [ADDED v4.0] Cleanup PF module if loaded
+        if getgenv().AX_PF_Cleanup then
+            pcall(getgenv().AX_PF_Cleanup)
+        end
+    end)
+end)
+
+-- ================== INPUT ==================
+UserInputService.InputBegan:Connect(function(input,gp)
+    if gp then return end
+    if input.KeyCode==Config.GUI.ToggleKey then
+        pcall(function()
+            for _,gui in ipairs(CoreGui:GetChildren()) do
+                if gui.Name:match("^AX") then gui.Enabled=not gui.Enabled end
+            end
+        end)
+    end
+    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+        if input.KeyCode==Config.Silent.Keybind and Config.Silent.Enabled then
+            if Config.Silent.KeybindMode=="Toggle" then Config.Silent.Active=not Config.Silent.Active
+            else Config.Silent.Active=true end
+        end
+    end
+    if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.Enabled then
+        if Config.Aimbot.KeybindMode=="Toggle" then
+            Config.Aimbot.Active=not Config.Aimbot.Active
+            if not Config.Aimbot.Active then AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
+        else Config.Aimbot.Active=true end
+    end
+    if not BSX_NO_HITBOX then
+        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.Enabled then
+            if Config.Hitbox.KeybindMode=="Toggle" then
+                Config.Hitbox.Active=not Config.Hitbox.Active
+                if not Config.Hitbox.Active then CleanupAllHitboxes() end
+            else Config.Hitbox.Active=true end
+        end
+    end
+    if input.KeyCode==Config.ESP.Keybind and Config.ESP.Enabled then
+        if Config.ESP.KeybindMode=="Toggle" then Config.ESP.Active=not Config.ESP.Active
+        else Config.ESP.Active=true end
+    end
+    if input.KeyCode==Config.Triggerbot.Keybind and Config.Triggerbot.Enabled then
+        if Config.Triggerbot.KeybindMode=="Toggle" then Config.Triggerbot.Active=not Config.Triggerbot.Active
+        else Config.Triggerbot.Active=true end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+        if input.KeyCode==Config.Silent.Keybind and Config.Silent.KeybindMode=="Hold" then
+            Config.Silent.Active=false end
+    end
+    if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.KeybindMode=="Hold" then
+        Config.Aimbot.Active=false AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
+    if not BSX_NO_HITBOX then
+        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.KeybindMode=="Hold" then
+            Config.Hitbox.Active=false CleanupAllHitboxes() end
+    end
+    if input.KeyCode==Config.ESP.Keybind and Config.ESP.KeybindMode=="Hold" then Config.ESP.Active=false end
+    if input.KeyCode==Config.Triggerbot.Keybind and Config.Triggerbot.KeybindMode=="Hold" then Config.Triggerbot.Active=false end
+end)
+
+if not IS_PF and not IS_BSX and not IS_RIVALS and not IS_FLICK
+    and not IS_ARSENAL and not IS_CA and not IS_HYPERSHOT and not IS_FATETRIGGER then
+    for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then CreateESP(p) end end
+    Players.PlayerAdded:Connect(function(p) if p~=LocalPlayer then CreateESP(p) end end)
+end
+
+Players.PlayerRemoving:Connect(function(p)
+    CleanupPlayerHitbox(p)
+    if AimbotLockedPlayer==p then AimbotLockedPlayer=nil end
+    if ESPObjects[p] then for _,d in pairs(ESPObjects[p]) do d:Remove() end ESPObjects[p]=nil end
+    for i,v in ipairs(_cachedPlayers) do if v==p then table.remove(_cachedPlayers,i) break end end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    CurrentTarget=nil AimbotCurrentTarget=nil AimbotLockedPlayer=nil
+    for player in pairs(ExpandedPlayers) do CleanupPlayerHitbox(player) end
+    task.wait(0.5) UpdateVisFilterCache()
+end)
+
+-- ================== MAIN LOOP ==================
+task.delay(IS_RIVALS and 8 or 1, function()
+    RunService.Heartbeat:Connect(function()
+        Camera=Workspace.CurrentCamera
+        local mp=GetMouseLocation()
+
+        if FOVCircle then
+            local showSilent=Config.Silent.Enabled and Config.Silent.Active
+                and not BSX_NO_SILENT and not CA_NO_SILENT
+            FOVCircle.Position=mp FOVCircle.Radius=Config.FOV.Radius
+            FOVCircle.Visible=Config.FOV.Visible and (showSilent or (Config.Triggerbot.Enabled and Config.Triggerbot.Active))
+        end
+        if AimbotFOVCircle then
+            AimbotFOVCircle.Position=Config.Aimbot.Method=="Aimbot" and GetViewportCenter() or mp
+            AimbotFOVCircle.Radius=Config.Aimbot.FOVRadius AimbotFOVCircle.Color=Config.Aimbot.FOVColor
+            AimbotFOVCircle.Visible=Config.Aimbot.FOVVisible and Config.Aimbot.Enabled and Config.Aimbot.Active
+        end
+        if HitboxFOVCircle then
+            local showH=not BSX_NO_HITBOX and not ModuleHandlesHitbox()
+                and Config.Hitbox.FOVVisible and Config.Hitbox.FOVEnabled
+                and Config.Hitbox.Enabled and Config.Hitbox.Active
+                and Config.Hitbox.Method=="DHE (Dynamic)"
+            HitboxFOVCircle.Position=mp HitboxFOVCircle.Radius=Config.Hitbox.FOVRadius
+            HitboxFOVCircle.Color=Config.Hitbox.FOVColor HitboxFOVCircle.Visible=showH
+        end
+
+        if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT
+            and not ModuleHandlesSilent() then
+            local now=tick()
+            if now-LastSilentUpdate>=SILENT_UPDATE_RATE then
+                LastSilentUpdate=now
+                CurrentTarget=(Config.Silent.Enabled and Config.Silent.Active) and GetClosestPlayer() or nil
+            end
+        end
+
+        UpdateAimbot()
+        UpdateTriggerbot()
+        UpdateDynamicHitboxes()
+        UpdateESP()
+    end)
+end)
+
+if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+    Config.Silent.Enabled=false Config.Silent.Active=false end
+if BSX_NO_HITBOX then
+    Config.Hitbox.Enabled=false Config.Hitbox.Active=false end
+
+task.delay(IS_RIVALS and 4 or 2, function()
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification",{
+            Title="⚡ AX v17.7 OPT", -- [CHANGED v4.0]
+            Text=GAME_MODE_NAME.." | [End]=GUI",
+            Duration=5
+        })
+    end)
+end)
