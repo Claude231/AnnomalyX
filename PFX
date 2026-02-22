@@ -1,85 +1,37 @@
 --[[
     ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - Phantom Forces Module v4.0            ║
+    ║        ANNOMALY X - Phantom Forces Module v4.1            ║
     ║                                                           ║
     ║  Silent Aim: Network hook (newbullets + bullethit)         ║
     ║  ESP: PF workspace structure (Players/Team folders)       ║
     ║  Hitbox: PF-specific model expansion                      ║
     ║  Aimbot: Camera angle + mousemoverel                      ║
     ║                                                           ║
+    ║  Fixed: TeamCheck + Silent Aim network hook               ║
     ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
     
-    PF CHARACTER STRUCTURE:
-    Workspace
-    └── Players
-        ├── [Team1 Folder]
-        │   └── [PlayerName] (Model)
-        │       ├── Head (has NameTagGui)
-        │       ├── Torso (SpecialMesh 4049240078)
-        │       ├── Right Arm / Left Arm (SpecialMesh 4049240209)
-        │       ├── Right Leg / Left Leg (SpecialMesh 4049240323)
-        │       └── HumanoidRootPart
-        └── [Team2 Folder]
-            └── [PlayerName] (Model) ...
-    
-    Workspace
-    └── Ignore
-        └── RefPlayer (local player model reference)
-    
-    SILENT AIM ARCHITECTURE (v4.0):
-    
-    PF's bullet system does NOT use workspace:Raycast().
-    It uses a custom networking protocol:
-    
-    1. Client fires → network:send("newbullets", ...) 
-       Contains: firepos, camerapos, bullets[]{direction, bulletID}
-    
-    2. Bullet hits target → network:send("bullethit", ...)
-       Contains: target player, hit position, hit part, bulletID
-    
-    Our hook:
-    Step 1: Intercept "newbullets" → redirect bullet directions
-    Step 2: Send fake "bullethit" → register server-side hit  
-    Step 3: Block original "bullethit" → prevent miss reports
-    
-    Two argument formats exist (PF versions):
-    Format A: send(self, "newbullets", uniqueID, data, fireTime)
-    Format B: send(self, "newbullets", data)  -- data has everything
-    
-    We handle both by detecting argument types.
-    
-    INTERNAL MODULES (found via getgc scanning):
-    - network: has .send() method for all client→server comms
-    - gamelogic: has .currentgun.data.bulletspeed
-    - cameraModule: has .basecframe (true camera position)
-    - getbodyparts: function(player) → returns body part refs
-    - trajectory: function(origin, gravity, targetPos, bulletSpeed)
-    - replicationInterface: has .operateOnAllEntries()
-    - weaponController: has .getController():getActiveWeapon()
+    KEY FIXES v4.1:
+    - TeamCheck: PF folders use TeamColor.Name, not Team.Name
+    - Silent Aim: Multiple bullethit formats tried
+    - Silent Aim: Better GC scanning with debug output
+    - Silent Aim: Handle both method call styles (. and :)
 ]]
 
--- ============================================
--- WAIT FOR CONFIG
--- ============================================
 if not getgenv().AX_Config then
     repeat task.wait() until getgenv().AX_Config
 end
 
 local Config = getgenv().AX_Config
 
--- ============================================
--- EXECUTOR COMPATIBILITY
--- ============================================
+-- Executor compatibility
 local cloneref = cloneref or function(o) return o end
 local newcclosure = newcclosure or function(f) return f end
 local hookmetamethod = hookmetamethod
 local getnamecallmethod = getnamecallmethod or get_namecall_method
 local checkcaller = checkcaller or function() return false end
 
--- ============================================
--- SERVICES
--- ============================================
+-- Services
 local Players = cloneref(game:GetService("Players"))
 local RunService = cloneref(game:GetService("RunService"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
@@ -88,157 +40,153 @@ local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================
--- PF INTERNAL MODULE REFERENCES
+-- PF INTERNAL MODULES
 -- ============================================
-local network = nil           -- network.send for all comms
-local trajectoryFunc = nil    -- trajectory(origin, gravity, targetPos, bulletSpeed)
-local gamelogic = nil         -- gamelogic.currentgun.data.bulletspeed
-local getbodyparts = nil      -- getbodyparts(player) → body parts table
-local cameraModule = nil      -- cameraModule.basecframe (true camera CFrame)
+local network = nil
+local trajectoryFunc = nil
+local gamelogic = nil
+local getbodyparts = nil
+local cameraModule = nil
 local replicationInterface = nil
 local weaponController = nil
 
+-- Debug flag - set to true to see detailed logs
+local DEBUG = true
+
+local function debugPrint(...)
+    if DEBUG then
+        print("[PF DEBUG]", ...)
+    end
+end
+
 -- ============================================
--- PF INTERNAL MODULE SCANNER
--- Uses getgc() to find PF's internal modules
--- This is the proven method from scripts 5, 6, and Wapus
+-- GC SCANNER - Find PF internal modules
 -- ============================================
 local function ScanGC()
-    local found = {network = false, trajectory = false, gamelogic = false, getbodyparts = false, camera = false}
+    debugPrint("Starting GC scan...")
+    local networkFound, trajFound, glFound, bpFound, camFound = false, false, false, false, false
     
     for _, v in pairs(getgc(true)) do
         if type(v) == "table" then
-            -- getbodyparts function (script 6 method)
-            if not found.getbodyparts and rawget(v, "getbodyparts") and type(v.getbodyparts) == "function" then
+            if not bpFound and rawget(v, "getbodyparts") and type(v.getbodyparts) == "function" then
                 getbodyparts = v.getbodyparts
-                found.getbodyparts = true
+                bpFound = true
+                debugPrint("  Found getbodyparts")
             end
         end
         
         if type(v) == "function" then
-            -- trajectory function (script 6 method)
-            local info = debug.getinfo(v)
-            if info and info.name == "trajectory" and not found.trajectory then
-                trajectoryFunc = v
-                found.trajectory = true
-            end
+            -- trajectory function
+            pcall(function()
+                local info = debug.getinfo(v)
+                if info and info.name == "trajectory" and not trajFound then
+                    trajectoryFunc = v
+                    trajFound = true
+                    debugPrint("  Found trajectory function")
+                end
+            end)
             
-            -- Scan upvalues for internal tables (script 6 method)
-            local success, upvalues = pcall(debug.getupvalues, v)
-            if success and upvalues then
-                for _, uv in pairs(upvalues) do
+            -- Scan upvalues
+            pcall(function()
+                for i, uv in pairs(debug.getupvalues(v)) do
                     if type(uv) == "table" then
-                        -- Network module (has send function)
-                        if not found.network and rawget(uv, "send") and type(rawget(uv, "send")) == "function" then
+                        if not networkFound and rawget(uv, "send") and type(rawget(uv, "send")) == "function" then
                             network = uv
-                            found.network = true
+                            networkFound = true
+                            debugPrint("  Found network (via upvalues)")
                         end
-                        -- Gamelogic module (has gammo field)
-                        if not found.gamelogic and rawget(uv, "gammo") then
+                        if not glFound and rawget(uv, "gammo") then
                             gamelogic = uv
-                            found.gamelogic = true
+                            glFound = true
+                            debugPrint("  Found gamelogic")
                         end
-                        -- Camera module (has basecframe)
-                        if not found.camera and rawget(uv, "basecframe") then
+                        if not camFound and rawget(uv, "basecframe") then
                             cameraModule = uv
-                            found.camera = true
+                            camFound = true
+                            debugPrint("  Found cameraModule")
                         end
                     end
                 end
-            end
+            end)
         end
     end
     
-    return found
+    debugPrint("GC scan complete")
 end
 
--- Method 2: Try shared.require (modern PF / script 5 method)
 local function TrySharedRequire()
-    local success, req = pcall(function()
-        return getrenv().shared.require
-    end)
+    debugPrint("Trying shared.require...")
     
-    if not success or not req then return end
-    
-    if not network then
-        pcall(function()
-            local nc = req("NetworkClient")
-            if nc and nc.send then
-                network = nc
-            end
-        end)
-    end
-    
-    if not replicationInterface then
+    pcall(function()
+        local req = getrenv().shared.require
+        if not req then return end
+        
+        if not network then
+            pcall(function()
+                local nc = req("NetworkClient")
+                if nc and nc.send then
+                    network = nc
+                    debugPrint("  Found network via shared.require")
+                end
+            end)
+        end
+        
         pcall(function()
             local ri = req("ReplicationInterface")
             if ri and ri.operateOnAllEntries then
                 replicationInterface = ri
+                debugPrint("  Found replicationInterface")
             end
         end)
-    end
-    
-    if not weaponController then
+        
         pcall(function()
             local wc = req("WeaponControllerInterface")
             if wc then
                 weaponController = wc
+                debugPrint("  Found weaponController")
             end
         end)
-    end
+    end)
 end
 
--- Run both scan methods
-local gcResults = ScanGC()
+-- Run scans
+ScanGC()
 TrySharedRequire()
 
--- Log results
-local function LogStatus()
-    print("  [PF v4.0] Internal module scan:")
-    print("    network:        " .. (network and "FOUND" or "NOT FOUND"))
-    print("    trajectory:     " .. (trajectoryFunc and "FOUND" or "NOT FOUND"))
-    print("    gamelogic:      " .. (gamelogic and "FOUND" or "NOT FOUND"))
-    print("    getbodyparts:   " .. (getbodyparts and "FOUND" or "NOT FOUND"))
-    print("    cameraModule:   " .. (cameraModule and "FOUND" or "NOT FOUND"))
-    print("    replication:    " .. (replicationInterface and "FOUND" or "NOT FOUND"))
-    print("    weaponCtrl:     " .. (weaponController and "FOUND" or "NOT FOUND"))
-end
-LogStatus()
+-- Log status
+print("  [PF v4.1] Module scan results:")
+print("    network:        " .. (network and "FOUND" or "NOT FOUND"))
+print("    trajectory:     " .. (trajectoryFunc and "FOUND" or "NOT FOUND"))
+print("    gamelogic:      " .. (gamelogic and "FOUND" or "NOT FOUND"))
+print("    getbodyparts:   " .. (getbodyparts and "FOUND" or "NOT FOUND"))
+print("    cameraModule:   " .. (cameraModule and "FOUND" or "NOT FOUND"))
+print("    replication:    " .. (replicationInterface and "FOUND" or "NOT FOUND"))
+print("    weaponCtrl:     " .. (weaponController and "FOUND" or "NOT FOUND"))
 
 -- ============================================
 -- STATE VARIABLES
 -- ============================================
--- Silent aim state
-local silentTarget = nil          -- Target Part (BasePart)
-local silentTargetPlayer = nil    -- Target Player instance
-local silentTargetEntry = nil     -- Target replication entry
-
--- Aimbot state
+local silentTarget = nil
+local silentTargetPlayer = nil
 local aimbotLockedModel = nil
 
--- ESP state
 local ESPObjects = {}
 local lastESPUpdate = 0
-local ESP_UPDATE_INTERVAL = 0.08
+local ESP_INTERVAL = 0.08
 
--- Hitbox state
 local ExpandedModels = {}
 local OriginalSizes = {}
 local OriginalTransparencies = {}
 local lastHitboxUpdate = 0
-local HITBOX_UPDATE_INTERVAL = 0.05
-local RandomPartSelection = {}
+local HITBOX_INTERVAL = 0.05
+local RandomPartSel = {}
 local LastRandomSwitch = {}
 
--- Random part tracking for silent aim
-local silentRandomPart = "Head"
-local silentRandomLastSwitch = 0
+local silentRandomState = {"Head"}
+local silentRandomSwitch = {0}
+local aimbotRandomState = {"Head"}
+local aimbotRandomSwitch = {0}
 
--- Aimbot random part
-local aimbotRandomPart = "Head"
-local aimbotRandomLastSwitch = 0
-
--- Heartbeat tracking (for undetectable timing)
 local heartbeatDelta = 0
 task.spawn(function()
     while true do
@@ -247,14 +195,21 @@ task.spawn(function()
 end)
 
 -- ============================================
--- TEAM DETECTION
--- PF has 2 team folders under workspace.Players
--- Names vary (Ghosts/Phantoms, or TeamColor names)
+-- TEAM DETECTION (FIXED)
+-- PF folders use TeamColor.Name, NOT Team.Name
+-- Example: folder might be "Bright blue" not "Ghosts"
 -- ============================================
+local function GetLocalTeamColorName()
+    if not LocalPlayer then return nil end
+    if LocalPlayer.TeamColor then
+        return LocalPlayer.TeamColor.Name
+    end
+    return nil
+end
+
 local function GetLocalTeamName()
     if not LocalPlayer then return nil end
     if LocalPlayer.Team then return LocalPlayer.Team.Name end
-    if LocalPlayer.TeamColor then return LocalPlayer.TeamColor.Name end
     return nil
 end
 
@@ -267,20 +222,36 @@ local function GetTeamFolders()
     if not pf then return nil, nil end
     local children = pf:GetChildren()
     if #children >= 2 then return children[1], children[2]
-    elseif #children == 1 then return children[1], nil
-    end
+    elseif #children == 1 then return children[1], nil end
     return nil, nil
 end
 
-local function IsEnemyFolder(folder)
+-- FIXED: Check both TeamColor.Name AND Team.Name
+local function IsMyTeamFolder(folder)
     if not folder then return false end
-    local localTeam = GetLocalTeamName()
-    if not localTeam then return true end
-    if folder.Name == localTeam then return false end
-    if LocalPlayer.TeamColor and folder.Name == LocalPlayer.TeamColor.Name then
-        return false
+    
+    -- Check 1: TeamColor.Name match (PF primary method)
+    local tcName = GetLocalTeamColorName()
+    if tcName and folder.Name == tcName then
+        return true
     end
-    return true
+    
+    -- Check 2: Team.Name match
+    local teamName = GetLocalTeamName()
+    if teamName and folder.Name == teamName then
+        return true
+    end
+    
+    -- Check 3: Check if our model is inside this folder
+    if folder:FindFirstChild(LocalPlayer.Name) then
+        return true
+    end
+    
+    return false
+end
+
+local function IsEnemyFolder(folder)
+    return folder and not IsMyTeamFolder(folder)
 end
 
 local function GetEnemyFolder()
@@ -292,19 +263,31 @@ end
 
 local function GetLocalTeamFolder()
     local f1, f2 = GetTeamFolders()
-    if f1 and not IsEnemyFolder(f1) then return f1 end
-    if f2 and not IsEnemyFolder(f2) then return f2 end
+    if f1 and IsMyTeamFolder(f1) then return f1 end
+    if f2 and IsMyTeamFolder(f2) then return f2 end
     return nil
 end
+
+-- Debug: log team detection
+task.spawn(function()
+    task.wait(2)
+    local f1, f2 = GetTeamFolders()
+    debugPrint("Team folders found:")
+    if f1 then debugPrint("  Folder 1: '" .. f1.Name .. "' isMyTeam=" .. tostring(IsMyTeamFolder(f1))) end
+    if f2 then debugPrint("  Folder 2: '" .. f2.Name .. "' isMyTeam=" .. tostring(IsMyTeamFolder(f2))) end
+    debugPrint("  LocalPlayer.TeamColor.Name: " .. (GetLocalTeamColorName() or "nil"))
+    debugPrint("  LocalPlayer.Team.Name: " .. (GetLocalTeamName() or "nil"))
+    debugPrint("  Enemy folder: " .. (GetEnemyFolder() and GetEnemyFolder().Name or "nil"))
+    debugPrint("  My folder: " .. (GetLocalTeamFolder() and GetLocalTeamFolder().Name or "nil"))
+end)
 
 -- ============================================
 -- MODEL COLLECTORS
 -- ============================================
 local PF_PART_NAMES = {"Head", "Torso", "HumanoidRootPart", "Right Arm", "Left Arm", "Right Leg", "Left Leg"}
-
 local PF_PART_MAP = {
     ["Head"] = "Head",
-    ["HumanoidRootPart"] = "HumanoidRootPart", 
+    ["HumanoidRootPart"] = "HumanoidRootPart",
     ["Torso"] = "Torso",
     ["UpperTorso"] = "Torso",
     ["LowerTorso"] = "Torso"
@@ -316,10 +299,10 @@ local function GetAllEnemyModels()
     if not folder then return models end
     
     for _, child in ipairs(folder:GetChildren()) do
-        if child:IsA("Model") then
+        if child:IsA("Model") and child.Name ~= LocalPlayer.Name then
             local head = child:FindFirstChild("Head")
             local torso = child:FindFirstChild("Torso") or child:FindFirstChild("HumanoidRootPart")
-            if (head or torso) and child.Name ~= LocalPlayer.Name then
+            if head or torso then
                 table.insert(models, child)
             end
         end
@@ -336,10 +319,10 @@ local function GetAllPlayerModels()
         if teamFolder:IsA("Folder") or teamFolder:IsA("Model") then
             local isEnemy = IsEnemyFolder(teamFolder)
             for _, model in ipairs(teamFolder:GetChildren()) do
-                if model:IsA("Model") then
+                if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
                     local head = model:FindFirstChild("Head")
                     local torso = model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
-                    if (head or torso) and model.Name ~= LocalPlayer.Name then
+                    if head or torso then
                         table.insert(models, {
                             model = model,
                             teamName = teamFolder.Name,
@@ -369,26 +352,20 @@ local function IsPFVisible(targetModel)
     
     local ignoreList = {targetModel, cam}
     
-    -- Ignore local PF model
     local myFolder = GetLocalTeamFolder()
     if myFolder then
         local myModel = myFolder:FindFirstChild(LocalPlayer.Name)
         if myModel then table.insert(ignoreList, myModel) end
     end
-    
-    -- Ignore standard character
     if LocalPlayer.Character then
         table.insert(ignoreList, LocalPlayer.Character)
     end
-    
-    -- Ignore the Ignore folder (PF local player ref)
     local ignoreFolder = Workspace:FindFirstChild("Ignore")
     if ignoreFolder then
         table.insert(ignoreList, ignoreFolder)
     end
     
-    local castPoints = {targetPart.Position}
-    local obscuring = cam:GetPartsObscuringTarget(castPoints, ignoreList)
+    local obscuring = cam:GetPartsObscuringTarget({targetPart.Position}, ignoreList)
     return #obscuring == 0
 end
 
@@ -399,19 +376,15 @@ local function IsPFVisibleRaycast(targetPart, targetModel)
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    
     local filterList = {targetModel, cam}
     if LocalPlayer.Character then table.insert(filterList, LocalPlayer.Character) end
-    
     local myFolder = GetLocalTeamFolder()
     if myFolder then
         local myModel = myFolder:FindFirstChild(LocalPlayer.Name)
         if myModel then table.insert(filterList, myModel) end
     end
-    
     local ignoreFolder = Workspace:FindFirstChild("Ignore")
     if ignoreFolder then table.insert(filterList, ignoreFolder) end
-    
     params.FilterDescendantsInstances = filterList
     params.IgnoreWater = true
     
@@ -438,158 +411,119 @@ end
 -- ============================================
 -- TARGET PART RESOLVER
 -- ============================================
-local function GetTargetPartFromModel(enemyModel, targetPartSetting, randomState, randomLastSwitch)
-    if not enemyModel then return nil end
+local function ResolveTargetPart(model, setting, rState, rSwitch)
+    if not model then return nil end
     
-    if targetPartSetting == "Random" then
+    if setting == "Random" then
         local t = tick()
-        if t - randomLastSwitch[1] > (Config.Silent.RandomInterval or 0.5) then
-            local validParts = {}
-            for _, partName in ipairs(PF_PART_NAMES) do
-                local part = enemyModel:FindFirstChild(partName)
-                if part and part:IsA("BasePart") then
-                    table.insert(validParts, partName)
-                end
+        if t - rSwitch[1] > 0.5 then
+            local valid = {}
+            for _, pn in ipairs(PF_PART_NAMES) do
+                local p = model:FindFirstChild(pn)
+                if p and p:IsA("BasePart") then table.insert(valid, pn) end
             end
-            if #validParts > 0 then
-                randomState[1] = validParts[math.random(1, #validParts)]
-            end
-            randomLastSwitch[1] = t
+            if #valid > 0 then rState[1] = valid[math.random(1, #valid)] end
+            rSwitch[1] = t
         end
-        local p = enemyModel:FindFirstChild(randomState[1])
+        local p = model:FindFirstChild(rState[1])
         if p and p:IsA("BasePart") then return p end
     end
     
-    local pfPartName = PF_PART_MAP[targetPartSetting] or targetPartSetting
-    return enemyModel:FindFirstChild(pfPartName)
-        or enemyModel:FindFirstChild("Head")
-        or enemyModel:FindFirstChild("Torso")
-        or enemyModel:FindFirstChild("HumanoidRootPart")
-end
-
--- Wrappers with their own random state
-local silentRandomState = {"Head"}
-local silentRandomSwitchState = {0}
-local aimbotRandomState = {"Head"}
-local aimbotRandomSwitchState = {0}
-
-local function GetSilentTargetPart(model)
-    return GetTargetPartFromModel(model, Config.Silent.TargetPart or "Head", silentRandomState, silentRandomSwitchState)
-end
-
-local function GetAimbotTargetPart(model)
-    return GetTargetPartFromModel(model, Config.Aimbot.TargetPart or "Head", aimbotRandomState, aimbotRandomSwitchState)
+    local mapped = PF_PART_MAP[setting] or setting
+    return model:FindFirstChild(mapped)
+        or model:FindFirstChild("Head")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("HumanoidRootPart")
 end
 
 -- ============================================
--- BULLET SPEED GETTER
+-- BULLET SPEED
 -- ============================================
 local function GetBulletSpeed()
-    -- Method 1: WeaponControllerInterface (script 5)
     if weaponController then
         local s, speed = pcall(function()
-            local controller = weaponController.getController()
-            local activeWeapon = controller:getActiveWeapon()
-            return activeWeapon:getWeaponStat("bulletspeed")
+            return weaponController.getController():getActiveWeapon():getWeaponStat("bulletspeed")
         end)
         if s and speed then return speed end
     end
-    
-    -- Method 2: gamelogic.currentgun (script 6)
     if gamelogic and gamelogic.currentgun and gamelogic.currentgun.data then
         if gamelogic.currentgun.data.bulletspeed then
             return gamelogic.currentgun.data.bulletspeed
         end
     end
-    
-    return 2000 -- Default PF bullet speed
+    return 2000
 end
 
 -- ============================================
 -- TRAJECTORY CALCULATOR
--- Accounts for gravity and bullet speed
 -- ============================================
-local function CalculateTrajectory(origin, targetPos)
-    local gravityVec = Vector3.new(0, Workspace.Gravity, 0)
-    local bulletSpeed = GetBulletSpeed()
+local function CalcTrajectory(origin, targetPos)
+    local grav = Vector3.new(0, Workspace.Gravity, 0)
+    local speed = GetBulletSpeed()
     
-    -- Method 1: PF's internal trajectory function (most accurate)
     if trajectoryFunc then
-        local s, result = pcall(function()
-            return trajectoryFunc(origin, gravityVec, targetPos, bulletSpeed)
-        end)
-        if s and result then return result end
+        local s, r = pcall(trajectoryFunc, origin, grav, targetPos, speed)
+        if s and r then return r end
     end
     
-    -- Method 2: Manual quadratic solver (script 5 method)
-    local direction = targetPos - origin
-    local a = gravityVec:Dot(gravityVec) * 0.25
-    local b = gravityVec:Dot(direction) - bulletSpeed ^ 2
-    local c = direction:Dot(direction)
-    local discriminant = b * b - 4 * a * c
+    local dir = targetPos - origin
+    local a = grav:Dot(grav) * 0.25
+    local b = grav:Dot(dir) - speed ^ 2
+    local c = dir:Dot(dir)
+    local disc = b * b - 4 * a * c
     
-    if discriminant >= 0 then
-        local s2, result2 = pcall(function()
-            local root = ((-b - math.sqrt(discriminant)) / (2 * a)) ^ 0.5
-            local traj = direction / root + 0.5 * gravityVec * root
-            return traj.Unit
+    if disc >= 0 then
+        local s2, r2 = pcall(function()
+            local root = ((-b - math.sqrt(disc)) / (2 * a)) ^ 0.5
+            return (dir / root + 0.5 * grav * root).Unit
         end)
-        if s2 and result2 then return result2 end
+        if s2 and r2 then return r2 end
     end
     
-    -- Fallback: direct line (no gravity compensation)
-    return direction.Unit
+    return dir.Unit
 end
 
 -- ============================================
--- TARGET FINDER - MULTI-METHOD
--- Priority: replicationInterface > getbodyparts > workspace scan
+-- TARGET FINDERS
 -- ============================================
 
--- Method 1: replicationInterface (script 5 style - most accurate)
-local function FindTargetViaReplication()
+-- Method 1: replicationInterface
+local function FindTargetReplication()
     if not replicationInterface then return nil, nil, nil end
-    
     Camera = Workspace.CurrentCamera
     if not Camera then return nil, nil, nil end
     
-    local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local mousePos = UserInputService:GetMouseLocation()
-    
+    local fov = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mouse = UserInputService:GetMouseLocation()
     local bestAngle = math.huge
-    local bestPart, bestPlayer, bestEntry = nil, nil, nil
+    local bestPart, bestPlayer, bestEntry
     
-    local hitPartName = Config.Silent.TargetPart or "Head"
-    if hitPartName == "Random" then
-        hitPartName = ({"Head", "Torso"})[math.random(1, 2)]
-    end
-    local pfPartName = PF_PART_MAP[hitPartName] or hitPartName
+    local hitName = Config.Silent.TargetPart or "Head"
+    if hitName == "Random" then hitName = ({"Head", "Torso"})[math.random(1, 2)] end
+    hitName = PF_PART_MAP[hitName] or hitName
     
-    local success = pcall(function()
+    pcall(function()
         replicationInterface.operateOnAllEntries(function(player, entry)
             if not entry:isAlive() then return end
             if player == LocalPlayer then return end
             if player.Team == LocalPlayer.Team then return end
             
-            local partOk, part = pcall(function()
-                return entry:getThirdPersonObject():getBodyPart(pfPartName)
+            local ok, part = pcall(function()
+                return entry:getThirdPersonObject():getBodyPart(hitName)
             end)
-            if not partOk or not part then return end
+            if not ok or not part then return end
             
-            -- Screen distance check
-            local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+            local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
             if not onScreen then return end
             
-            local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-            if screenDist > fovRadius then return end
+            local dist = (Vector2.new(sp.X, sp.Y) - mouse).Magnitude
+            if dist > fov then return end
             
-            -- Visibility check
             if Config.Silent.VisibleCheck then
-                local model = part.Parent
-                if model and not IsPFTargetVisible(model) then return end
+                local m = part.Parent
+                if m and not IsPFTargetVisible(m) then return end
             end
             
-            -- Use angle-based selection (script 5 method - more accurate)
             local direction = (part.Position - Camera.CFrame.Position).Unit
             local angle = math.acos(math.clamp(Camera.CFrame.LookVector:Dot(direction), -1, 1))
             
@@ -602,126 +536,124 @@ local function FindTargetViaReplication()
         end)
     end)
     
-    if not success then return nil, nil, nil end
     return bestPart, bestPlayer, bestEntry
 end
 
--- Method 2: getbodyparts (script 6 style)
-local function FindTargetViaBodyParts()
+-- Method 2: getbodyparts
+local function FindTargetBodyParts()
     if not getbodyparts then return nil, nil end
-    
     Camera = Workspace.CurrentCamera
     if not Camera then return nil, nil end
     
-    local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local mousePos = UserInputService:GetMouseLocation()
-    
+    local fov = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mouse = UserInputService:GetMouseLocation()
     local closestDist = math.huge
-    local closestPart, closestPlayer = nil, nil
+    local closestPart, closestPlayer, closestBody
     
-    local hitPartName = Config.Silent.TargetPart or "Head"
-    if hitPartName == "Random" then
-        hitPartName = ({"Head", "Torso"})[math.random(1, 2)]
-    end
+    local hitName = Config.Silent.TargetPart or "Head"
+    if hitName == "Random" then hitName = ({"Head", "Torso"})[math.random(1, 2)] end
     
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         if player.Team == LocalPlayer.Team then continue end
         
-        local s, bodyParts = pcall(function() return getbodyparts(player) end)
-        if not s or not bodyParts then continue end
-        if not rawget(bodyParts, "rootpart") then continue end
+        local s, bp = pcall(getbodyparts, player)
+        if not s or not bp or not rawget(bp, "rootpart") then continue end
         
-        local rootParent = bodyParts.rootpart.Parent
-        if not rootParent then continue end
+        local root = bp.rootpart
+        if not root or not root.Parent then continue end
+        local model = root.Parent
         
-        local targetPart = rootParent:FindFirstChild(hitPartName) or rootParent:FindFirstChild("Head")
-        if not targetPart then continue end
+        local target = model:FindFirstChild(hitName) or model:FindFirstChild("Head")
+        if not target then continue end
         
-        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        local sp, onScreen = Camera:WorldToViewportPoint(target.Position)
         if not onScreen then continue end
         
-        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-        if screenDist > fovRadius then continue end
+        local dist = (Vector2.new(sp.X, sp.Y) - mouse).Magnitude
+        if dist > fov then continue end
         
-        if Config.Silent.VisibleCheck and not IsPFTargetVisible(rootParent) then continue end
+        if Config.Silent.VisibleCheck and not IsPFTargetVisible(model) then continue end
         
-        if screenDist < closestDist then
-            closestDist = screenDist
-            closestPart = targetPart
+        if dist < closestDist then
+            closestDist = dist
+            closestPart = target
             closestPlayer = player
+            closestBody = model
         end
     end
     
-    return closestPart, closestPlayer
+    return closestPart, closestPlayer, closestBody
 end
 
--- Method 3: Workspace folder scanning (ultimate fallback)
-local function FindTargetViaWorkspace()
+-- Method 3: workspace scan
+local function FindTargetWorkspace()
     Camera = Workspace.CurrentCamera
-    if not Camera then return nil, nil end
+    if not Camera then return nil, nil, nil end
     
-    local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or math.huge
-    local mousePos = UserInputService:GetMouseLocation()
+    local fov = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mouse = UserInputService:GetMouseLocation()
+    local closestDist = fov
+    local closestPart, closestPlayer, closestModel
     
-    local closestDist = fovRadius
-    local closestPart, closestPlayer = nil, nil
+    local enemies = GetAllEnemyModels()
     
-    local enemyModels = GetAllEnemyModels()
-    
-    for _, enemyModel in ipairs(enemyModels) do
-        local targetPart = GetSilentTargetPart(enemyModel)
-        if not targetPart then continue end
+    for _, model in ipairs(enemies) do
+        local target = ResolveTargetPart(model, Config.Silent.TargetPart or "Head", silentRandomState, silentRandomSwitch)
+        if not target then continue end
         
-        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        local sp, onScreen = Camera:WorldToViewportPoint(target.Position)
         if not onScreen then continue end
         
-        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-        if screenDist > fovRadius then continue end
+        local dist = (Vector2.new(sp.X, sp.Y) - mouse).Magnitude
+        if dist > fov then continue end
         
-        if Config.Silent.VisibleCheck and not IsPFTargetVisible(enemyModel) then continue end
+        if Config.Silent.VisibleCheck and not IsPFTargetVisible(model) then continue end
         
-        if screenDist < closestDist then
-            closestDist = screenDist
-            closestPart = targetPart
-            closestPlayer = Players:FindFirstChild(enemyModel.Name)
+        if dist < closestDist then
+            closestDist = dist
+            closestPart = target
+            closestPlayer = Players:FindFirstChild(model.Name)
+            closestModel = model
         end
     end
     
-    return closestPart, closestPlayer
+    return closestPart, closestPlayer, closestModel
 end
 
--- Combined target finder - tries methods in priority order
+-- Combined finder
 local function GetBestTarget()
-    -- Method 1: Replication (most reliable for silent aim)
-    local part, player, entry = FindTargetViaReplication()
-    if part and player then
-        return part, player, entry
-    end
+    local p1, pl1, e1 = FindTargetReplication()
+    if p1 and pl1 then return p1, pl1, e1, "replication" end
     
-    -- Method 2: getbodyparts
-    local part2, player2 = FindTargetViaBodyParts()
-    if part2 and player2 then
-        return part2, player2, nil
-    end
+    local p2, pl2, b2 = FindTargetBodyParts()
+    if p2 and pl2 then return p2, pl2, nil, "bodyparts" end
     
-    -- Method 3: Workspace scanning
-    local part3, player3 = FindTargetViaWorkspace()
-    return part3, player3, nil
+    local p3, pl3, m3 = FindTargetWorkspace()
+    if p3 then return p3, pl3, nil, "workspace" end
+    
+    return nil, nil, nil, nil
 end
 
 -- ============================================
 -- SILENT AIM: NETWORK HOOK
--- This is THE correct method for Phantom Forces
--- Based on proven scripts 5 and 6
+-- THE critical fix: proper hook of network.send
 -- ============================================
 local networkHooked = false
+local silentAimFired = 0 -- Counter for debug
 
 local function SetupNetworkHook()
-    if not network or not network.send then
-        warn("[PF v4.0] network.send not found - silent aim unavailable via network")
+    if not network then
+        warn("[PF v4.1] network module NOT FOUND - cannot hook silent aim")
         return false
     end
+    
+    if not network.send then
+        warn("[PF v4.1] network.send NOT FOUND")
+        return false
+    end
+    
+    debugPrint("Setting up network hook...")
     
     local originalSend = network.send
     
@@ -729,9 +661,9 @@ local function SetupNetworkHook()
         local args = {...}
         local packetName = args[1]
         
-        -- ============================
+        -- =============================
         -- INTERCEPT: newbullets
-        -- ============================
+        -- =============================
         if packetName == "newbullets" then
             if Config.Silent.Enabled and Config.Silent.Active then
                 -- Hit chance
@@ -739,31 +671,52 @@ local function SetupNetworkHook()
                     return originalSend(self, ...)
                 end
                 
-                local targetPart, targetPlayer, targetEntry = GetBestTarget()
+                local targetPart, targetPlayer, targetEntry, method = GetBestTarget()
                 
                 if targetPart and targetPlayer then
-                    -- Detect argument format
-                    -- Format A (script 5): "newbullets", uniqueID, data, fireTime
-                    -- Format B (script 6): "newbullets", data (data contains everything)
+                    silentAimFired = silentAimFired + 1
+                    debugPrint("Silent aim firing #" .. silentAimFired .. " via " .. (method or "unknown") .. " at " .. targetPlayer.Name)
                     
+                    -- Detect format
+                    -- Check if args[2] is a table with bullets (Format B)
+                    -- or if args[3] is a table with bullets (Format A)
                     local uniqueID, data, fireTime
+                    local formatA = false
                     
-                    if type(args[2]) == "table" and args[2].bullets then
-                        -- Format B: args[2] is the data table directly
+                    if type(args[2]) == "table" and rawget(args[2], "bullets") then
+                        -- Format B: send(self, "newbullets", data)
                         data = args[2]
-                        uniqueID = nil
-                        fireTime = nil
-                    elseif type(args[3]) == "table" and args[3].bullets then
-                        -- Format A: args[2] = uniqueID, args[3] = data, args[4] = fireTime
+                        formatA = false
+                        debugPrint("  Detected Format B (data only)")
+                    elseif args[3] and type(args[3]) == "table" and rawget(args[3], "bullets") then
+                        -- Format A: send(self, "newbullets", uniqueID, data, fireTime)
                         uniqueID = args[2]
                         data = args[3]
                         fireTime = args[4]
+                        formatA = true
+                        debugPrint("  Detected Format A (uniqueID + data + fireTime)")
                     else
-                        -- Unknown format, pass through
-                        return originalSend(self, ...)
+                        -- Try treating args[2] as data even without bullets field check
+                        if type(args[2]) == "table" then
+                            data = args[2]
+                            -- Check if it has a bullets-like structure
+                            for k, v in pairs(data) do
+                                if type(v) == "table" and type(k) == "string" and k == "bullets" then
+                                    formatA = false
+                                    break
+                                end
+                            end
+                            if not data.bullets then
+                                debugPrint("  WARNING: Could not find bullets in data, passing through")
+                                return originalSend(self, ...)
+                            end
+                        else
+                            debugPrint("  WARNING: Unknown packet format, passing through")
+                            return originalSend(self, ...)
+                        end
                     end
                     
-                    -- Get fire position (use camera module if available)
+                    -- Get fire position
                     local firePos = data.firepos
                     if cameraModule and cameraModule.basecframe then
                         firePos = cameraModule.basecframe.Position
@@ -773,93 +726,90 @@ local function SetupNetworkHook()
                         end
                     end
                     
-                    -- Calculate trajectory toward target
+                    -- Calculate trajectory
                     local targetPos = targetPart.Position
-                    local trajectoryDir = CalculateTrajectory(firePos, targetPos)
+                    local traj = CalcTrajectory(firePos, targetPos)
+                    
+                    debugPrint("  Target: " .. targetPlayer.Name .. " Part: " .. targetPart.Name)
+                    debugPrint("  BulletSpeed: " .. tostring(GetBulletSpeed()))
                     
                     -- Redirect all bullets
                     for _, bullet in pairs(data.bullets) do
-                        bullet[1] = trajectoryDir
+                        bullet[1] = traj
                     end
                     
-                    -- Determine hit part name for bullethit
-                    local hitPartName = Config.Silent.TargetPart or "Head"
-                    if hitPartName == "Random" then
-                        hitPartName = targetPart.Name
-                    end
-                    hitPartName = PF_PART_MAP[hitPartName] or hitPartName
+                    -- Get hit part name
+                    local hitPartName = targetPart.Name
                     
-                    -- Send the modified newbullets
-                    if uniqueID ~= nil then
-                        -- Format A
+                    -- Send modified newbullets
+                    if formatA then
                         originalSend(self, "newbullets", uniqueID, data, fireTime)
-                        
-                        -- Send bullethit for each bullet (Format A)
-                        for _, bullet in pairs(data.bullets) do
-                            if bullet[2] then
-                                originalSend(self, "bullethit", uniqueID, targetPlayer, targetPos, hitPartName, bullet[2], fireTime)
-                            end
-                        end
                     else
-                        -- Format B
                         originalSend(self, "newbullets", data)
-                        
-                        -- Send bullethit for each bullet (Format B)
-                        for _, bullet in pairs(data.bullets) do
-                            if bullet[2] then
-                                originalSend(self, "bullethit", targetPlayer, targetPos, targetPart, bullet[2])
+                    end
+                    
+                    -- Send bullethit for each bullet
+                    -- Try BOTH formats since PF version varies
+                    for _, bullet in pairs(data.bullets) do
+                        local bulletID = bullet[2]
+                        if bulletID then
+                            if formatA and uniqueID and fireTime then
+                                -- Format A bullethit (script 5 style)
+                                -- send(self, "bullethit", uniqueID, player, position, partName, bulletID, fireTime)
+                                pcall(function()
+                                    originalSend(self, "bullethit", uniqueID, targetPlayer, targetPos, hitPartName, bulletID, fireTime)
+                                end)
+                                debugPrint("  Sent bullethit Format A")
+                            else
+                                -- Format B bullethit (script 6 style)
+                                -- send(self, "bullethit", player, position, partInstance, bulletID)
+                                pcall(function()
+                                    originalSend(self, "bullethit", targetPlayer, targetPos, targetPart, bulletID)
+                                end)
+                                debugPrint("  Sent bullethit Format B")
                             end
                         end
                     end
                     
-                    return -- Don't send original
+                    return -- Block original
                 end
             end
         end
         
-        -- ============================
-        -- BLOCK: bullethit (when silent aim active)
-        -- We send our own bullethit above, block originals
-        -- ============================
+        -- =============================
+        -- BLOCK: bullethit when silent active
+        -- =============================
         if packetName == "bullethit" then
             if Config.Silent.Enabled and Config.Silent.Active then
-                return -- Block original bullethit
+                debugPrint("  Blocked original bullethit")
+                return
             end
         end
         
-        -- Pass everything else through
         return originalSend(self, ...)
     end
     
     networkHooked = true
-    print("  [PF v4.0] Network hook installed (newbullets + bullethit)")
+    print("  [PF v4.1] Network hook INSTALLED successfully")
     return true
 end
 
 -- ============================================
--- FALLBACK: __namecall HOOK  
--- Only used if network hook fails entirely
--- Less reliable but provides basic functionality
+-- FALLBACK: __namecall hook
 -- ============================================
 local namecallHooked = false
 local OldNamecall = nil
 
 local function SetupNamecallFallback()
     if networkHooked then return end
-    if not hookmetamethod then
-        warn("[PF v4.0] hookmetamethod not available")
-        return
-    end
+    if not hookmetamethod then return end
     
     OldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
         local args = {...}
         
-        if checkcaller() then
-            return OldNamecall(self, ...)
-        end
+        if checkcaller() then return OldNamecall(self, ...) end
         
-        -- Basic raycast redirect (won't work for bullet hits but may help with other things)
         if Config.Silent.Enabled and Config.Silent.Active and silentTarget and silentTarget.Parent then
             if math.random(1, 100) <= (Config.Silent.HitChance or 100) then
                 local targetPos = silentTarget.Position
@@ -873,7 +823,6 @@ local function SetupNamecallFallback()
                             return OldNamecall(self, origin, newDir, select(3, ...))
                         end
                     end
-                    
                     if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
                         local ray = args[1]
                         if typeof(ray) == "Ray" then
@@ -890,36 +839,34 @@ local function SetupNamecallFallback()
     end))
     
     namecallHooked = true
-    warn("[PF v4.0] Using __namecall fallback (limited effectiveness)")
+    warn("[PF v4.1] Using __namecall fallback")
 end
 
--- Install hooks in priority order
-local hookSuccess = SetupNetworkHook()
-if not hookSuccess then
+-- Install hooks
+local hookOk = SetupNetworkHook()
+if not hookOk then
     SetupNamecallFallback()
 end
 
 -- ============================================
 -- AIMBOT TARGET FINDER
--- Separate from silent aim, uses different config
 -- ============================================
-local function GetClosestAimbotTarget()
+local function GetAimbotTarget()
     Camera = Workspace.CurrentCamera
     if not Camera then return nil end
     
-    local enemyModels = GetAllEnemyModels()
-    if #enemyModels == 0 then return nil end
+    local enemies = GetAllEnemyModels()
+    if #enemies == 0 then return nil end
     
-    local fovRadius = Config.Aimbot.FOVRadius or 150
+    local fov = Config.Aimbot.FOVRadius or 150
     local vp = Camera.ViewportSize
     local center = Vector2.new(vp.X / 2, vp.Y / 2)
-    local mousePos = UserInputService:GetMouseLocation()
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+    local mouse = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mouse
     
-    -- Aimlock: keep locked target
     if Config.Aimbot.Method == "Aimlock" and aimbotLockedModel then
         if aimbotLockedModel.Parent then
-            local tp = GetAimbotTargetPart(aimbotLockedModel)
+            local tp = ResolveTargetPart(aimbotLockedModel, Config.Aimbot.TargetPart or "Head", aimbotRandomState, aimbotRandomSwitch)
             if tp then
                 if not Config.Aimbot.VisibleCheck or IsPFTargetVisible(aimbotLockedModel) then
                     local sp, on = Camera:WorldToViewportPoint(tp.Position)
@@ -930,65 +877,57 @@ local function GetClosestAimbotTarget()
         aimbotLockedModel = nil
     end
     
-    local closestPart = nil
-    local closestDist = fovRadius
-    local closestModel = nil
+    local bestPart, bestDist, bestModel = nil, fov, nil
     
-    for _, enemyModel in ipairs(enemyModels) do
-        local targetPart = GetAimbotTargetPart(enemyModel)
-        if not targetPart then continue end
+    for _, model in ipairs(enemies) do
+        local part = ResolveTargetPart(model, Config.Aimbot.TargetPart or "Head", aimbotRandomState, aimbotRandomSwitch)
+        if not part then continue end
+        if Config.Aimbot.VisibleCheck and not IsPFTargetVisible(model) then continue end
         
-        if Config.Aimbot.VisibleCheck and not IsPFTargetVisible(enemyModel) then continue end
+        local sp, on = Camera:WorldToViewportPoint(part.Position)
+        if not on then continue end
         
-        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
-        if not onScreen then continue end
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d > fov then continue end
         
-        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - ref).Magnitude
-        if screenDist > fovRadius then continue end
-        
-        if screenDist < closestDist then
-            closestDist = screenDist
-            closestPart = targetPart
-            closestModel = enemyModel
+        if d < bestDist then
+            bestDist = d
+            bestPart = part
+            bestModel = model
         end
     end
     
-    if Config.Aimbot.Method == "Aimlock" and closestModel then
-        aimbotLockedModel = closestModel
+    if Config.Aimbot.Method == "Aimlock" and bestModel then
+        aimbotLockedModel = bestModel
     end
     
-    return closestPart
+    return bestPart
 end
 
 -- ============================================
--- RENDER LOOP: Aimbot + Silent target update (for fallback)
+-- RENDER LOOP
 -- ============================================
-local renderConnection = RunService.RenderStepped:Connect(function()
+local renderConn = RunService.RenderStepped:Connect(function()
     Camera = Workspace.CurrentCamera
     
     -- Update silent target for namecall fallback
     if not networkHooked then
         if Config.Silent.Enabled and Config.Silent.Active then
-            local part, player = FindTargetViaWorkspace()
-            silentTarget = part
-            silentTargetPlayer = player
+            silentTarget = FindTargetWorkspace()
         else
             silentTarget = nil
-            silentTargetPlayer = nil
         end
     end
     
-    -- === AIMBOT ===
+    -- Aimbot
     if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local aimTarget = GetClosestAimbotTarget()
-        
-        if aimTarget then
-            local pos = aimTarget.Position
+        local target = GetAimbotTarget()
+        if target then
+            local pos = target.Position
             
-            -- Prediction
             if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
                 pcall(function()
-                    local vel = aimTarget.AssemblyLinearVelocity
+                    local vel = target.AssemblyLinearVelocity
                     if vel and vel.Magnitude > 0.5 then
                         pos = pos + vel * Config.Aimbot.Prediction
                     end
@@ -998,23 +937,19 @@ local renderConnection = RunService.RenderStepped:Connect(function()
             local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
             
             if Config.Aimbot.Method == "Aimbot" then
-                -- Camera CFrame method
                 local cur = Camera.CFrame
                 local tgt = CFrame.lookAt(cur.Position, pos)
                 Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
             else
-                -- Aimlock: mousemoverel
                 local sp, on = Camera:WorldToViewportPoint(pos)
                 if on then
                     local mp = UserInputService:GetMouseLocation()
                     local dx, dy = sp.X - mp.X, sp.Y - mp.Y
                     local dist = math.sqrt(dx * dx + dy * dy)
-                    
                     if dist > 1 then
                         local spd = math.clamp(1 / sm, 0.05, 0.8)
                         local mx = math.clamp(dx * spd, -150, 150)
                         local my = math.clamp(dy * spd, -150, 150)
-                        
                         if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
                             local mrel = mousemoverel or (Input and Input.MouseMove) or function() end
                             mrel(mx, my)
@@ -1023,35 +958,27 @@ local renderConnection = RunService.RenderStepped:Connect(function()
                 end
             end
         else
-            if not Config.Aimbot.Active then
-                aimbotLockedModel = nil
-            end
+            if not Config.Aimbot.Active then aimbotLockedModel = nil end
         end
     else
-        if not Config.Aimbot.Active then
-            aimbotLockedModel = nil
-        end
+        if not Config.Aimbot.Active then aimbotLockedModel = nil end
     end
 end)
 
 -- ============================================
--- PF ESP SYSTEM
+-- ESP SYSTEM
 -- ============================================
 local function GetPFWeapon(model)
-    -- PF weapon models are child Models of the character
-    -- Name format: "WeaponName PlayerName" 
     for _, child in ipairs(model:GetChildren()) do
         if child:IsA("Model") then
-            local nameParts = string.split(child.Name, " ")
-            if #nameParts > 1 then
-                local weaponName = ""
-                for i = 1, #nameParts - 1 do
-                    weaponName = weaponName .. nameParts[i]
-                    if i < #nameParts - 1 then
-                        weaponName = weaponName .. " "
-                    end
+            local parts = string.split(child.Name, " ")
+            if #parts > 1 then
+                local name = ""
+                for i = 1, #parts - 1 do
+                    name = name .. parts[i]
+                    if i < #parts - 1 then name = name .. " " end
                 end
-                return weaponName
+                return name
             end
             return child.Name
         end
@@ -1061,283 +988,165 @@ end
 
 local function CreateESP(model)
     if ESPObjects[model] then return end
-    
     local e = {}
-    
-    -- Box outline
-    e.Outline = Drawing.new("Square")
-    e.Outline.Thickness = 3
-    e.Outline.Filled = false
-    e.Outline.Color = Color3.fromRGB(0, 0, 0)
-    e.Outline.Transparency = 0.5
-    e.Outline.Visible = false
-    
-    -- Box
-    e.Box = Drawing.new("Square")
-    e.Box.Thickness = 1
-    e.Box.Filled = false
-    e.Box.Visible = false
-    
-    -- Name text
-    e.Name = Drawing.new("Text")
-    e.Name.Size = 13
-    e.Name.Center = true
-    e.Name.Outline = true
-    e.Name.Font = 2
-    e.Name.Color = Color3.fromRGB(255, 255, 255)
-    e.Name.Visible = false
-    
-    -- Distance text
-    e.Distance = Drawing.new("Text")
-    e.Distance.Size = 12
-    e.Distance.Center = true
-    e.Distance.Outline = true
-    e.Distance.Font = 2
-    e.Distance.Color = Color3.fromRGB(200, 200, 200)
-    e.Distance.Visible = false
-    
-    -- Weapon text
-    e.Weapon = Drawing.new("Text")
-    e.Weapon.Size = 12
-    e.Weapon.Center = true
-    e.Weapon.Outline = true
-    e.Weapon.Font = 2
-    e.Weapon.Color = Color3.fromRGB(150, 255, 150)
-    e.Weapon.Visible = false
-    
-    -- Health background
-    e.HealthBG = Drawing.new("Square")
-    e.HealthBG.Thickness = 1
-    e.HealthBG.Filled = true
-    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
-    e.HealthBG.Transparency = 0.5
-    e.HealthBG.Visible = false
-    
-    -- Health bar
-    e.HealthBar = Drawing.new("Square")
-    e.HealthBar.Thickness = 1
-    e.HealthBar.Filled = true
-    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
-    e.HealthBar.Visible = false
-    
-    -- Tracer outline
-    e.TracerOutline = Drawing.new("Line")
-    e.TracerOutline.Thickness = 3
-    e.TracerOutline.Color = Color3.fromRGB(0, 0, 0)
-    e.TracerOutline.Visible = false
-    
-    -- Tracer
-    e.Tracer = Drawing.new("Line")
-    e.Tracer.Thickness = 1
-    e.Tracer.Visible = false
-    
+    e.Outline = Drawing.new("Square"); e.Outline.Thickness = 3; e.Outline.Filled = false; e.Outline.Color = Color3.fromRGB(0,0,0); e.Outline.Transparency = 0.5; e.Outline.Visible = false
+    e.Box = Drawing.new("Square"); e.Box.Thickness = 1; e.Box.Filled = false; e.Box.Visible = false
+    e.Name = Drawing.new("Text"); e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true; e.Name.Font = 2; e.Name.Visible = false
+    e.Distance = Drawing.new("Text"); e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true; e.Distance.Font = 2; e.Distance.Visible = false
+    e.Weapon = Drawing.new("Text"); e.Weapon.Size = 12; e.Weapon.Center = true; e.Weapon.Outline = true; e.Weapon.Font = 2; e.Weapon.Color = Color3.fromRGB(150,255,150); e.Weapon.Visible = false
+    e.HealthBG = Drawing.new("Square"); e.HealthBG.Thickness = 1; e.HealthBG.Filled = true; e.HealthBG.Color = Color3.fromRGB(0,0,0); e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
+    e.HealthBar = Drawing.new("Square"); e.HealthBar.Thickness = 1; e.HealthBar.Filled = true; e.HealthBar.Color = Color3.fromRGB(0,255,0); e.HealthBar.Visible = false
+    e.TracerOutline = Drawing.new("Line"); e.TracerOutline.Thickness = 3; e.TracerOutline.Color = Color3.fromRGB(0,0,0); e.TracerOutline.Visible = false
+    e.Tracer = Drawing.new("Line"); e.Tracer.Thickness = 1; e.Tracer.Visible = false
     ESPObjects[model] = e
 end
 
 local function RemoveESP(model)
     local e = ESPObjects[model]
     if not e then return end
-    for _, d in pairs(e) do
-        pcall(function() d:Remove() end)
-    end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
     ESPObjects[model] = nil
 end
 
 local function HideESP(model)
     local e = ESPObjects[model]
     if not e then return end
-    for _, d in pairs(e) do
-        pcall(function() d.Visible = false end)
-    end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
 end
 
 local function CleanupAllESP()
-    for model, e in pairs(ESPObjects) do
-        for _, d in pairs(e) do
-            pcall(function() d:Remove() end)
-        end
+    for m, e in pairs(ESPObjects) do
+        for _, d in pairs(e) do pcall(function() d:Remove() end) end
     end
     ESPObjects = {}
 end
 
 local function UpdateESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
-        for model in pairs(ESPObjects) do HideESP(model) end
+        for m in pairs(ESPObjects) do HideESP(m) end
         return
     end
     
     local now = tick()
-    if now - lastESPUpdate < ESP_UPDATE_INTERVAL then return end
+    if now - lastESPUpdate < ESP_INTERVAL then return end
     lastESPUpdate = now
     
     Camera = Workspace.CurrentCamera
     if not Camera then return end
     
     local allPlayers = GetAllPlayerModels()
-    local activeModels = {}
+    local active = {}
     
-    -- Get local position for distance calc
     local localPos = Camera.CFrame.Position
-    local ignoreFolder = Workspace:FindFirstChild("Ignore")
-    if ignoreFolder then
-        local refPlayer = ignoreFolder:FindFirstChild("RefPlayer")
-        if refPlayer then
-            pcall(function() localPos = refPlayer:GetPivot().Position end)
-        end
+    local ign = Workspace:FindFirstChild("Ignore")
+    if ign then
+        local rp = ign:FindFirstChild("RefPlayer")
+        if rp then pcall(function() localPos = rp:GetPivot().Position end) end
     end
     
     for _, data in ipairs(allPlayers) do
         local model = data.model
         local isEnemy = data.isEnemy
-        activeModels[model] = true
+        active[model] = true
         
-        -- Skip allies if team check on
-        if Config.ESP.TeamCheck and not isEnemy then
-            HideESP(model)
-            continue
-        end
+        if Config.ESP.TeamCheck and not isEnemy then HideESP(model) continue end
         
         if not ESPObjects[model] then CreateESP(model) end
         local esp = ESPObjects[model]
         if not esp then continue end
         
-        local rootPart = model:FindFirstChild("HumanoidRootPart")
-            or model:FindFirstChild("Torso")
-        if not rootPart then HideESP(model) continue end
+        local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
+        if not root then HideESP(model) continue end
         
-        local position = rootPart.Position
-        local dist = (localPos - position).Magnitude
-        
+        local pos = root.Position
+        local dist = (localPos - pos).Magnitude
         if dist > Config.ESP.MaxDistance then HideESP(model) continue end
         
-        local sp, onScreen = Camera:WorldToViewportPoint(position)
+        local sp, onScreen = Camera:WorldToViewportPoint(pos)
         if not onScreen then HideESP(model) continue end
         
-        -- Calculate box using GetPivot (like script 1)
-        local modelCF = model:GetPivot()
-        local TL = Camera:WorldToViewportPoint((modelCF * CFrame.new(-3, 3, 0)).Position)
-        local TR = Camera:WorldToViewportPoint((modelCF * CFrame.new(3, 3, 0)).Position)
-        local BL = Camera:WorldToViewportPoint((modelCF * CFrame.new(-3, -3, 0)).Position)
-        local BR = Camera:WorldToViewportPoint((modelCF * CFrame.new(3, -3, 0)).Position)
+        local cf = model:GetPivot()
+        local TL = Camera:WorldToViewportPoint((cf * CFrame.new(-3, 3, 0)).Position)
+        local TR = Camera:WorldToViewportPoint((cf * CFrame.new(3, 3, 0)).Position)
+        local BL = Camera:WorldToViewportPoint((cf * CFrame.new(-3, -3, 0)).Position)
+        local BR = Camera:WorldToViewportPoint((cf * CFrame.new(3, -3, 0)).Position)
         
         local topY = math.min(TL.Y, TR.Y)
         local botY = math.max(BL.Y, BR.Y)
         local leftX = math.min(TL.X, BL.X)
         local rightX = math.max(TR.X, BR.X)
-        
         local height = math.max(botY - topY, 10)
         local width = math.max(rightX - leftX, height / 2)
         local centerX = (leftX + rightX) / 2
         local minX = centerX - width / 2
         
-        -- Color: enemy visible=green, enemy hidden=red, ally=blue
-        local espColor
+        local color
         if not isEnemy then
-            espColor = Color3.fromRGB(80, 150, 255)
+            color = Color3.fromRGB(80, 150, 255)
         else
-            espColor = IsPFTargetVisible(model) and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+            color = IsPFTargetVisible(model) and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
         end
         
-        -- Boxes
         if Config.ESP.Boxes then
             esp.Outline.Size = Vector2.new(width + 2, height + 2)
             esp.Outline.Position = Vector2.new(minX - 1, topY - 1)
             esp.Outline.Visible = true
-            
             esp.Box.Size = Vector2.new(width, height)
             esp.Box.Position = Vector2.new(minX, topY)
-            esp.Box.Color = espColor
+            esp.Box.Color = color
             esp.Box.Visible = true
         else
-            esp.Box.Visible = false
-            esp.Outline.Visible = false
+            esp.Box.Visible = false; esp.Outline.Visible = false
         end
         
-        -- Name
         if Config.ESP.Names then
             esp.Name.Text = model.Name
             esp.Name.Position = Vector2.new(centerX, topY - 16)
-            esp.Name.Color = espColor
+            esp.Name.Color = color
             esp.Name.Visible = true
-        else
-            esp.Name.Visible = false
-        end
+        else esp.Name.Visible = false end
         
-        -- Distance
         if Config.ESP.Distance then
             esp.Distance.Text = "[" .. math.floor(dist) .. "] studs"
             esp.Distance.Position = Vector2.new(centerX, topY - 30)
-            esp.Distance.Color = espColor
+            esp.Distance.Color = color
             esp.Distance.Visible = true
-        else
-            esp.Distance.Visible = false
-        end
+        else esp.Distance.Visible = false end
         
-        -- Weapon
         if Config.ESP.Names then
-            local weaponName = GetPFWeapon(model)
-            if weaponName ~= "Unknown" then
-                esp.Weapon.Text = weaponName
+            local wep = GetPFWeapon(model)
+            if wep ~= "Unknown" then
+                esp.Weapon.Text = wep
                 esp.Weapon.Position = Vector2.new(centerX, botY + 2)
-                esp.Weapon.Color = Color3.fromRGB(150, 255, 150)
                 esp.Weapon.Visible = true
-            else
-                esp.Weapon.Visible = false
-            end
-        else
-            esp.Weapon.Visible = false
-        end
+            else esp.Weapon.Visible = false end
+        else esp.Weapon.Visible = false end
         
-        -- Tracers
-        if Config.ESP.Boxes then
-            local tracerFrom = Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y)
-            local tracerTo = Vector2.new(centerX, botY)
-            esp.TracerOutline.From = tracerFrom
-            esp.TracerOutline.To = tracerTo
-            esp.TracerOutline.Visible = false -- Enable in config if wanted
-            esp.Tracer.From = tracerFrom
-            esp.Tracer.To = tracerTo
-            esp.Tracer.Color = espColor
-            esp.Tracer.Visible = false -- Enable in config if wanted
-        else
-            esp.Tracer.Visible = false
-            esp.TracerOutline.Visible = false
-        end
+        esp.Tracer.Visible = false
+        esp.TracerOutline.Visible = false
         
-        -- Health bar
-        local humanoid = model:FindFirstChildOfClass("Humanoid")
-        if Config.ESP.Boxes and humanoid then
-            local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
-            local barHeight = height * healthPct
-            local healthColor
-            if healthPct > 0.5 then
-                healthColor = Color3.fromRGB(math.floor(255 * (1 - healthPct) * 2), 255, 0)
-            else
-                healthColor = Color3.fromRGB(255, math.floor(255 * healthPct * 2), 0)
-            end
-            
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if Config.ESP.Boxes and hum then
+            local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            local bh = height * hp
+            local hc = hp > 0.5
+                and Color3.fromRGB(math.floor(255 * (1 - hp) * 2), 255, 0)
+                or Color3.fromRGB(255, math.floor(255 * hp * 2), 0)
             esp.HealthBG.Size = Vector2.new(3, height)
             esp.HealthBG.Position = Vector2.new(minX - 6, topY)
             esp.HealthBG.Visible = true
-            
-            esp.HealthBar.Size = Vector2.new(3, barHeight)
-            esp.HealthBar.Position = Vector2.new(minX - 6, topY + (height - barHeight))
-            esp.HealthBar.Color = healthColor
+            esp.HealthBar.Size = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX - 6, topY + (height - bh))
+            esp.HealthBar.Color = hc
             esp.HealthBar.Visible = true
         else
-            esp.HealthBG.Visible = false
-            esp.HealthBar.Visible = false
+            esp.HealthBG.Visible = false; esp.HealthBar.Visible = false
         end
     end
     
-    -- Cleanup dead models
-    for model in pairs(ESPObjects) do
-        if not activeModels[model] then
-            if not model.Parent then
-                RemoveESP(model)
-            else
-                HideESP(model)
-            end
+    for m in pairs(ESPObjects) do
+        if not active[m] then
+            if not m.Parent then RemoveESP(m) else HideESP(m) end
         end
     end
 end
@@ -1345,69 +1154,51 @@ end
 -- ============================================
 -- HITBOX SYSTEM
 -- ============================================
-local function GetRandomPartForModel(model)
+local function GetRandPart(model)
     local t = tick()
-    if not LastRandomSwitch[model] or (t - LastRandomSwitch[model]) >= (Config.Hitbox.RandomInterval or 0.5) then
-        RandomPartSelection[model] = math.random(1, 2) == 1 and "Head" or "Torso"
+    if not LastRandomSwitch[model] or (t - LastRandomSwitch[model]) >= 0.5 then
+        RandomPartSel[model] = math.random(1, 2) == 1 and "Head" or "Torso"
         LastRandomSwitch[model] = t
     end
-    return RandomPartSelection[model] or "Head"
+    return RandomPartSel[model] or "Head"
 end
 
-local function SaveOriginal(model, partName, part)
-    if not OriginalSizes[model] then
-        OriginalSizes[model] = {}
-        OriginalTransparencies[model] = {}
-    end
-    if not OriginalSizes[model][partName] then
-        OriginalSizes[model][partName] = part.Size
-        OriginalTransparencies[model][partName] = part.Transparency
+local function SaveOrig(model, pn, part)
+    if not OriginalSizes[model] then OriginalSizes[model] = {}; OriginalTransparencies[model] = {} end
+    if not OriginalSizes[model][pn] then
+        OriginalSizes[model][pn] = part.Size
+        OriginalTransparencies[model][pn] = part.Transparency
     end
 end
 
-local function RestoreHitbox(model)
+local function RestoreHB(model)
     if not OriginalSizes[model] then return end
-    for partName, origSize in pairs(OriginalSizes[model]) do
-        local part = model:FindFirstChild(partName)
-        if part then
-            pcall(function()
-                part.Size = origSize
-                part.Transparency = OriginalTransparencies[model][partName]
-            end)
-        end
+    for pn, sz in pairs(OriginalSizes[model]) do
+        local p = model:FindFirstChild(pn)
+        if p then pcall(function() p.Size = sz; p.Transparency = OriginalTransparencies[model][pn] end) end
     end
-    ExpandedModels[model] = nil
-    OriginalSizes[model] = nil
-    OriginalTransparencies[model] = nil
-    RandomPartSelection[model] = nil
-    LastRandomSwitch[model] = nil
+    ExpandedModels[model] = nil; OriginalSizes[model] = nil; OriginalTransparencies[model] = nil
+    RandomPartSel[model] = nil; LastRandomSwitch[model] = nil
 end
 
-local function CleanupAllHitboxes()
-    for model in pairs(ExpandedModels) do
-        if model and model.Parent then RestoreHitbox(model) end
-    end
-    ExpandedModels = {}
-    OriginalSizes = {}
-    OriginalTransparencies = {}
-    RandomPartSelection = {}
-    LastRandomSwitch = {}
+local function CleanupHB()
+    for m in pairs(ExpandedModels) do if m and m.Parent then RestoreHB(m) end end
+    ExpandedModels = {}; OriginalSizes = {}; OriginalTransparencies = {}; RandomPartSel = {}; LastRandomSwitch = {}
 end
 
-local function ExpandHitbox(model, partToModify, size)
-    for _, partName in ipairs({"Head", "Torso", "HumanoidRootPart"}) do
-        local part = model:FindFirstChild(partName)
-        if part and part:IsA("BasePart") then
-            SaveOriginal(model, partName, part)
+local function ExpandHB(model, target, size)
+    for _, pn in ipairs({"Head", "Torso", "HumanoidRootPart"}) do
+        local p = model:FindFirstChild(pn)
+        if p and p:IsA("BasePart") then
+            SaveOrig(model, pn, p)
             pcall(function()
-                if partName == partToModify then
-                    part.CanCollide = false
-                    part.Massless = true
-                    part.Size = Vector3.new(size, size, size)
-                    part.Transparency = Config.Hitbox.Transparency
-                elseif OriginalSizes[model] and OriginalSizes[model][partName] then
-                    part.Size = OriginalSizes[model][partName]
-                    part.Transparency = OriginalTransparencies[model][partName]
+                if pn == target then
+                    p.CanCollide = false; p.Massless = true
+                    p.Size = Vector3.new(size, size, size)
+                    p.Transparency = Config.Hitbox.Transparency
+                elseif OriginalSizes[model] and OriginalSizes[model][pn] then
+                    p.Size = OriginalSizes[model][pn]
+                    p.Transparency = OriginalTransparencies[model][pn]
                 end
             end)
         end
@@ -1415,87 +1206,59 @@ local function ExpandHitbox(model, partToModify, size)
     ExpandedModels[model] = true
 end
 
-local function UpdateHitboxes()
-    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
-        CleanupAllHitboxes()
-        return
-    end
-    
+local function UpdateHB()
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then CleanupHB() return end
     local now = tick()
-    if now - lastHitboxUpdate < HITBOX_UPDATE_INTERVAL then return end
+    if now - lastHitboxUpdate < HITBOX_INTERVAL then return end
     lastHitboxUpdate = now
     
     Camera = Workspace.CurrentCamera
     if not Camera then return end
     
-    local enemyModels = GetAllEnemyModels()
-    local shouldBeExpanded = {}
+    local enemies = GetAllEnemyModels()
+    local should = {}
     
-    for _, model in ipairs(enemyModels) do
-        local partToModify = Config.Hitbox.TargetPart
-        if partToModify == "Random" then
-            partToModify = GetRandomPartForModel(model)
-        elseif partToModify == "HumanoidRootPart" then
-            if not model:FindFirstChild("HumanoidRootPart") then
-                partToModify = "Torso"
-            end
-        end
+    for _, model in ipairs(enemies) do
+        local pt = Config.Hitbox.TargetPart
+        if pt == "Random" then pt = GetRandPart(model)
+        elseif pt == "HumanoidRootPart" and not model:FindFirstChild("HumanoidRootPart") then pt = "Torso" end
         
         if Config.Hitbox.Method == "HE (Static)" then
-            shouldBeExpanded[model] = { partToModify = partToModify, size = Config.Hitbox.MaxSize }
-        else -- DHE (Dynamic)
-            local checkPart = model:FindFirstChild(partToModify)
-                or model:FindFirstChild("Head")
-                or model:FindFirstChild("Torso")
-            if not checkPart then continue end
-            
-            local mousePos = UserInputService:GetMouseLocation()
-            local fovRadius = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
-            
-            local screenPos, onScreen = Camera:WorldToViewportPoint(checkPart.Position)
-            if not onScreen then continue end
-            
-            local screenDist = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-            if screenDist > fovRadius then continue end
-            
-            local proximityFactor = 1 - (screenDist / fovRadius)
-            local dynamicSize = 1 + (Config.Hitbox.MaxSize - 1) * proximityFactor
-            
-            shouldBeExpanded[model] = { partToModify = partToModify, size = dynamicSize }
+            should[model] = {part = pt, size = Config.Hitbox.MaxSize}
+        else
+            local cp = model:FindFirstChild(pt) or model:FindFirstChild("Head") or model:FindFirstChild("Torso")
+            if not cp then continue end
+            local mouse = UserInputService:GetMouseLocation()
+            local fov = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+            local sp, on = Camera:WorldToViewportPoint(cp.Position)
+            if not on then continue end
+            local d = (mouse - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d > fov then continue end
+            local f = 1 - (d / fov)
+            should[model] = {part = pt, size = 1 + (Config.Hitbox.MaxSize - 1) * f}
         end
     end
     
-    -- Restore models that shouldn't be expanded anymore
-    for model in pairs(ExpandedModels) do
-        if not shouldBeExpanded[model] then
-            if model and model.Parent then
-                RestoreHitbox(model)
-            else
-                ExpandedModels[model] = nil
-                OriginalSizes[model] = nil
-                OriginalTransparencies[model] = nil
-                RandomPartSelection[model] = nil
-                LastRandomSwitch[model] = nil
-            end
+    for m in pairs(ExpandedModels) do
+        if not should[m] then
+            if m and m.Parent then RestoreHB(m)
+            else ExpandedModels[m] = nil; OriginalSizes[m] = nil; OriginalTransparencies[m] = nil; RandomPartSel[m] = nil; LastRandomSwitch[m] = nil end
         end
     end
     
-    -- Apply expansions
-    for model, data in pairs(shouldBeExpanded) do
-        ExpandHitbox(model, data.partToModify, data.size)
-    end
+    for m, d in pairs(should) do ExpandHB(m, d.part, d.size) end
 end
 
 -- ============================================
--- HEARTBEAT LOOP: ESP + Hitbox updates
+-- HEARTBEAT LOOP
 -- ============================================
-local heartbeatConnection = RunService.Heartbeat:Connect(function()
+local hbConn = RunService.Heartbeat:Connect(function()
     UpdateESP()
-    UpdateHitboxes()
+    UpdateHB()
 end)
 
 -- ============================================
--- SIGNAL TO MAIN SCRIPT
+-- SIGNALS
 -- ============================================
 getgenv().AX_PF_HandlesESP = true
 getgenv().AX_PF_HandlesHitbox = true
@@ -1507,59 +1270,37 @@ getgenv().AX_PF_HandlesAimbot = true
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     Camera = Workspace.CurrentCamera
-    silentTarget = nil
-    silentTargetPlayer = nil
-    aimbotLockedModel = nil
-    CleanupAllHitboxes()
+    silentTarget = nil; silentTargetPlayer = nil; aimbotLockedModel = nil
+    CleanupHB()
     
-    -- Re-scan modules (they can change after respawn)
     task.wait(2)
+    -- Re-scan in case modules changed
     ScanGC()
     TrySharedRequire()
-    
-    -- Re-hook if needed
-    if not networkHooked then
-        SetupNetworkHook()
-    end
+    if not networkHooked then SetupNetworkHook() end
 end)
 
 -- ============================================
--- MODEL LIFECYCLE MONITORING
+-- MODEL LIFECYCLE
 -- ============================================
 task.spawn(function()
     local pf = GetPlayersFolder()
     if not pf then return end
     
-    local function MonitorFolder(teamFolder)
-        if not teamFolder:IsA("Folder") then return end
-        
-        teamFolder.ChildRemoved:Connect(function(child)
+    local function Monitor(folder)
+        if not (folder:IsA("Folder") or folder:IsA("Model")) then return end
+        folder.ChildRemoved:Connect(function(child)
             if child:IsA("Model") then
                 RemoveESP(child)
-                if ExpandedModels[child] then
-                    ExpandedModels[child] = nil
-                    OriginalSizes[child] = nil
-                    OriginalTransparencies[child] = nil
-                    RandomPartSelection[child] = nil
-                    LastRandomSwitch[child] = nil
-                end
-                if aimbotLockedModel == child then
-                    aimbotLockedModel = nil
-                end
+                ExpandedModels[child] = nil; OriginalSizes[child] = nil; OriginalTransparencies[child] = nil
+                RandomPartSel[child] = nil; LastRandomSwitch[child] = nil
+                if aimbotLockedModel == child then aimbotLockedModel = nil end
             end
         end)
     end
     
-    -- Monitor existing folders
-    for _, teamFolder in ipairs(pf:GetChildren()) do
-        MonitorFolder(teamFolder)
-    end
-    
-    -- Monitor new folders
-    pf.ChildAdded:Connect(function(teamFolder)
-        task.wait(0.1)
-        MonitorFolder(teamFolder)
-    end)
+    for _, f in ipairs(pf:GetChildren()) do Monitor(f) end
+    pf.ChildAdded:Connect(function(f) task.wait(0.1); Monitor(f) end)
 end)
 
 -- ============================================
@@ -1567,15 +1308,15 @@ end)
 -- ============================================
 getgenv().AX_PFLoaded = true
 
-local teamName = GetLocalTeamName() or "detecting..."
+local teamName = GetLocalTeamName() or GetLocalTeamColorName() or "detecting..."
 local silentMethod = networkHooked and "Network Hook" or (namecallHooked and "Namecall Fallback" or "UNAVAILABLE")
 
 print("  ╔═══════════════════════════════════════════════════╗")
-print("  ║     PF MODULE v4.0 - LOADED SUCCESSFULLY          ║")
+print("  ║     PF MODULE v4.1 - LOADED                       ║")
 print("  ╠═══════════════════════════════════════════════════╣")
 print("  ║  Silent Aim: " .. silentMethod)
-print("  ║  ESP:        Custom Drawing System")
-print("  ║  Hitbox:     PF Model Expansion")  
+print("  ║  ESP:        Drawing System")
+print("  ║  Hitbox:     PF Model Expansion")
 print("  ║  Aimbot:     Camera + MouseMoveRel")
 print("  ║  Team:       " .. teamName)
 print("  ╚═══════════════════════════════════════════════════╝")
