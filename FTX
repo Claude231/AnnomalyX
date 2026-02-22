@@ -1,0 +1,657 @@
+--[[
+    ANNOMALY X - FTX Module v1.0
+    Fate Trigger [FPS] - PlaceId: 134784668468620
+    
+    Fate Trigger es un FPS one-shot moderno.
+    Cubre los 4 metodos de raycast + Mouse.Hit + FireServer
+    porque sin decompilacion directa no se puede confirmar cual usa.
+    
+    Investigacion: scripts working usan Raycast con RaycastParams filter,
+    y Mouse.Hit como fallback. FireServer para position remota.
+]]
+
+if not getgenv().AX_Config then
+    local t = tick()
+    repeat task.wait() until getgenv().AX_Config or tick()-t > 30
+end
+local Config = getgenv().AX_Config
+
+local hookmetamethod    = hookmetamethod
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local checkcaller       = checkcaller or function() return false end
+local mousemoverel      = mousemoverel or function() end
+
+if not hookmetamethod or not getnamecallmethod then
+    getgenv().AX_FateTriggerLoaded        = true
+    getgenv().AX_FateTriggerHandlesSilent = false
+    return
+end
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local Camera           = Workspace.CurrentCamera
+local LocalPlayer      = Players.LocalPlayer
+local Mouse            = LocalPlayer:GetMouse()
+
+-- ============================================================
+-- CACHE DE JUGADORES
+-- ============================================================
+local _cachedPlayers = {}
+local _lastCache     = 0
+local function GetCachedPlayers()
+    local t = tick()
+    if t - _lastCache > 2 then
+        _cachedPlayers = Players:GetPlayers()
+        _lastCache = t
+    end
+    return _cachedPlayers
+end
+
+-- ============================================================
+-- TEAM CHECK
+-- ============================================================
+local function IsTeammate(p)
+    if not p or p == LocalPlayer then return false end
+    local ok, r = pcall(function()
+        return p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team
+    end)
+    return ok and r
+end
+
+-- ============================================================
+-- RAYCASTPARAMS PARA VISIBILITY
+-- ============================================================
+local _visParams = RaycastParams.new()
+_visParams.FilterType = Enum.RaycastFilterType.Exclude
+_visParams.IgnoreWater = true
+local function UpdateFilter()
+    local char = LocalPlayer.Character
+    local t = {Camera}
+    if char then table.insert(t, char) end
+    _visParams.FilterDescendantsInstances = t
+end
+UpdateFilter()
+
+-- ============================================================
+-- VISIBILITY
+-- ============================================================
+local function IsVisible(part)
+    if not part then return false end
+    local origin = Camera.CFrame.Position
+    local dir    = part.Position - origin
+    local dist   = dir.Magnitude
+    if dist < 2 then return true end
+    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), _visParams)
+    if not result then return true end
+    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
+end
+
+-- ============================================================
+-- POSICION EN PANTALLA
+-- ============================================================
+local function GetScreenPos(V3)
+    local pos, vis = Camera:WorldToScreenPoint(V3)
+    return Vector2.new(pos.X, pos.Y), vis
+end
+
+local function GetMousePos()
+    return Vector2.new(Mouse.X, Mouse.Y)
+end
+
+-- ============================================================
+-- DIRECTION HELPER
+-- Mantiene la magnitud original de la direccion del disparo
+-- ============================================================
+local function GetDirection(Origin, TargetPos)
+    return (TargetPos - Origin).Unit * (Origin - TargetPos).Magnitude
+end
+
+-- ============================================================
+-- GET CLOSEST PLAYER
+-- Busca el jugador mas cercano al mouse dentro del FOV
+-- Para one-shot FPS no se necesita prediccion agresiva
+-- ============================================================
+local FT_PARTS = {"Head", "HumanoidRootPart", "UpperTorso"}
+
+local function GetTargetPart(char, setting)
+    if not char then return nil end
+    if setting == "Random" then
+        local v = {}
+        for _, n in ipairs(FT_PARTS) do
+            if char:FindFirstChild(n) then table.insert(v, n) end
+        end
+        return #v > 0 and char:FindFirstChild(v[math.random(#v)]) or nil
+    end
+    return char:FindFirstChild(setting)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetClosestPlayer()
+    local bestDist = Config.FOV.Enabled and Config.FOV.Radius or 10000
+    local bestPart = nil
+    local mousePos = GetMousePos()
+
+    for _, plr in next, GetCachedPlayers() do
+        if plr == LocalPlayer then continue end
+        if Config.Silent.TeamCheck and IsTeammate(plr) then continue end
+
+        local char = plr.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then continue end
+        if char:FindFirstChildOfClass("ForceField") then continue end
+
+        local tp = GetTargetPart(char, Config.Silent.TargetPart or "Head")
+        if not tp then continue end
+
+        if Config.Silent.VisibleCheck and not IsVisible(tp) then continue end
+
+        local sp, vis = GetScreenPos(tp.Position)
+        if not vis then continue end
+
+        local d = (mousePos - sp).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestPart = tp
+        end
+    end
+
+    return bestPart
+end
+
+-- ============================================================
+-- VALIDATE RAYCAST ARGS
+-- ExpectedArguments para validar que los args son del tipo correcto
+-- ============================================================
+local ExpectedArgs = {
+    Raycast = {
+        count = 3, -- self, origin(V3), direction(V3), [params]
+        types = {"Instance", "Vector3", "Vector3"}
+    },
+    FindPartOnRay = {
+        count = 2,
+        types = {"Instance", "Ray"}
+    },
+    FindPartOnRayWithIgnoreList = {
+        count = 3,
+        types = {"Instance", "Ray", "table"}
+    },
+    FindPartOnRayWithWhitelist = {
+        count = 3,
+        types = {"Instance", "Ray", "table"}
+    }
+}
+
+local function ValidateArgs(args, spec)
+    if #args < spec.count then return false end
+    local matches = 0
+    for i, t in ipairs(spec.types) do
+        if typeof(args[i]) == t then matches = matches + 1 end
+    end
+    return matches >= spec.count
+end
+
+-- ============================================================
+-- HOOK 1: __namecall
+-- Cubre Raycast, FindPartOnRay y variantes
+-- Metodo Raycast: filtra por RaycastParams como ultimo arg
+-- Metodo FindPartOnRay: valida tipo Ray
+-- ============================================================
+task.delay(2, function()
+    if not LocalPlayer.Character then
+        local t = tick()
+        repeat task.wait(0.5) until LocalPlayer.Character or tick()-t > 15
+    end
+
+    local oldNC
+    oldNC = hookmetamethod(game, "__namecall", function(...)
+        local method = getnamecallmethod()
+        local args   = {...}
+
+        -- Verificar condiciones basicas primero (sin modificar nada)
+        if not (Config.Silent.Enabled and Config.Silent.Active) then
+            return oldNC(...)
+        end
+        if checkcaller() then return oldNC(...) end
+
+        local self = args[1]
+        if self ~= workspace and self ~= Workspace then
+            return oldNC(...)
+        end
+
+        -- ===== METODO 1: Workspace:Raycast() =====
+        -- Fate Trigger moderno usa este metodo
+        -- Filtro clave: RaycastParams como ultimo argumento = disparo real
+        if method == "Raycast" then
+            if ValidateArgs(args, ExpectedArgs.Raycast) then
+                -- OPCION A: tiene RaycastParams (moderno)
+                local hasParams = typeof(args[#args]) == "RaycastParams"
+                -- OPCION B: aceptar tambien sin params (algunos juegos no los pasan)
+                -- Para FT cubrir ambos casos
+                local origin    = args[2]
+                local direction = args[3]
+
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                    if math.random(100) <= Config.Silent.HitChance then
+                        local target = GetClosestPlayer()
+                        if target then
+                            args[3] = GetDirection(origin, target.Position)
+                            return oldNC(unpack(args))
+                        end
+                    end
+                end
+            end
+
+        -- ===== METODO 2: FindPartOnRay (legacy) =====
+        elseif method == "FindPartOnRay" or method == "findPartOnRay" then
+            if ValidateArgs(args, ExpectedArgs.FindPartOnRay) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local ray = args[2]
+                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
+                        return oldNC(unpack(args))
+                    end
+                end
+            end
+
+        -- ===== METODO 3: FindPartOnRayWithIgnoreList =====
+        elseif method == "FindPartOnRayWithIgnoreList" then
+            if ValidateArgs(args, ExpectedArgs.FindPartOnRayWithIgnoreList) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local ray = args[2]
+                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
+                        return oldNC(unpack(args))
+                    end
+                end
+            end
+
+        -- ===== METODO 4: FindPartOnRayWithWhitelist =====
+        elseif method == "FindPartOnRayWithWhitelist" then
+            if ValidateArgs(args, ExpectedArgs.FindPartOnRayWithWhitelist) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local ray = args[2]
+                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
+                        return oldNC(unpack(args))
+                    end
+                end
+            end
+
+        -- ===== METODO 5: FireServer =====
+        -- Fate Trigger puede enviar posicion de impacto al servidor
+        -- Redirigir argumentos CFrame/Vector3 al target
+        elseif method == "FireServer" then
+            local isRemote = false
+            pcall(function()
+                isRemote = typeof(self) == "Instance"
+                    and (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction")
+            end)
+            if isRemote then
+                local target = GetClosestPlayer()
+                if target and math.random(100) <= Config.Silent.HitChance then
+                    local tp = target.Position
+                    local camPos = Camera.CFrame.Position
+                    local modified = false
+                    for i = 2, #args do
+                        local a = args[i]
+                        if typeof(a) == "CFrame" then
+                            -- CFrame de impacto: reorientar hacia target
+                            args[i] = CFrame.new(a.Position, tp)
+                            modified = true
+                        elseif typeof(a) == "Vector3" then
+                            -- Solo modificar si parece una posicion de impacto
+                            -- (lejos de la camara, cerca del mundo de juego)
+                            local d = (a - camPos).Magnitude
+                            if d > 5 and d < 2000 then
+                                args[i] = tp
+                                modified = true
+                            end
+                        end
+                    end
+                    if modified then
+                        return oldNC(unpack(args))
+                    end
+                end
+            end
+        end
+
+        return oldNC(...)
+    end)
+end)
+
+-- ============================================================
+-- HOOK 2: __index Mouse.Hit / Mouse.Target
+-- Fate Trigger puede usar Mouse.Hit para obtener la direccion
+-- Este es el fallback mas importante para juegos FPS
+-- ============================================================
+task.delay(2, function()
+    if not LocalPlayer.Character then
+        local t = tick()
+        repeat task.wait(0.5) until LocalPlayer.Character or tick()-t > 15
+    end
+
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", function(self, index)
+        if self == Mouse and (index == "Hit" or index == "Target") then
+            if Config.Silent.Enabled and Config.Silent.Active
+                and not checkcaller()
+                and math.random(100) <= Config.Silent.HitChance then
+                local target = GetClosestPlayer()
+                if target then
+                    if index == "Hit" then
+                        return CFrame.new(target.Position)
+                    elseif index == "Target" then
+                        return target
+                    end
+                end
+            end
+        end
+        return oldIndex(self, index)
+    end)
+end)
+
+-- ============================================================
+-- AIMBOT
+-- ============================================================
+local _aimbotLocked = nil
+local _aimbotRnd    = "Head"
+local _aimbotSw     = 0
+
+local function IsPlayerValid(p)
+    if not p or not p.Parent or p == LocalPlayer then return false end
+    if Config.Aimbot.TeamCheck and IsTeammate(p) then return false end
+    local c = p.Character
+    if not c or c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetAimbotPart(char)
+    if not char then return nil end
+    local s = Config.Aimbot.TargetPart
+    if s == "Random" then
+        local t = tick()
+        if t - _aimbotSw > (Config.Aimbot.RandomInterval or 0.5) then
+            local v = {}
+            for _, n in ipairs(FT_PARTS) do
+                if char:FindFirstChild(n) then table.insert(v, n) end
+            end
+            if #v > 0 then _aimbotRnd = v[math.random(#v)] end
+            _aimbotSw = t
+        end
+        return char:FindFirstChild(_aimbotRnd) or char:FindFirstChild("Head")
+    end
+    return char:FindFirstChild(s)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetAimbotTarget()
+    Camera = Workspace.CurrentCamera if not Camera then return nil end
+    local fov    = Config.Aimbot.FOVRadius or 150
+    local vp     = Camera.ViewportSize
+    local center = Vector2.new(vp.X/2, vp.Y/2)
+    local mp     = UserInputService:GetMouseLocation()
+    local ref    = Config.Aimbot.Method == "Aimbot" and center or mp
+
+    if Config.Aimbot.Method == "Aimlock" and _aimbotLocked then
+        if IsPlayerValid(_aimbotLocked) then
+            local tp = GetAimbotPart(_aimbotLocked.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
+                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+        end
+        _aimbotLocked = nil
+    end
+
+    local best, bestD, bestP = nil, fov, nil
+    for _, plr in ipairs(GetCachedPlayers()) do
+        if not IsPlayerValid(plr) then continue end
+        local tp = GetAimbotPart(plr.Character)
+        if not tp then continue end
+        if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+        local sp, on = Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < bestD then bestD = d best = tp bestP = plr end
+    end
+    if Config.Aimbot.Method == "Aimlock" and bestP then _aimbotLocked = bestP end
+    return best
+end
+
+-- ============================================================
+-- ESP
+-- ============================================================
+local FTESP  = {}
+local _lastE = 0
+
+local function CreateESP(p)
+    if FTESP[p] then return end
+    local e = {}
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness=1 e.Box.Filled=false
+    e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Visible=false
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness=3 e.Outline.Filled=false
+    e.Outline.Color=Color3.fromRGB(0,0,0)
+    e.Outline.Transparency=0.5 e.Outline.Visible=false
+    e.Name = Drawing.new("Text")
+    e.Name.Size=13 e.Name.Center=true e.Name.Outline=true
+    e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
+    e.Distance = Drawing.new("Text")
+    e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true
+    e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Thickness=1 e.HealthBG.Filled=true
+    e.HealthBG.Color=Color3.fromRGB(0,0,0)
+    e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness=1 e.HealthBar.Filled=true
+    e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
+    FTESP[p] = e
+end
+
+local function RemoveESP(p)
+    local e = FTESP[p] if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    FTESP[p] = nil
+end
+
+local function HideESP(p)
+    local e = FTESP[p] if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+local function UpdateESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(FTESP) do HideESP(p) end return
+    end
+    local t = tick()
+    if t - _lastE < 0.08 then return end
+    _lastE = t
+    Camera = Workspace.CurrentCamera if not Camera then return end
+
+    local active = {}
+    for _, plr in ipairs(GetCachedPlayers()) do
+        if plr == LocalPlayer then continue end
+        active[plr] = true
+        local isTm = IsTeammate(plr)
+        if Config.ESP.TeamCheck and isTm then HideESP(plr) continue end
+        if not FTESP[plr] then pcall(function() CreateESP(plr) end) end
+        local esp = FTESP[plr] if not esp then continue end
+
+        local c    = plr.Character
+        local h    = c and c:FindFirstChildOfClass("Humanoid")
+        local rp   = c and (c:FindFirstChild("HumanoidRootPart")
+                       or c:FindFirstChild("UpperTorso")
+                       or c:FindFirstChild("Torso"))
+        local head = c and c:FindFirstChild("Head")
+
+        if not c or not h or not rp or h.Health <= 0
+            or c:FindFirstChildOfClass("ForceField") then
+            HideESP(plr) continue
+        end
+
+        local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+        if dist > Config.ESP.MaxDistance then HideESP(plr) continue end
+
+        local sp, on = Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideESP(plr) continue end
+
+        local hSP = head and select(1,
+            Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))) or sp
+        local fSP = select(1,
+            Camera:WorldToViewportPoint(rp.Position - Vector3.new(0,3,0)))
+
+        local height = math.max(math.abs(hSP.Y - fSP.Y), 10)
+        local width  = height / 2
+        local minX   = sp.X - width/2
+        local minY   = hSP.Y
+
+        local col
+        if isTm then
+            col = Color3.fromRGB(80,150,255)
+        else
+            local vis = head and IsVisible(head) or false
+            col = vis and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50)
+        end
+
+        if Config.ESP.Boxes then
+            esp.Outline.Size=Vector2.new(width+2,height+2)
+            esp.Outline.Position=Vector2.new(minX-1,minY-1)
+            esp.Outline.Visible=true
+            esp.Box.Size=Vector2.new(width,height)
+            esp.Box.Position=Vector2.new(minX,minY)
+            esp.Box.Color=col esp.Box.Visible=true
+        else esp.Box.Visible=false esp.Outline.Visible=false end
+
+        if Config.ESP.Names then
+            esp.Name.Text=plr.DisplayName or plr.Name
+            esp.Name.Position=Vector2.new(minX+width/2,minY-16)
+            esp.Name.Color=col esp.Name.Visible=true
+        else esp.Name.Visible=false end
+
+        if Config.ESP.Distance then
+            esp.Distance.Text=math.floor(dist).."m"
+            esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2)
+            esp.Distance.Visible=true
+        else esp.Distance.Visible=false end
+
+        if Config.ESP.Boxes and h then
+            local pct = math.clamp(h.Health/math.max(h.MaxHealth,1),0,1)
+            local bh  = height*pct
+            local hc  = pct>0.5
+                and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0)
+                or  Color3.fromRGB(255,math.floor(255*pct*2),0)
+            esp.HealthBG.Size=Vector2.new(3,height)
+            esp.HealthBG.Position=Vector2.new(minX-6,minY)
+            esp.HealthBG.Visible=true
+            esp.HealthBar.Size=Vector2.new(3,bh)
+            esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh))
+            esp.HealthBar.Color=hc esp.HealthBar.Visible=true
+        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+    end
+
+    for p in pairs(FTESP) do
+        if not active[p] then
+            if not p.Parent then RemoveESP(p) else HideESP(p) end
+        end
+    end
+end
+
+-- ============================================================
+-- LOOPS
+-- ============================================================
+task.delay(2, function()
+    RunService.RenderStepped:Connect(function()
+        Camera = Workspace.CurrentCamera
+        if Config.Aimbot.Enabled and Config.Aimbot.Active then
+            local t = GetAimbotTarget()
+            if t then
+                local pos = t.Position
+                pcall(function()
+                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 then
+                        local v = t.AssemblyLinearVelocity
+                        if v and v.Magnitude > 0.5 then
+                            pos = pos + v * Config.Aimbot.Prediction
+                        end
+                    end
+                end)
+                local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+                if Config.Aimbot.Method == "Aimbot" then
+                    local cur = Camera.CFrame
+                    local tgt = CFrame.lookAt(cur.Position, pos)
+                    Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+                else
+                    local sp, on = Camera:WorldToViewportPoint(pos)
+                    if on then
+                        local mp = UserInputService:GetMouseLocation()
+                        local dx,dy = sp.X-mp.X, sp.Y-mp.Y
+                        local d = math.sqrt(dx*dx+dy*dy)
+                        if d > 1 then
+                            local spd = math.clamp(1/sm,0.05,0.8)
+                            local mx = math.clamp(dx*spd,-150,150)
+                            local my = math.clamp(dy*spd,-150,150)
+                            if math.abs(mx)>0.3 or math.abs(my)>0.3 then
+                                mousemoverel(mx,my)
+                            end
+                        end
+                    end
+                end
+            else
+                if not Config.Aimbot.Active then _aimbotLocked = nil end
+            end
+        else
+            if not Config.Aimbot.Active then _aimbotLocked = nil end
+        end
+    end)
+end)
+
+task.delay(3, function()
+    RunService.Heartbeat:Connect(function()
+        UpdateESP()
+    end)
+end)
+
+-- ============================================================
+-- FLAGS
+-- ============================================================
+getgenv().AX_FateTriggerLoaded         = true
+getgenv().AX_FateTriggerHandlesAimbot  = true
+getgenv().AX_FateTriggerHandlesESP     = true
+getgenv().AX_FateTriggerHandlesSilent  = true
+
+-- ============================================================
+-- INIT JUGADORES
+-- ============================================================
+task.delay(1, function()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then pcall(function() CreateESP(p) end) end
+    end
+end)
+
+Players.PlayerAdded:Connect(function(p)
+    task.delay(2, function() pcall(function() CreateESP(p) end) end)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if _aimbotLocked == p then _aimbotLocked = nil end
+    RemoveESP(p)
+    for i,v in ipairs(_cachedPlayers) do
+        if v == p then table.remove(_cachedPlayers,i) break end
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    _aimbotLocked = nil
+    UpdateFilter()
+end)
