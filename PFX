@@ -6,7 +6,6 @@
     ║  Aimbot: cameraInterface angles + trajectory prediction   ║
     ║  ESP: replicationInterface + health + weapon display      ║
     ║  Hitbox: replicationInterface sphere hitboxes              ║
-    ║  Extras: No Recoil, No Spread                             ║
     ║                                                           ║
     ║  Creator: ElSacaLeche                                     ║
     ╚═══════════════════════════════════════════════════════════╝
@@ -27,8 +26,6 @@
     - Aimbot via cameraInterface angle manipulation
     - ESP via replicationInterface with health/weapon/distance
     - Hitbox via replicationInterface sphere parts
-    - No Recoil via recoilSprings.applyImpulse hook
-    - No Spread via contentInterface.getWeaponData hook
     - Proper cleanup function via AX_PF_Cleanup
 ]]
 
@@ -118,7 +115,6 @@ local cameraInterface = modules.CameraInterface
 local publicSettings = modules.PublicSettings
 local contentInterface = modules.ContentInterface
 local bulletObject = modules.BulletObject
-local recoilSprings = modules.RecoilSprings
 local desktopHitBox = modules.DesktopHitBox
 local roundSystem = modules.RoundSystemClientInterface
 
@@ -359,36 +355,6 @@ function network:send(name, ...)
     end
 
     return originalSend(self, name, ...)
-end
-
--- ═══════════════════════════════════════════
--- HOOKS: NO RECOIL & NO SPREAD
--- ═══════════════════════════════════════════
-
-local originalApplyImpulse
-if recoilSprings and recoilSprings.applyImpulse then
-    originalApplyImpulse = recoilSprings.applyImpulse
-    function recoilSprings.applyImpulse(...)
-        if Config.Silent.Enabled and Config.Silent.Active then return end
-        -- No Recoil check via extra config
-        if getgenv().AX_PF_NoRecoil then return end
-        return originalApplyImpulse(...)
-    end
-end
-
-local originalGetWeaponData
-if contentInterface and contentInterface.getWeaponData then
-    originalGetWeaponData = contentInterface.getWeaponData
-    function contentInterface.getWeaponData(weaponName, makeClone)
-        local data = originalGetWeaponData(weaponName, makeClone)
-        if makeClone and getgenv().AX_PF_NoSpread and type(data) == "table" then
-            pcall(function() setreadonly(data, false) end)
-            data.hipfirespread = 0
-            data.hipfirestability = 99999
-            data.hipfirespreadrecover = 99999
-        end
-        return data
-    end
 end
 
 -- ═══════════════════════════════════════════
@@ -915,8 +881,6 @@ local function PFCleanup()
     -- Restore hooks
     if originalBulletNew then bulletObject.new = originalBulletNew end
     if originalSend then network.send = originalSend end
-    if originalApplyImpulse and recoilSprings then recoilSprings.applyImpulse = originalApplyImpulse end
-    if originalGetWeaponData and contentInterface then contentInterface.getWeaponData = originalGetWeaponData end
 
     -- Disconnect events
     for _, conn in pfConnections do
@@ -968,8 +932,6 @@ getgenv().AX_PF_HandlesESP = true
 getgenv().AX_PF_HandlesSilent = true
 getgenv().AX_PF_HandlesHitbox = true
 getgenv().AX_PF_Cleanup = PFCleanup
-getgenv().AX_PF_NoRecoil = false
-getgenv().AX_PF_NoSpread = false
 
 -- ═══════════════════════════════════════════
 -- NOTIFICATIONS
@@ -990,4 +952,3 @@ print("  ✅ Silent Aim: bulletObject.new + network.send")
 print("  ✅ Aimbot: cameraInterface angles + trajectory")
 print("  ✅ ESP: replicationInterface + health + weapon")
 print("  ✅ Hitbox: replicationInterface spheres")
-print("  ✅ No Recoil + No Spread hooks ready")
