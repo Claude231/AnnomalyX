@@ -1,176 +1,124 @@
---[[
-    ╔═══════════════════════════════════════════════════════════╗
-    ║        ANNOMALY X - PHANTOM FORCES SILENT AIM 2025       ║
-    ║                 FUNCIONA EN RONIX, SOLARA, DELTA          ║
-    ║                     100% FUNCIONAL HOY                    ║
-    ╚═══════════════════════════════════════════════════════════╝
-]]
+-- Phantom Forces Silent Aim Module v2026 (Replication + Trajectory Redirect)
+-- Load this after your main config & services
+-- Assumes getgenv().AX_Config exists with .Silent subtable
 
-if getgenv().AX_PF_LOADED then return end
-getgenv().AX_PF_LOADED = true
+if not getgenv().AX_Config or not getgenv().AX_Config.Silent.Enabled then return end
 
-local Config = getgenv().AX_Config or {
-    Silent = {Enabled = true, Active = true, TargetPart = "Head", HitChance = 100, VisibleCheck = true},
-    ESP = {Enabled = true, Active = true, Boxes = true, Names = true, Distance = true, TeamCheck = false},
-    Aimbot = {Enabled = true, Active = true, Method = "Aimbot", Smoothness = 5, FOVRadius = 150},
-    Hitbox = {Enabled = true, Active = true, TargetPart = "Head", MaxSize = 12, Method = "HE (Static)"}
-}
+local Players        = game:GetService("Players")
+local RunService     = game:GetService("RunService")
+local Workspace      = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
+local Camera         = Workspace.CurrentCamera
+local LocalPlayer    = Players.LocalPlayer
 
--- ENCONTRAR EL UNRELIABLE REMOTE (EL QUE USA PF PARA BALAS)
-local UnreliableRemote = nil
-for _, v in pairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
-    if v:IsA("UnreliableRemoteEvent") then
-        UnreliableRemote = v
-        break
+-- Config shortcuts (adapt from your AX_Config)
+local Silent         = getgenv().AX_Config.Silent
+local FOV            = getgenv().AX_Config.FOV or {Enabled = false, Radius = 150}
+local Prediction     = getgenv().AX_Config.Aimbot.Prediction or 0.135  -- PF bullet drop time factor
+
+-- Cache require modules (PF-specific)
+local ReplicationInterface = nil
+local PublicSettings       = nil
+local BulletObject         = nil
+local NetworkClient        = nil
+
+for _, v in ipairs(getgc(true)) do
+    if type(v) == "table" then
+        if rawget(v, "operateOnAllEntries") then ReplicationInterface = v end
+        if rawget(v, "bulletAcceleration") then PublicSettings = v end
+    elseif type(v) == "function" and debug.getinfo(v).name == "require" then
+        local success, mod = pcall(v, game.ReplicatedStorage.Modules)
+        if success then
+            if mod and mod.BulletObject then BulletObject = mod.BulletObject end
+            if mod and mod.Network then NetworkClient = mod.Network end
+        end
     end
 end
 
-if not UnreliableRemote then
-    warn("No se encontró UnreliableRemoteEvent")
+if not (ReplicationInterface and PublicSettings and BulletObject and NetworkClient) then
+    warn("[Silent PF] Failed to cache PF modules — falling back or error.")
     return
 end
 
-print("UnreliableRemote encontrado:", UnreliableRemote.Name)
+-- Silent target cache
+local CurrentSilentTarget = nil
 
--- TEAM DETECTION (FUNCIONA CON CARPETAS HASHEADAS)
-local myTeamFolder = nil
-local enemyTeamFolder = nil
-
-local function UpdateTeams()
-    myTeamFolder = nil
-    enemyTeamFolder = nil
-    for _, folder in ipairs(Workspace.Players:GetChildren()) do
-        if folder:FindFirstChild(LocalPlayer.Name) then
-            myTeamFolder = folder
-        else
-            enemyTeamFolder = folder
-        end
-    end
-end
-
-UpdateTeams()
-LocalPlayer.CharacterAdded:Connect(function() task.wait(3); UpdateTeams() end)
-
-local function IsEnemy(model)
-    if not model or not model.Parent then return false end
-    if model.Name == LocalPlayer.Name then return false end
-    if not myTeamFolder then return true end
-    return model.Parent ~= myTeamFolder
-end
-
--- VISIBILITY CHECK
-local function IsVisible(model)
-    local head = model:FindFirstChild("Head") or model:FindFirstChild("Torso")
-    if not head then return false end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {LocalPlayer.Character, model, Workspace.Ignore}
-    local result = workspace:Raycast(Camera.CFrame.Position, head.Position - Camera.CFrame.Position, params)
-    return result == nil or result.Instance:IsDescendantOf(model)
-end
-
--- TARGET FINDER
-local function GetTarget()
-    local closest = nil
-    local closestDist = Config.FOV.Radius or 300
+local function GetClosestSilent()
     local mousePos = UserInputService:GetMouseLocation()
-    
-    if enemyTeamFolder then
-        for _, model in ipairs(enemyTeamFolder:GetChildren()) do
-            if model:IsA("Model") and IsEnemy(model) then
-                local partName = Config.Silent.TargetPart == "Random" and (math.random() > 0.5 and "Head" or "Torso") or Config.Silent.TargetPart
-                local part = model:FindFirstChild(partName) or model:FindFirstChild("Head") or model:FindFirstChild("Torso")
-                if part then
-                    if not Config.Silent.VisibleCheck or IsVisible(model) then
-                        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-                        if onScreen then
-                            local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                            if dist < closestDist then
-                                closestDist = dist
-                                closest = {part = part, model = model}
-                            end
-                        end
-                    end
-                end
-            end
+    local center   = Camera.ViewportSize / 2
+    local best, dist = nil, FOV.Enabled and FOV.Radius or math.huge
+
+    ReplicationInterface.operateOnAllEntries(function(player, entry)
+        if player == LocalPlayer or (Silent.TeamCheck and player.Team == LocalPlayer.Team) then return end
+        local charModel = entry._thirdPersonObject and entry._thirdPersonObject._characterHash
+        if not charModel then return end
+
+        local part = charModel[Silent.TargetPart or "Head"]
+        if not part or not part.Parent then return end
+
+        local hum = charModel:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return end
+
+        local screen, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then return end
+
+        local mag = (Vector2.new(screen.X, screen.Y) - mousePos).Magnitude
+        if mag < dist then
+            dist = mag
+            best = {Player = player, Part = part, Pos = part.Position, Entry = entry}
         end
-    end
-    return closest
+    end)
+
+    return best
 end
 
--- SILENT AIM 2025 - FUNCIONA EN RONIX
-local old
-old = hookfunction(UnreliableRemote.FireServer, function(self, ...)
-    local args = {...}
-    
-    if Config.Silent.Enabled and Config.Silent.Active and #args >= 2 then
-        local target = GetTarget()
-        if target and math.random(1, 100) <= Config.Silent.HitChance then
-            -- PF envía balas como tabla en args[2]
-            local bulletData = args[2]
-            if type(bulletData) == "table" and bulletData.bullets then
-                for _, bullet in pairs(bulletData.bullets) do
-                    if type(bullet) == "table" and bullet[1] then
-                        local origin = bulletData.firepos or Camera.CFrame.Position
-                        local direction = (target.part.Position - origin).Unit
-                        bullet[1] = direction * 10000 -- dirección + distancia
-                    end
-                end
+-- Throttle update
+RunService.Heartbeat:Connect(function()
+    if not Silent.Active then CurrentSilentTarget = nil return end
+    CurrentSilentTarget = GetClosestSilent()
+end)
+
+-- Hook network send for newbullets
+local oldSend = NetworkClient.send
+NetworkClient.send = function(self, name, ...)
+    if name == "newbullets" and CurrentSilentTarget and math.random() <= (Silent.HitChance or 1) then
+        local args = {...}
+        local data = args[2]  -- usually {firepos, bullets, etc.}
+        if data and data.bullets then
+            local targetPos = CurrentSilentTarget.Pos
+            if Prediction > 0 then
+                local vel = CurrentSilentTarget.Entry._velspring.t or Vector3.zero
+                targetPos += vel * Prediction
+            end
+
+            local velocity = PublicSettings.trajectory(
+                data.firepos,
+                PublicSettings.bulletAcceleration,
+                targetPos,
+                data.bullets[1][1].Magnitude,
+                CurrentSilentTarget.Entry._velspring.t
+            )
+
+            for i = 1, #data.bullets do
+                data.bullets[i][1] = velocity + Vector3.new(
+                    (math.random()-0.5)*0.4,  -- small offset randomization
+                    (math.random()-0.5)*0.4,
+                    (math.random()-0.5)*0.4
+                )
             end
         end
     end
-    
-    return old(self, ...)
-end)
+    return oldSend(self, name, ...)
+end
 
-print("SILENT AIM 2025 CARGADO - FUNCIONA EN RONIX")
-
--- ESP SIMPLE PERO FUNCIONAL
-local ESP = {}
-RunService.RenderStepped:Connect(function()
-    if not Config.ESP.Active then return end
-    
-    for _, model in ipairs(Workspace.Players:GetDescendants()) do
-        if model:IsA("Model") and model ~= LocalPlayer.Character and IsEnemy(model) then
-            local head = model:FindFirstChild("Head")
-            if head then
-                local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                if onScreen and Config.ESP.Boxes then
-                    if not ESP[model] then
-                        ESP[model] = {box = Drawing.new("Square"), name = Drawing.new("Text")}
-                        ESP[model].box.Thickness = 2
-                        ESP[model].box.Filled = false
-                        ESP[model].box.Color = Color3.fromRGB(255, 0, 0)
-                        ESP[model].name.Size = 13
-                        ESP[model].name.Center = true
-                        ESP[model].name.Outline = true
-                        ESP[model].name.Font = 2
-                    end
-                    
-                    local height = 60
-                    local width = height * 0.6
-                    ESP[model].box.Size = Vector2.new(width, height)
-                    ESP[model].box.Position = Vector2.new(pos.X - width/2, pos.Y - height/2)
-                    ESP[model].box.Visible = true
-                    
-                    ESP[model].name.Text = model.Name
-                    ESP[model].name.Position = Vector2.new(pos.X, pos.Y - height/2 - 15)
-                    ESP[model].name.Visible = true
-                elseif ESP[model] then
-                    ESP[model].box.Visible = false
-                    ESP[model].name.Visible = false
-                end
-            end
-        end
+-- Optional BulletObject hook for client prediction (helps visual consistency)
+local oldNewBullet = BulletObject.new
+BulletObject.new = function(data)
+    if Silent.Active and CurrentSilentTarget then
+        -- similar redirect logic if needed for local sim
     end
-end)
+    return oldNewBullet(data)
+end
 
-print("ANNOMALY X PF 2025 - SILENT AIM + ESP CARGADO CORRECTAMENTE")
-print("FUNCIONA EN RONIX - TESTEADO HOY")
+print("[Nyx PF Silent] Loaded — replication trajectory redirect active.")
