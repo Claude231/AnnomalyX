@@ -1,123 +1,1065 @@
 --[[
-    PHANTOM FORCES SILENT + MEMORY AIM v11.7 - FEBRERO 2025
-    Usado por top 1 leaderboards actualmente
-    → Memory aim (mata aunque no mires)
-    → Resolver perfecto contra desync/jitter/abuse
-    → Prediction por ping + gravity real (0 bans)
-    → Triple hook (namecall + index + getrenv spoof)
-    → Hitscan expansion inteligente
+╔═══════════════════════════════════════════════════════════╗
+║ ANNOMALY X - Phantom Forces Module v4.0                  ║
+║                                                           ║
+║ Silent Aim: PF internal hooks (network.send +             ║
+║             bulletObject.new) - Wapus method              ║
+║ Aimbot: PF camera angle manipulation                      ║
+║ ESP: replicationInterface + Drawing API                   ║
+║ Hitbox: Character model expansion via replication          ║
+║                                                           ║
+║ Creator: ElSacaLeche                                      ║
+╚═══════════════════════════════════════════════════════════╝
+
+HOW SILENT AIM WORKS IN PF:
+  PF does NOT use workspace:Raycast() for bullets.
+  PF uses its own internal module system:
+    1. network:send("newbullets", id, bulletData, time)
+       - bulletData.bullets = {{directionUnitVector, ticket}, ...}
+       - We modify bullet[1] to redirect direction to target
+    2. bulletObject.new(bulletData)
+       - bulletData.velocity = full velocity vector
+       - We modify velocity to redirect visual bullet
+  Both hooks are needed: #1 for server hit, #2 for client hit detection
+
+HOW AIMBOT WORKS IN PF:
+  PF has its own camera controller (cameraInterface)
+  We modify cameraObj._angles directly for smooth PF-native aiming
+  Includes trajectory prediction with bullet drop + enemy velocity
+
+ENEMY DETECTION:
+  Uses replicationInterface.operateOnAllEntries() to iterate
+  all players with their replication data (position, team, health)
 ]]
 
-getgenv().PF = {
-    Enabled = true,
-    TeamCheck = false,
-    VisibleCheck = false, -- false porque PF AC ya no checkea visibility en silent
-    HitChance = 100,
-    Prediction = 0.1337, -- valor mágico actual
-    JumpOffset = 0.39,   -- resuelve el drop cuando saltan
-    Memory = true,       -- memory aim (lo más roto ahora)
-    Triggerbot = true,
-    Wallbang = true
-}
-
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-
-local Gravity = Vector3.new(0, -workspace.Gravity, 0)
-local Target = nil
-
-local function GetBestTarget()
-    local Closest = nil
-    local ClosestDist = math.huge
-    
-    for _, v in pairs(Players:GetPlayers()) do
-        if v == LocalPlayer or (getgenv().PF.TeamCheck and v.Team == LocalPlayer.Team) then continue end
-        local Char = v.Character
-        if not Char or not Char:FindFirstChild("Head") or not Char:FindFirstChild("Humanoid") or Char.Humanoid.Health <= 0 then continue end
-        
-        local Head = Char.Head
-        local Root = Char.HumanoidRootPart
-        
-        local Pos = Head.Position
-        local Vel = Root.Velocity
-        
-        -- Prediction real de 2025 (gravity + ping)
-        local Ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-        local Distance = (Root.Position - Camera.CFrame.Position).Magnitude
-        local PredictAmount = getgenv().PF.Prediction + (Ping * 0.9) + (Distance / 1350)
-        
-        if Root.Velocity.Y < -50 then -- cayendo o saltando
-            PredictAmount = PredictAmount + getgenv().PF.JumpOffset
-        end
-        
-        Pos = Pos + (Vel * PredictAmount) + (Gravity * PredictAmount^2 / 2)
-        
-        local ScreenPos, OnScreen = Camera:WorldToViewportPoint(Pos)
-        if not OnScreen then continue end
-        
-        local Dist = (Vector2.new(Mouse.X, Mouse.Y) - Vector2.new(ScreenPos.X, ScreenPos.Y)).Magnitude
-        if Dist < ClosestDist then
-            ClosestDist = Dist
-            Closest = {Player = v, Position = Pos, Part = Head}
-        end
-    end
-    
-    return Closest
+-- ============================================
+-- SECTION 1: CONFIG & DEPENDENCIES
+-- ============================================
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
 end
 
--- TRIPLE HOOK (el que usan TODOS los pagos de PF ahora)
-local OldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    if not getgenv().PF.Enabled or checkcaller() then return OldNamecall(self, ...) end
-    
-    local Method = getnamecallmethod()
-    local Args = {...}
-    
-    if Target and (Method == "FindPartOnRayWithIgnoreList" or Method == "Raycast") then
-        if math.random(1,100) <= getgenv().PF.HitChance then
-            local Offset = Vector3.new(
-                math.random(-35,35)/100,
-                math.random(-35,35)/100,
-                math.random(-35,35)/100
-            )
-            
-            if Args[1] and Args[1].Direction then
-                Args[1] = Ray.new(Args[1].Origin, (Target.Position + Offset - Args[1].Origin))
-            elseif #Args >= 2 then
-                Args[2] = (Target.Position + Offset - Args[1])
+local Config = getgenv().AX_Config
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- SECTION 2: PF MODULE DISCOVERY
+-- ============================================
+local PF_READY = false
+local modules = {}
+local moduleCache
+
+-- Find PF module cache via getgc
+if not getgc then
+    warn("[AX PF v4] getgc not available - module cannot function")
+    getgenv().AX_PFLoaded = false
+    return
+end
+
+for _, v in getgc(true) do
+    if type(v) == "table" and rawget(v, "ScreenCull") and rawget(v, "NetworkClient") then
+        moduleCache = v
+        break
+    end
+end
+
+if not moduleCache then
+    warn("[AX PF v4] Could not find PF module cache")
+    getgenv().AX_PFLoaded = false
+    return
+end
+
+for name, data in moduleCache do
+    if data then
+        if type(data) == "table" then
+            modules[name] = data.module or data
+        else
+            modules[name] = data
+        end
+    end
+end
+
+-- Extract needed modules
+local network = modules.NetworkClient
+local bulletObject = modules.BulletObject
+local replicationInterface = modules.ReplicationInterface
+local weaponInterface = modules.WeaponControllerInterface
+local charInterface = modules.CharacterInterface
+local cameraInterface = modules.CameraInterface
+local publicSettings = modules.PublicSettings
+local contentInterface = modules.ContentInterface
+local desktopHitBox = modules.DesktopHitBox
+local bulletcheck = modules.BulletCheck
+local raycastLib = modules.Raycast
+
+if not network or not bulletObject or not replicationInterface then
+    warn("[AX PF v4] Critical PF modules not found")
+    getgenv().AX_PFLoaded = false
+    return
+end
+
+PF_READY = true
+print("[AX PF v4] PF modules loaded successfully")
+
+-- Find network connections table
+local networkConnections
+for _, v in getgc(true) do
+    if type(v) == "table" and rawget(v, "died") and rawget(v, "smallaward") then
+        networkConnections = v
+        break
+    end
+end
+
+-- ============================================
+-- SECTION 3: MATH UTILITIES
+-- ============================================
+
+-- Quartic/cubic/quadratic equation solver (from Wapus)
+local function solve(v44, v45, v46, v47, v48)
+    if not v44 then
+        return
+    elseif v44 > -1.0E-10 and v44 < 1.0E-10 then
+        return solve(v45, v46, v47, v48)
+    else
+        if v48 then
+            local v49 = -v45 / (4 * v44)
+            local v50 = (v46 + v49 * (3 * v45 + 6 * v44 * v49)) / v44
+            local v51 = (v47 + v49 * (2 * v46 + v49 * (3 * v45 + 4 * v44 * v49))) / v44
+            local v52 = (v48 + v49 * (v47 + v49 * (v46 + v49 * (v45 + v44 * v49)))) / v44
+            if v51 > -1.0E-10 and v51 < 1.0E-10 then
+                local v53, v54 = solve(1, v50, v52)
+                if not v54 or v54 < 0 then
+                    return
+                else
+                    local v55 = math.sqrt(v53)
+                    local v56 = math.sqrt(v54)
+                    return v49 - v56, v49 - v55, v49 + v55, v49 + v56
+                end
+            else
+                local v57, _, v59 = solve(1, 2 * v50, v50 * v50 - 4 * v52, -v51 * v51)
+                local v60 = v59 or v57
+                if not v60 then return end
+                local v61 = math.sqrt(math.abs(v60))
+                local v62, v63 = solve(1, v61, (v60 + v50 - v51 / v61) / 2)
+                local v64, v65 = solve(1, -v61, (v60 + v50 + v51 / v61) / 2)
+                if v62 and v64 then
+                    return v49 + v62, v49 + v63, v49 + v64, v49 + v65
+                elseif v62 then
+                    return v49 + v62, v49 + v63
+                elseif v64 then
+                    return v49 + v64, v49 + v65
+                end
             end
-            
-            return OldNamecall(self, unpack(Args))
+        elseif v47 then
+            local v66 = -v45 / (3 * v44)
+            local v67 = -(v46 + v66 * (2 * v45 + 3 * v44 * v66)) / (3 * v44)
+            local v68 = -(v47 + v66 * (v46 + v66 * (v45 + v44 * v66))) / (2 * v44)
+            local v69 = v68 * v68 - v67 * v67 * v67
+            local v70 = math.sqrt(math.abs(v69))
+            if v69 > 0 then
+                local v71 = v68 + v70
+                local v72 = v68 - v70
+                v71 = v71 < 0 and -(-v71) ^ 0.3333333333333333 or v71 ^ 0.3333333333333333
+                local v73 = v72 < 0 and -(-v72) ^ 0.3333333333333333 or v72 ^ 0.3333333333333333
+                return v66 + v71 + v73
+            else
+                local v74 = math.atan2(v70, v68) / 3
+                local v75 = 2 * math.sqrt(v67)
+                return v66 - v75 * math.sin(v74 + 0.5235987755982988),
+                       v66 + v75 * math.sin(v74 - 0.5235987755982988),
+                       v66 + v75 * math.cos(v74)
+            end
+        elseif v46 then
+            local v76 = -v45 / (2 * v44)
+            local v77 = v76 * v76 - v46 / v44
+            if v77 < 0 then
+                return
+            else
+                local v78 = math.sqrt(v77)
+                return v76 - v78, v76 + v78
+            end
+        elseif v45 then
+            return -v45 / v44
+        end
+        return
+    end
+end
+
+-- Complex trajectory with enemy velocity prediction
+local function complexTrajectory(origin, accel, target, speed, enemyVel)
+    local ld = target - origin
+    local a = -accel
+    local e = enemyVel or Vector3.zero
+
+    local r1, r2, r3, r4 = solve(
+        a:Dot(a) * 0.25,
+        a:Dot(e),
+        a:Dot(ld) + e:Dot(e) - speed ^ 2,
+        ld:Dot(e) * 2,
+        ld:Dot(ld)
+    )
+
+    local x = (r1 and r1 > 0 and r1) or (r2 and r2 > 0 and r2) or (r3 and r3 > 0 and r3) or r4
+    if not x or x <= 0 then
+        -- Fallback: simple direction
+        return ld.Unit * speed, ld.Magnitude / speed
+    end
+
+    local v = (ld + e * x + 0.5 * a * x ^ 2) / x
+    return v, x
+end
+
+-- Simple trajectory (no enemy velocity)
+local function simpleTrajectory(origin, accel, target, speed)
+    local f = -accel
+    local ld = target - origin
+    local aa = f:Dot(f)
+    local b = 4 * ld:Dot(ld)
+    local denom = 2 * aa
+    if math.abs(denom) < 1e-10 then
+        return ld.Unit * speed, ld.Magnitude / speed
+    end
+    local k = (4 * (f:Dot(ld) + speed * speed)) / denom
+    local disc = k * k - b / aa
+    if disc < 0 then
+        return ld.Unit * speed, ld.Magnitude / speed
+    end
+    local v = disc ^ 0.5
+    local t, t0 = k - v, k + v
+    t = t < 0 and t0 or t
+    if t < 0 then
+        return ld.Unit * speed, ld.Magnitude / speed
+    end
+    t = t ^ 0.5
+    return f * t / 2 + ld / t, t
+end
+
+-- Convert velocity vector to pitch/yaw angles
+local function toAnglesYX(v)
+    local x, y, z = v.X, v.Y, v.Z
+    local mag = (x * x + y * y + z * z) ^ 0.5
+    if mag < 1e-10 then return 0, 0, 0 end
+    return math.asin(y / mag), math.atan2(-x, -z), 0
+end
+
+-- ============================================
+-- SECTION 4: RAYCAST & VISIBILITY
+-- ============================================
+local ignoreFolder = Workspace:FindFirstChild("Ignore")
+local physicsIgnore = {
+    Workspace.Terrain,
+    Camera,
+    Workspace:FindFirstChild("Players"),
+}
+if ignoreFolder then table.insert(physicsIgnore, ignoreFolder) end
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+
+local function pfRaycast(origin, direction, filterList)
+    rayParams.FilterDescendantsInstances = filterList or physicsIgnore
+    local result = Workspace:Raycast(origin, direction, rayParams)
+    return result and result.Instance, result and result.Position, result and result.Normal
+end
+
+local function isTargetVisible(targetPos)
+    Camera = Workspace.CurrentCamera
+    if not Camera then return false end
+    local origin = Camera.CFrame.Position
+    local dir = targetPos - origin
+    local hit = pfRaycast(origin, dir, physicsIgnore)
+    return not hit
+end
+
+-- ============================================
+-- SECTION 5: MOVEMENT TRACKING
+-- ============================================
+local movementCache = { time = {}, position = {} }
+
+-- ============================================
+-- SECTION 6: BULLET ACCELERATION
+-- ============================================
+local bulletAcceleration = Vector3.new(0, -100, 0)
+pcall(function()
+    if publicSettings and publicSettings.bulletAcceleration then
+        bulletAcceleration = publicSettings.bulletAcceleration
+    end
+end)
+
+-- ============================================
+-- SECTION 7: TARGET FINDING
+-- ============================================
+local function getTargetPart(characterHash, partSetting)
+    if not characterHash then return nil end
+
+    if partSetting == "Random" then
+        local parts = {}
+        for _, name in {"Head", "Torso"} do
+            if characterHash[name] then
+                table.insert(parts, characterHash[name])
+            end
+        end
+        return parts[math.random(1, math.max(#parts, 1))]
+    end
+
+    local mapping = {
+        ["Head"] = "Head",
+        ["Torso"] = "Torso",
+        ["HumanoidRootPart"] = "Torso",
+        ["UpperTorso"] = "Torso",
+        ["LowerTorso"] = "Torso",
+    }
+
+    local mapped = mapping[partSetting] or partSetting
+    return characterHash[mapped] or characterHash["Head"] or characterHash["Torso"]
+end
+
+local function getClosestEnemy(fovRadius, visibleCheck, partName)
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil, nil, nil end
+
+    local mousePos = UserInputService:GetMouseLocation()
+    local bestDist = fovRadius or math.huge
+    local bestPos, bestEntry, bestPart
+
+    pcall(function()
+        replicationInterface.operateOnAllEntries(function(player, entry)
+            if player == LocalPlayer then return end
+            if not entry._isEnemy then return end
+
+            local thirdPerson = entry._thirdPersonObject
+            if not thirdPerson then return end
+
+            local character = thirdPerson._characterModelHash
+            if not character then return end
+
+            local part = getTargetPart(character, partName or "Head")
+            if not part then return end
+
+            local targetPos = part.Position
+            local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
+
+            if not onScreen or screenPos.Z <= 0 then return end
+
+            local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+
+            if screenDist >= bestDist then return end
+
+            if visibleCheck then
+                if not isTargetVisible(targetPos) then return end
+            end
+
+            bestDist = screenDist
+            bestPos = targetPos
+            bestEntry = entry
+            bestPart = part
+        end)
+    end)
+
+    return bestPos, bestEntry, bestPart
+end
+
+-- Get enemy velocity from movement cache
+local function getEnemyVelocity(player)
+    local posCache = movementCache.position[player]
+    local timeCache = movementCache.time
+
+    if posCache and posCache[15] and posCache[1] and timeCache[15] and timeCache[1] then
+        local dt = timeCache[15] - timeCache[1]
+        if math.abs(dt) > 0.001 then
+            return (posCache[15] - posCache[1]) / dt
         end
     end
-    
-    return OldNamecall(self, ...)
-end))
 
--- Memory aim hook (el que hace que pegues aunque no mires)
-hookfunction(Workspace.FindPartOnRayWithIgnoreList, newcclosure(function(...)
-    if not getgenv().PF.Memory or checkcaller() or not Target then return OldNamecall(...) end
-    local Args = {...}
-    Args[1] = Ray.new(Args[1].Origin, (Target.Position - Args[1].Origin).Unit * 1000)
-    return OldNamecall(unpack(Args))
-end))
+    return Vector3.zero
+end
 
--- Loop principal
-RunService.Heartbeat:Connect(function()
-    Target = GetBestTarget()
-    
-    -- Triggerbot integrado (los top lo usan así)
-    if getgenv().PF.Triggerbot and Target then
-        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-            mouse1press()
-            task.wait()
-            mouse1release()
+-- Get current weapon data
+local function getWeaponData()
+    local controller, weapon, data
+    pcall(function()
+        controller = weaponInterface.getActiveWeaponController()
+        weapon = controller and controller:getActiveWeapon()
+        data = weapon and weapon._weaponData
+    end)
+    return controller, weapon, data
+end
+
+-- ============================================
+-- SECTION 8: SILENT AIM HOOKS
+-- ============================================
+local originalSend = network.send
+local originalBulletNew = bulletObject.new
+
+-- Hook network:send for "newbullets"
+function network:send(name, ...)
+    if name == "newbullets" then
+        if Config.Silent.Enabled and Config.Silent.Active then
+            if math.random(1, 100) <= (Config.Silent.HitChance or 100) then
+                local fov = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+                local targetPos, entry, part = getClosestEnemy(
+                    fov,
+                    Config.Silent.VisibleCheck,
+                    Config.Silent.TargetPart
+                )
+
+                if targetPos and entry then
+                    local uniqueId, bulletData, time = ...
+
+                    if bulletData and bulletData.bullets and bulletData.firepos then
+                        local _, weapon, wepData = getWeaponData()
+                        local bulletSpeed = wepData and wepData.bulletspeed or 2000
+                        local enemyVel = getEnemyVelocity(entry._player)
+
+                        local ok, velocity = pcall(function()
+                            return complexTrajectory(
+                                bulletData.firepos,
+                                bulletAcceleration,
+                                targetPos,
+                                bulletSpeed,
+                                enemyVel
+                            )
+                        end)
+
+                        if ok and velocity then
+                            local dir = velocity.Unit
+                            for _, bullet in bulletData.bullets do
+                                bullet[1] = dir
+                            end
+                        end
+                    end
+
+                    return originalSend(self, name, ...)
+                end
+            end
         end
     end
-end))
 
-getgenv().PF_Silent_Loaded = true
-print("⚡ PF SILENT + MEMORY v11.7 2025 INDETECTABLE CARGADO ⚡")
+    return originalSend(self, name, ...)
+end
+
+-- Hook bulletObject.new for visual bullet redirection
+function bulletObject.new(bulletData)
+    if bulletData and bulletData.onplayerhit then
+        if Config.Silent.Enabled and Config.Silent.Active then
+            if math.random(1, 100) <= (Config.Silent.HitChance or 100) then
+                local fov = Config.FOV.Enabled and Config.FOV.Radius or math.huge
+                local targetPos, entry, part = getClosestEnemy(
+                    fov,
+                    Config.Silent.VisibleCheck,
+                    Config.Silent.TargetPart
+                )
+
+                if targetPos and entry and bulletData.velocity then
+                    local enemyVel = getEnemyVelocity(entry._player)
+
+                    local ok, velocity = pcall(function()
+                        return complexTrajectory(
+                            bulletData.position,
+                            bulletData.acceleration or bulletAcceleration,
+                            targetPos,
+                            bulletData.velocity.Magnitude,
+                            enemyVel
+                        )
+                    end)
+
+                    if ok and velocity then
+                        bulletData.velocity = velocity
+                    end
+                end
+            end
+        end
+    end
+
+    return originalBulletNew(bulletData)
+end
+
+print("[AX PF v4] Silent Aim hooks installed")
+
+-- ============================================
+-- SECTION 9: AIMBOT SYSTEM
+-- ============================================
+local pi = math.pi
+local tau = 2 * pi
+local aimTime = nil
+local aimbotLockedEntry = nil
+
+-- ============================================
+-- SECTION 10: ESP SYSTEM
+-- ============================================
+local ESP_Objects = {}
+local ESP_LastUpdate = 0
+local ESP_UPDATE_RATE = 0.04
+
+local function CreateESP(player)
+    if ESP_Objects[player] then return end
+
+    local e = {}
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1
+    e.Box.Filled = false
+    e.Box.Visible = false
+
+    e.Outline = Drawing.new("Square")
+    e.Outline.Thickness = 3
+    e.Outline.Filled = false
+    e.Outline.Color = Color3.fromRGB(0, 0, 0)
+    e.Outline.Transparency = 0.5
+    e.Outline.Visible = false
+
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13
+    e.Name.Center = true
+    e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255, 255, 255)
+    e.Name.Visible = false
+
+    e.Distance = Drawing.new("Text")
+    e.Distance.Size = 12
+    e.Distance.Center = true
+    e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200, 200, 200)
+    e.Distance.Visible = false
+
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Thickness = 1
+    e.HealthBG.Filled = true
+    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
+    e.HealthBG.Transparency = 0.5
+    e.HealthBG.Visible = false
+
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Thickness = 1
+    e.HealthBar.Filled = true
+    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    e.HealthBar.Visible = false
+
+    e.Weapon = Drawing.new("Text")
+    e.Weapon.Size = 11
+    e.Weapon.Center = true
+    e.Weapon.Outline = true
+    e.Weapon.Color = Color3.fromRGB(200, 200, 200)
+    e.Weapon.Visible = false
+
+    ESP_Objects[player] = e
+end
+
+local function RemoveESP(player)
+    local e = ESP_Objects[player]
+    if not e then return end
+    for _, d in pairs(e) do
+        pcall(function() d:Remove() end)
+    end
+    ESP_Objects[player] = nil
+end
+
+local function HideESP(player)
+    local e = ESP_Objects[player]
+    if not e then return end
+    for _, d in pairs(e) do
+        pcall(function() d.Visible = false end)
+    end
+end
+
+local function CleanupAllESP()
+    for player in pairs(ESP_Objects) do
+        RemoveESP(player)
+    end
+    ESP_Objects = {}
+end
+
+-- ============================================
+-- SECTION 11: HITBOX SYSTEM
+-- ============================================
+local HB_ExpandedParts = {}
+local HB_OriginalSizes = {}
+local HB_LastUpdate = 0
+local HB_UPDATE_RATE = 0.05
+
+local function CleanupAllHitboxes()
+    for part, origSize in pairs(HB_OriginalSizes) do
+        pcall(function()
+            if part and part.Parent then
+                part.Size = origSize
+            end
+        end)
+    end
+    HB_ExpandedParts = {}
+    HB_OriginalSizes = {}
+end
+
+-- ============================================
+-- SECTION 12: MAIN UPDATE LOOPS
+-- ============================================
+
+-- Movement tracking (Stepped - physics rate)
+local steppedConn = RunService.Stepped:Connect(function()
+    if not PF_READY then return end
+
+    local clockTime = os.clock()
+
+    pcall(function()
+        replicationInterface.operateOnAllEntries(function(player, entry)
+            if player == LocalPlayer then return end
+            if not entry._isEnemy then return end
+
+            local thirdPerson = entry._thirdPersonObject
+            local character = thirdPerson and thirdPerson._characterModelHash
+
+            movementCache.position[player] = movementCache.position[player] or {}
+
+            if character and character.Head then
+                table.insert(movementCache.position[player], 1, character.Head.Position)
+                if #movementCache.position[player] > 15 then
+                    table.remove(movementCache.position[player], 16)
+                end
+            end
+        end)
+    end)
+
+    table.insert(movementCache.time, 1, clockTime)
+    if #movementCache.time > 15 then
+        table.remove(movementCache.time, 16)
+    end
+end)
+
+-- Aimbot + FOV (RenderStepped - visual rate)
+local renderConn = RunService.RenderStepped:Connect(function(dt)
+    if not PF_READY then return end
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    -- === AIMBOT ===
+    if Config.Aimbot.Enabled and Config.Aimbot.Active then
+        local clockTime = os.clock()
+        local aimbotFOV = Config.Aimbot.FOVRadius or 150
+
+        -- Get aimbot target part setting
+        local partSetting = Config.Aimbot.TargetPart or "Head"
+
+        -- For aimlock, try to keep locked target
+        if Config.Aimbot.Method == "Aimlock" and aimbotLockedEntry then
+            local tp = aimbotLockedEntry._thirdPersonObject
+            local ch = tp and tp._characterModelHash
+            if not ch then
+                aimbotLockedEntry = nil
+            end
+        end
+
+        local targetPos, entry, part
+
+        if Config.Aimbot.Method == "Aimlock" and aimbotLockedEntry then
+            -- Use locked target
+            entry = aimbotLockedEntry
+            local tp = entry._thirdPersonObject
+            local ch = tp and tp._characterModelHash
+            part = ch and getTargetPart(ch, partSetting)
+            targetPos = part and part.Position
+        end
+
+        if not targetPos then
+            targetPos, entry, part = getClosestEnemy(
+                aimbotFOV,
+                Config.Aimbot.VisibleCheck,
+                partSetting
+            )
+            if Config.Aimbot.Method == "Aimlock" and entry then
+                aimbotLockedEntry = entry
+            end
+        end
+
+        if targetPos and entry then
+            aimTime = aimTime or clockTime
+
+            -- Get weapon data for trajectory
+            local _, weapon, wepData = getWeaponData()
+            local bulletSpeed = wepData and wepData.bulletspeed or 2000
+            local enemyVel = getEnemyVelocity(entry._player)
+
+            -- Calculate trajectory-compensated velocity
+            local ok, velocity = pcall(function()
+                return complexTrajectory(
+                    Camera.CFrame.Position,
+                    bulletAcceleration,
+                    targetPos,
+                    bulletSpeed,
+                    enemyVel
+                )
+            end)
+
+            if ok and velocity then
+                -- Try PF internal camera system first
+                local usedPFCamera = false
+                pcall(function()
+                    local cameraObj = cameraInterface:getActiveCamera()
+                    if cameraObj and cameraObj._angles then
+                        local vx, vy = toAnglesYX(velocity)
+                        local maxAngle = cameraObj._maxAngle or (pi / 2)
+                        local minAngle = cameraObj._minAngle or (-pi / 2)
+                        local x = math.clamp(vx, minAngle, maxAngle)
+                        local cy = cameraObj._angles.Y
+                        local y = (vy + pi - cy) % tau - pi + cy
+                        local newAngles = Vector3.new(x, y, 0)
+
+                        -- Smoothing
+                        local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+                        if sm > 1 then
+                            local factor = math.clamp(1 / sm, 0.01, 1)
+                            newAngles = cameraObj._angles:Lerp(newAngles, factor)
+                        end
+
+                        cameraObj._delta = (newAngles - cameraObj._angles) / math.max(dt, 0.001)
+                        cameraObj._angles = newAngles
+                        usedPFCamera = true
+                    end
+                end)
+
+                -- Fallback: Camera.CFrame method
+                if not usedPFCamera then
+                    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+                    local cur = Camera.CFrame
+                    local tgt = CFrame.lookAt(cur.Position, targetPos)
+                    Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1 / sm)
+                end
+            end
+        else
+            aimTime = nil
+            if not Config.Aimbot.Active then
+                aimbotLockedEntry = nil
+            end
+        end
+    else
+        aimTime = nil
+        aimbotLockedEntry = nil
+    end
+end)
+
+-- ESP + Hitbox (Heartbeat - game rate)
+local heartbeatConn = RunService.Heartbeat:Connect(function()
+    if not PF_READY then return end
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local now = os.clock()
+
+    -- === ESP UPDATE ===
+    if Config.ESP.Enabled and Config.ESP.Active then
+        if now - ESP_LastUpdate >= ESP_UPDATE_RATE then
+            ESP_LastUpdate = now
+
+            local activePlayers = {}
+
+            pcall(function()
+                replicationInterface.operateOnAllEntries(function(player, entry)
+                    if player == LocalPlayer then return end
+
+                    local thirdPerson = entry._thirdPersonObject
+                    if not thirdPerson then
+                        HideESP(player)
+                        return
+                    end
+
+                    local character = thirdPerson._characterModelHash
+                    local rootPart = thirdPerson._rootPart
+                    if not character or not rootPart then
+                        HideESP(player)
+                        return
+                    end
+
+                    local isEnemy = entry._isEnemy
+
+                    -- Team check
+                    if Config.ESP.TeamCheck and not isEnemy then
+                        HideESP(player)
+                        return
+                    end
+
+                    activePlayers[player] = true
+
+                    -- Distance check
+                    local rootPos = rootPart.Position
+                    local dist = (Camera.CFrame.Position - rootPos).Magnitude
+                    if dist > (Config.ESP.MaxDistance or 1000) then
+                        HideESP(player)
+                        return
+                    end
+
+                    -- Screen check
+                    local sp, onScreen = Camera:WorldToViewportPoint(rootPos)
+                    if not onScreen then
+                        HideESP(player)
+                        return
+                    end
+
+                    -- Create ESP if needed
+                    if not ESP_Objects[player] then
+                        CreateESP(player)
+                    end
+                    local esp = ESP_Objects[player]
+                    if not esp then return end
+
+                    -- Calculate box
+                    local head = character.Head
+                    local headSP = sp
+                    if head then
+                        headSP = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                    end
+                    local footSP = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
+
+                    local height = math.abs(headSP.Y - footSP.Y)
+                    if height < 10 then height = 10 end
+                    local width = height / 2
+
+                    local minX = sp.X - width / 2
+                    local minY = headSP.Y
+
+                    -- Color
+                    local espColor
+                    if not isEnemy then
+                        espColor = Color3.fromRGB(80, 150, 255)
+                    else
+                        local vis = isTargetVisible(rootPos)
+                        espColor = vis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+                    end
+
+                    -- Boxes
+                    if Config.ESP.Boxes then
+                        esp.Outline.Size = Vector2.new(width + 2, height + 2)
+                        esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
+                        esp.Outline.Visible = true
+
+                        esp.Box.Size = Vector2.new(width, height)
+                        esp.Box.Position = Vector2.new(minX, minY)
+                        esp.Box.Color = espColor
+                        esp.Box.Visible = true
+                    else
+                        esp.Box.Visible = false
+                        esp.Outline.Visible = false
+                    end
+
+                    -- Name
+                    if Config.ESP.Names then
+                        esp.Name.Text = player.Name
+                        esp.Name.Position = Vector2.new(minX + width / 2, minY - 16)
+                        esp.Name.Color = espColor
+                        esp.Name.Visible = true
+                    else
+                        esp.Name.Visible = false
+                    end
+
+                    -- Distance
+                    if Config.ESP.Distance then
+                        esp.Distance.Text = math.floor(dist) .. "m"
+                        esp.Distance.Position = Vector2.new(minX + width / 2, minY + height + 2)
+                        esp.Distance.Visible = true
+                    else
+                        esp.Distance.Visible = false
+                    end
+
+                    -- Health bar
+                    local health = 100
+                    pcall(function() health = entry:getHealth() or 100 end)
+                    local healthPct = math.clamp(health / 100, 0, 1)
+
+                    if Config.ESP.Boxes and healthPct < 1 then
+                        local barHeight = height * healthPct
+                        local healthColor
+                        if healthPct > 0.5 then
+                            healthColor = Color3.fromRGB(
+                                math.floor(255 * (1 - healthPct) * 2), 255, 0
+                            )
+                        else
+                            healthColor = Color3.fromRGB(
+                                255, math.floor(255 * healthPct * 2), 0
+                            )
+                        end
+
+                        esp.HealthBG.Size = Vector2.new(3, height)
+                        esp.HealthBG.Position = Vector2.new(minX - 6, minY)
+                        esp.HealthBG.Visible = true
+
+                        esp.HealthBar.Size = Vector2.new(3, barHeight)
+                        esp.HealthBar.Position = Vector2.new(minX - 6, minY + (height - barHeight))
+                        esp.HealthBar.Color = healthColor
+                        esp.HealthBar.Visible = true
+                    else
+                        esp.HealthBG.Visible = false
+                        esp.HealthBar.Visible = false
+                    end
+
+                    -- Weapon name
+                    local weaponName = nil
+                    pcall(function()
+                        local wObj = entry:getWeaponObject()
+                        if entry:isAlive() and wObj then
+                            weaponName = wObj.weaponName
+                        end
+                    end)
+
+                    if Config.ESP.Distance and weaponName then
+                        esp.Weapon.Text = weaponName
+                        esp.Weapon.Position = Vector2.new(minX + width / 2, minY + height + 15)
+                        esp.Weapon.Visible = true
+                    else
+                        esp.Weapon.Visible = false
+                    end
+                end)
+            end)
+
+            -- Cleanup ESP for players no longer active
+            for player in pairs(ESP_Objects) do
+                if not activePlayers[player] then
+                    if not player.Parent then
+                        RemoveESP(player)
+                    else
+                        HideESP(player)
+                    end
+                end
+            end
+        end
+    else
+        for player in pairs(ESP_Objects) do
+            HideESP(player)
+        end
+    end
+
+    -- === HITBOX UPDATE ===
+    if Config.Hitbox.Enabled and Config.Hitbox.Active then
+        if now - HB_LastUpdate >= HB_UPDATE_RATE then
+            HB_LastUpdate = now
+
+            local expandedThisTick = {}
+
+            pcall(function()
+                replicationInterface.operateOnAllEntries(function(player, entry)
+                    if player == LocalPlayer then return end
+                    if not entry._isEnemy then return end
+
+                    local thirdPerson = entry._thirdPersonObject
+                    if not thirdPerson then return end
+
+                    local character = thirdPerson._characterModelHash
+                    if not character then return end
+
+                    -- Determine which part to expand
+                    local partSetting = Config.Hitbox.TargetPart or "Head"
+                    if partSetting == "Random" then
+                        partSetting = math.random(1, 2) == 1 and "Head" or "Torso"
+                    end
+
+                    local part = character[partSetting] or character["Head"] or character["Torso"]
+                    if not part then return end
+
+                    -- Calculate size
+                    local size = Config.Hitbox.MaxSize or 10
+
+                    if Config.Hitbox.Method == "DHE (Dynamic)" then
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                        if not onScreen then return end
+                        local mousePos = UserInputService:GetMouseLocation()
+                        local fovR = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or (Config.FOV.Radius or 300)
+                        local screenDist = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+                        if screenDist > fovR then return end
+                        local factor = 1 - (screenDist / fovR)
+                        size = 1 + (size - 1) * factor
+                    end
+
+                    -- Save original and expand
+                    if not HB_OriginalSizes[part] then
+                        HB_OriginalSizes[part] = part.Size
+                    end
+
+                    pcall(function()
+                        part.Size = Vector3.new(size, size, size)
+                        part.Transparency = Config.Hitbox.Transparency or 0.5
+                        part.CanCollide = false
+                    end)
+
+                    expandedThisTick[part] = true
+                end)
+            end)
+
+            -- Restore parts that shouldn't be expanded anymore
+            for part, origSize in pairs(HB_OriginalSizes) do
+                if not expandedThisTick[part] then
+                    pcall(function()
+                        if part and part.Parent then
+                            part.Size = origSize
+                        end
+                    end)
+                    HB_OriginalSizes[part] = nil
+                    HB_ExpandedParts[part] = nil
+                end
+            end
+        end
+    else
+        CleanupAllHitboxes()
+    end
+end)
+
+-- ============================================
+-- SECTION 13: CLEANUP
+-- ============================================
+
+-- Player leaving cleanup
+Players.PlayerRemoving:Connect(function(player)
+    RemoveESP(player)
+    movementCache.position[player] = nil
+    if aimbotLockedEntry and aimbotLockedEntry._player == player then
+        aimbotLockedEntry = nil
+    end
+end)
+
+-- Character respawn cleanup
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    aimTime = nil
+    aimbotLockedEntry = nil
+    CleanupAllHitboxes()
+end)
+
+-- ============================================
+-- SECTION 14: SIGNALS TO MAIN SCRIPT
+-- ============================================
+getgenv().AX_PF_HandlesESP = true
+getgenv().AX_PF_HandlesHitbox = true
+getgenv().AX_PF_HandlesAimbot = true
+getgenv().AX_PFLoaded = true
+
+-- Store cleanup function for unloading
+getgenv().AX_PF_Cleanup = function()
+    -- Restore original functions
+    pcall(function() network.send = originalSend end)
+    pcall(function() bulletObject.new = originalBulletNew end)
+
+    -- Disconnect loops
+    pcall(function() steppedConn:Disconnect() end)
+    pcall(function() renderConn:Disconnect() end)
+    pcall(function() heartbeatConn:Disconnect() end)
+
+    -- Cleanup visuals
+    CleanupAllESP()
+    CleanupAllHitboxes()
+
+    print("[AX PF v4] Module unloaded, hooks restored")
+end
+
+-- ============================================
+-- LOADED
+-- ============================================
+print("═══════════════════════════════════════════════")
+print(" ✅ PF MODULE v4.0 LOADED")
+print(" ✅ Silent Aim: network.send + bulletObject.new hooks")
+print(" ✅ Aimbot: PF camera angle manipulation")
+print(" ✅ ESP: replicationInterface + Drawing API")
+print(" ✅ Hitbox: Character model expansion")
+print(" ✅ Trajectory: Bullet drop + enemy velocity prediction")
+print("═══════════════════════════════════════════════")
