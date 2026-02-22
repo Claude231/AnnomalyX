@@ -1,13 +1,12 @@
 --[[
-    ANNOMALY X - FTX Module v1.0
+    ANNOMALY X - FTX Module v1.1
     Fate Trigger [FPS] - PlaceId: 134784668468620
     
-    Fate Trigger es un FPS one-shot moderno.
-    Cubre los 4 metodos de raycast + Mouse.Hit + FireServer
-    porque sin decompilacion directa no se puede confirmar cual usa.
-    
-    Investigacion: scripts working usan Raycast con RaycastParams filter,
-    y Mouse.Hit como fallback. FireServer para position remota.
+    Fix v1.1:
+    - FireServer ahora interceptado correctamente (estaba bloqueado por self==workspace check)
+    - __namecall reestructurado: workspace check solo para raycast methods
+    - Mouse.Hit hook separado e independiente
+    - ValidateArgs mejorado
 ]]
 
 if not getgenv().AX_Config then
@@ -66,6 +65,7 @@ end
 local _visParams = RaycastParams.new()
 _visParams.FilterType = Enum.RaycastFilterType.Exclude
 _visParams.IgnoreWater = true
+
 local function UpdateFilter()
     local char = LocalPlayer.Character
     local t = {Camera}
@@ -75,7 +75,7 @@ end
 UpdateFilter()
 
 -- ============================================================
--- VISIBILITY
+-- VISIBILITY CHECK
 -- ============================================================
 local function IsVisible(part)
     if not part then return false end
@@ -89,7 +89,7 @@ local function IsVisible(part)
 end
 
 -- ============================================================
--- POSICION EN PANTALLA
+-- HELPERS
 -- ============================================================
 local function GetScreenPos(V3)
     local pos, vis = Camera:WorldToScreenPoint(V3)
@@ -100,18 +100,13 @@ local function GetMousePos()
     return Vector2.new(Mouse.X, Mouse.Y)
 end
 
--- ============================================================
--- DIRECTION HELPER
--- Mantiene la magnitud original de la direccion del disparo
--- ============================================================
+-- Mantiene la magnitud original del disparo apuntando al target
 local function GetDirection(Origin, TargetPos)
     return (TargetPos - Origin).Unit * (Origin - TargetPos).Magnitude
 end
 
 -- ============================================================
 -- GET CLOSEST PLAYER
--- Busca el jugador mas cercano al mouse dentro del FOV
--- Para one-shot FPS no se necesita prediccion agresiva
 -- ============================================================
 local FT_PARTS = {"Head", "HumanoidRootPart", "UpperTorso"}
 
@@ -145,7 +140,6 @@ local function GetClosestPlayer()
 
         local tp = GetTargetPart(char, Config.Silent.TargetPart or "Head")
         if not tp then continue end
-
         if Config.Silent.VisibleCheck and not IsVisible(tp) then continue end
 
         local sp, vis = GetScreenPos(tp.Position)
@@ -162,42 +156,29 @@ local function GetClosestPlayer()
 end
 
 -- ============================================================
--- VALIDATE RAYCAST ARGS
--- ExpectedArguments para validar que los args son del tipo correcto
+-- VALIDATE ARGS
 -- ============================================================
-local ExpectedArgs = {
-    Raycast = {
-        count = 3, -- self, origin(V3), direction(V3), [params]
-        types = {"Instance", "Vector3", "Vector3"}
-    },
-    FindPartOnRay = {
-        count = 2,
-        types = {"Instance", "Ray"}
-    },
-    FindPartOnRayWithIgnoreList = {
-        count = 3,
-        types = {"Instance", "Ray", "table"}
-    },
-    FindPartOnRayWithWhitelist = {
-        count = 3,
-        types = {"Instance", "Ray", "table"}
-    }
-}
+local function ValidateRaycast(args)
+    -- args[1]=self(Instance), args[2]=origin(V3), args[3]=dir(V3)
+    return #args >= 3
+        and typeof(args[1]) == "Instance"
+        and typeof(args[2]) == "Vector3"
+        and typeof(args[3]) == "Vector3"
+end
 
-local function ValidateArgs(args, spec)
-    if #args < spec.count then return false end
-    local matches = 0
-    for i, t in ipairs(spec.types) do
-        if typeof(args[i]) == t then matches = matches + 1 end
-    end
-    return matches >= spec.count
+local function ValidateRay(args)
+    -- args[1]=self(Instance), args[2]=Ray
+    return #args >= 2
+        and typeof(args[1]) == "Instance"
+        and typeof(args[2]) == "Ray"
 end
 
 -- ============================================================
--- HOOK 1: __namecall
--- Cubre Raycast, FindPartOnRay y variantes
--- Metodo Raycast: filtra por RaycastParams como ultimo arg
--- Metodo FindPartOnRay: valida tipo Ray
+-- HOOK __namecall
+-- ESTRUCTURA CORRECTA:
+--   Raycast/FindPartOnRay  → requiere self == workspace
+--   FireServer             → requiere self == RemoteEvent (NO workspace)
+-- En v1.0 el bug era: early return con self!=workspace mataba FireServer
 -- ============================================================
 task.delay(2, function()
     if not LocalPlayer.Character then
@@ -210,43 +191,57 @@ task.delay(2, function()
         local method = getnamecallmethod()
         local args   = {...}
 
-        -- Verificar condiciones basicas primero (sin modificar nada)
+        -- Salida rapida si silent aim esta desactivado o es llamada interna
+        if checkcaller() then return oldNC(...) end
         if not (Config.Silent.Enabled and Config.Silent.Active) then
             return oldNC(...)
         end
-        if checkcaller() then return oldNC(...) end
 
         local self = args[1]
-        if self ~= workspace and self ~= Workspace then
-            return oldNC(...)
-        end
 
-        -- ===== METODO 1: Workspace:Raycast() =====
-        -- Fate Trigger moderno usa este metodo
-        -- Filtro clave: RaycastParams como ultimo argumento = disparo real
-        if method == "Raycast" then
-            if ValidateArgs(args, ExpectedArgs.Raycast) then
-                -- OPCION A: tiene RaycastParams (moderno)
-                local hasParams = typeof(args[#args]) == "RaycastParams"
-                -- OPCION B: aceptar tambien sin params (algunos juegos no los pasan)
-                -- Para FT cubrir ambos casos
-                local origin    = args[2]
-                local direction = args[3]
+        -- ===================================================
+        -- BLOQUE A: RAYCAST EN WORKSPACE
+        -- ===================================================
+        if self == workspace or self == Workspace then
 
-                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
-                    if math.random(100) <= Config.Silent.HitChance then
-                        local target = GetClosestPlayer()
-                        if target then
-                            args[3] = GetDirection(origin, target.Position)
-                            return oldNC(unpack(args))
-                        end
+            -- METODO 1: Workspace:Raycast() — FPS moderno
+            -- No necesita RaycastParams obligatorio para FT
+            if method == "Raycast" and ValidateRaycast(args) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        args[3] = GetDirection(args[2], target.Position)
+                        return oldNC(unpack(args))
                     end
                 end
-            end
 
-        -- ===== METODO 2: FindPartOnRay (legacy) =====
-        elseif method == "FindPartOnRay" or method == "findPartOnRay" then
-            if ValidateArgs(args, ExpectedArgs.FindPartOnRay) then
+            -- METODO 2: FindPartOnRay (legacy)
+            elseif (method == "FindPartOnRay" or method == "findPartOnRay")
+                and ValidateRay(args) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local ray = args[2]
+                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
+                        return oldNC(unpack(args))
+                    end
+                end
+
+            -- METODO 3: FindPartOnRayWithIgnoreList
+            elseif method == "FindPartOnRayWithIgnoreList"
+                and ValidateRay(args) then
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local ray = args[2]
+                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
+                        return oldNC(unpack(args))
+                    end
+                end
+
+            -- METODO 4: FindPartOnRayWithWhitelist
+            elseif method == "FindPartOnRayWithWhitelist"
+                and ValidateRay(args) then
                 if math.random(100) <= Config.Silent.HitChance then
                     local target = GetClosestPlayer()
                     if target then
@@ -257,65 +252,46 @@ task.delay(2, function()
                 end
             end
 
-        -- ===== METODO 3: FindPartOnRayWithIgnoreList =====
-        elseif method == "FindPartOnRayWithIgnoreList" then
-            if ValidateArgs(args, ExpectedArgs.FindPartOnRayWithIgnoreList) then
-                if math.random(100) <= Config.Silent.HitChance then
-                    local target = GetClosestPlayer()
-                    if target then
-                        local ray = args[2]
-                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
-                        return oldNC(unpack(args))
-                    end
-                end
-            end
-
-        -- ===== METODO 4: FindPartOnRayWithWhitelist =====
-        elseif method == "FindPartOnRayWithWhitelist" then
-            if ValidateArgs(args, ExpectedArgs.FindPartOnRayWithWhitelist) then
-                if math.random(100) <= Config.Silent.HitChance then
-                    local target = GetClosestPlayer()
-                    if target then
-                        local ray = args[2]
-                        args[2] = Ray.new(ray.Origin, GetDirection(ray.Origin, target.Position))
-                        return oldNC(unpack(args))
-                    end
-                end
-            end
-
-        -- ===== METODO 5: FireServer =====
-        -- Fate Trigger puede enviar posicion de impacto al servidor
-        -- Redirigir argumentos CFrame/Vector3 al target
+        -- ===================================================
+        -- BLOQUE B: FIRESERVER EN REMOTEEVENT
+        -- SEPARADO del bloque A porque self es RemoteEvent, no workspace
+        -- Este era el bug critico de v1.0
+        -- ===================================================
         elseif method == "FireServer" then
             local isRemote = false
             pcall(function()
-                isRemote = typeof(self) == "Instance"
-                    and (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction")
+                isRemote = self:IsA("RemoteEvent") or self:IsA("RemoteFunction")
             end)
+
             if isRemote then
-                local target = GetClosestPlayer()
-                if target and math.random(100) <= Config.Silent.HitChance then
-                    local tp = target.Position
-                    local camPos = Camera.CFrame.Position
-                    local modified = false
-                    for i = 2, #args do
-                        local a = args[i]
-                        if typeof(a) == "CFrame" then
-                            -- CFrame de impacto: reorientar hacia target
-                            args[i] = CFrame.new(a.Position, tp)
-                            modified = true
-                        elseif typeof(a) == "Vector3" then
-                            -- Solo modificar si parece una posicion de impacto
-                            -- (lejos de la camara, cerca del mundo de juego)
-                            local d = (a - camPos).Magnitude
-                            if d > 5 and d < 2000 then
-                                args[i] = tp
+                if math.random(100) <= Config.Silent.HitChance then
+                    local target = GetClosestPlayer()
+                    if target then
+                        local tp     = target.Position
+                        local camPos = Camera.CFrame.Position
+                        local modified = false
+
+                        for i = 2, #args do
+                            local a = args[i]
+                            if typeof(a) == "CFrame" then
+                                -- CFrame de impacto → apuntar al target
+                                args[i] = CFrame.new(a.Position, tp)
                                 modified = true
+                            elseif typeof(a) == "Vector3" then
+                                -- Solo modificar si parece posicion de impacto en el mundo
+                                -- (no una direccion pura que seria de magnitud ~1)
+                                local dist = (a - camPos).Magnitude
+                                local mag  = a.Magnitude
+                                if dist > 5 and dist < 2000 and mag > 2 then
+                                    args[i] = tp
+                                    modified = true
+                                end
                             end
                         end
-                    end
-                    if modified then
-                        return oldNC(unpack(args))
+
+                        if modified then
+                            return oldNC(unpack(args))
+                        end
                     end
                 end
             end
@@ -326,9 +302,9 @@ task.delay(2, function()
 end)
 
 -- ============================================================
--- HOOK 2: __index Mouse.Hit / Mouse.Target
--- Fate Trigger puede usar Mouse.Hit para obtener la direccion
--- Este es el fallback mas importante para juegos FPS
+-- HOOK __index: Mouse.Hit / Mouse.Target
+-- Fallback para juegos que leen Mouse.Hit para apuntar
+-- Completamente independiente del __namecall hook
 -- ============================================================
 task.delay(2, function()
     if not LocalPlayer.Character then
@@ -346,7 +322,7 @@ task.delay(2, function()
                 if target then
                     if index == "Hit" then
                         return CFrame.new(target.Position)
-                    elseif index == "Target" then
+                    else -- "Target"
                         return target
                     end
                 end
@@ -393,7 +369,8 @@ local function GetAimbotPart(char)
 end
 
 local function GetAimbotTarget()
-    Camera = Workspace.CurrentCamera if not Camera then return nil end
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil end
     local fov    = Config.Aimbot.FOVRadius or 150
     local vp     = Camera.ViewportSize
     local center = Vector2.new(vp.X/2, vp.Y/2)
@@ -404,7 +381,7 @@ local function GetAimbotTarget()
         if IsPlayerValid(_aimbotLocked) then
             local tp = GetAimbotPart(_aimbotLocked.Character)
             if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
-                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                local _, on = Camera:WorldToViewportPoint(tp.Position)
                 if on then return tp end
             end
         end
@@ -422,7 +399,10 @@ local function GetAimbotTarget()
         local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
         if d < bestD then bestD = d best = tp bestP = plr end
     end
-    if Config.Aimbot.Method == "Aimlock" and bestP then _aimbotLocked = bestP end
+
+    if Config.Aimbot.Method == "Aimlock" and bestP then
+        _aimbotLocked = bestP
+    end
     return best
 end
 
@@ -435,26 +415,32 @@ local _lastE = 0
 local function CreateESP(p)
     if FTESP[p] then return end
     local e = {}
-    e.Box = Drawing.new("Square")
+    e.Box       = Drawing.new("Square")
     e.Box.Thickness=1 e.Box.Filled=false
     e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Visible=false
-    e.Outline = Drawing.new("Square")
+
+    e.Outline   = Drawing.new("Square")
     e.Outline.Thickness=3 e.Outline.Filled=false
     e.Outline.Color=Color3.fromRGB(0,0,0)
     e.Outline.Transparency=0.5 e.Outline.Visible=false
-    e.Name = Drawing.new("Text")
+
+    e.Name      = Drawing.new("Text")
     e.Name.Size=13 e.Name.Center=true e.Name.Outline=true
     e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
-    e.Distance = Drawing.new("Text")
+
+    e.Distance  = Drawing.new("Text")
     e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true
     e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
-    e.HealthBG = Drawing.new("Square")
+
+    e.HealthBG  = Drawing.new("Square")
     e.HealthBG.Thickness=1 e.HealthBG.Filled=true
     e.HealthBG.Color=Color3.fromRGB(0,0,0)
     e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
+
     e.HealthBar = Drawing.new("Square")
     e.HealthBar.Thickness=1 e.HealthBar.Filled=true
     e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
+
     FTESP[p] = e
 end
 
@@ -471,17 +457,20 @@ end
 
 local function UpdateESP()
     if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(FTESP) do HideESP(p) end return
+        for p in pairs(FTESP) do HideESP(p) end
+        return
     end
-    local t = tick()
-    if t - _lastE < 0.08 then return end
-    _lastE = t
-    Camera = Workspace.CurrentCamera if not Camera then return end
+    local now = tick()
+    if now - _lastE < 0.08 then return end
+    _lastE = now
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
 
     local active = {}
     for _, plr in ipairs(GetCachedPlayers()) do
         if plr == LocalPlayer then continue end
         active[plr] = true
+
         local isTm = IsTeammate(plr)
         if Config.ESP.TeamCheck and isTm then HideESP(plr) continue end
         if not FTESP[plr] then pcall(function() CreateESP(plr) end) end
@@ -524,39 +513,52 @@ local function UpdateESP()
         end
 
         if Config.ESP.Boxes then
-            esp.Outline.Size=Vector2.new(width+2,height+2)
-            esp.Outline.Position=Vector2.new(minX-1,minY-1)
-            esp.Outline.Visible=true
-            esp.Box.Size=Vector2.new(width,height)
-            esp.Box.Position=Vector2.new(minX,minY)
-            esp.Box.Color=col esp.Box.Visible=true
-        else esp.Box.Visible=false esp.Outline.Visible=false end
+            esp.Outline.Size     = Vector2.new(width+2, height+2)
+            esp.Outline.Position = Vector2.new(minX-1, minY-1)
+            esp.Outline.Visible  = true
+            esp.Box.Size         = Vector2.new(width, height)
+            esp.Box.Position     = Vector2.new(minX, minY)
+            esp.Box.Color        = col
+            esp.Box.Visible      = true
+        else
+            esp.Box.Visible     = false
+            esp.Outline.Visible = false
+        end
 
         if Config.ESP.Names then
-            esp.Name.Text=plr.DisplayName or plr.Name
-            esp.Name.Position=Vector2.new(minX+width/2,minY-16)
-            esp.Name.Color=col esp.Name.Visible=true
-        else esp.Name.Visible=false end
+            esp.Name.Text     = plr.DisplayName or plr.Name
+            esp.Name.Position = Vector2.new(minX+width/2, minY-16)
+            esp.Name.Color    = col
+            esp.Name.Visible  = true
+        else
+            esp.Name.Visible = false
+        end
 
         if Config.ESP.Distance then
-            esp.Distance.Text=math.floor(dist).."m"
-            esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2)
-            esp.Distance.Visible=true
-        else esp.Distance.Visible=false end
+            esp.Distance.Text     = math.floor(dist).."m"
+            esp.Distance.Position = Vector2.new(minX+width/2, minY+height+2)
+            esp.Distance.Visible  = true
+        else
+            esp.Distance.Visible = false
+        end
 
         if Config.ESP.Boxes and h then
-            local pct = math.clamp(h.Health/math.max(h.MaxHealth,1),0,1)
-            local bh  = height*pct
-            local hc  = pct>0.5
-                and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0)
-                or  Color3.fromRGB(255,math.floor(255*pct*2),0)
-            esp.HealthBG.Size=Vector2.new(3,height)
-            esp.HealthBG.Position=Vector2.new(minX-6,minY)
-            esp.HealthBG.Visible=true
-            esp.HealthBar.Size=Vector2.new(3,bh)
-            esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh))
-            esp.HealthBar.Color=hc esp.HealthBar.Visible=true
-        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+            local pct = math.clamp(h.Health/math.max(h.MaxHealth,1), 0, 1)
+            local bh  = height * pct
+            local hc  = pct > 0.5
+                and Color3.fromRGB(math.floor(255*(1-pct)*2), 255, 0)
+                or  Color3.fromRGB(255, math.floor(255*pct*2), 0)
+            esp.HealthBG.Size      = Vector2.new(3, height)
+            esp.HealthBG.Position  = Vector2.new(minX-6, minY)
+            esp.HealthBG.Visible   = true
+            esp.HealthBar.Size     = Vector2.new(3, bh)
+            esp.HealthBar.Position = Vector2.new(minX-6, minY+(height-bh))
+            esp.HealthBar.Color    = hc
+            esp.HealthBar.Visible  = true
+        else
+            esp.HealthBG.Visible  = false
+            esp.HealthBar.Visible = false
+        end
     end
 
     for p in pairs(FTESP) do
@@ -572,6 +574,7 @@ end
 task.delay(2, function()
     RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
+
         if Config.Aimbot.Enabled and Config.Aimbot.Active then
             local t = GetAimbotTarget()
             if t then
@@ -593,14 +596,14 @@ task.delay(2, function()
                     local sp, on = Camera:WorldToViewportPoint(pos)
                     if on then
                         local mp = UserInputService:GetMouseLocation()
-                        local dx,dy = sp.X-mp.X, sp.Y-mp.Y
+                        local dx, dy = sp.X-mp.X, sp.Y-mp.Y
                         local d = math.sqrt(dx*dx+dy*dy)
                         if d > 1 then
-                            local spd = math.clamp(1/sm,0.05,0.8)
-                            local mx = math.clamp(dx*spd,-150,150)
-                            local my = math.clamp(dy*spd,-150,150)
+                            local spd = math.clamp(1/sm, 0.05, 0.8)
+                            local mx  = math.clamp(dx*spd, -150, 150)
+                            local my  = math.clamp(dy*spd, -150, 150)
                             if math.abs(mx)>0.3 or math.abs(my)>0.3 then
-                                mousemoverel(mx,my)
+                                mousemoverel(mx, my)
                             end
                         end
                     end
@@ -621,7 +624,7 @@ task.delay(3, function()
 end)
 
 -- ============================================================
--- FLAGS
+-- FLAGS PARA EL MAIN SCRIPT
 -- ============================================================
 getgenv().AX_FateTriggerLoaded         = true
 getgenv().AX_FateTriggerHandlesAimbot  = true
@@ -638,14 +641,16 @@ task.delay(1, function()
 end)
 
 Players.PlayerAdded:Connect(function(p)
-    task.delay(2, function() pcall(function() CreateESP(p) end) end)
+    task.delay(2, function()
+        pcall(function() CreateESP(p) end)
+    end)
 end)
 
 Players.PlayerRemoving:Connect(function(p)
     if _aimbotLocked == p then _aimbotLocked = nil end
     RemoveESP(p)
-    for i,v in ipairs(_cachedPlayers) do
-        if v == p then table.remove(_cachedPlayers,i) break end
+    for i, v in ipairs(_cachedPlayers) do
+        if v == p then table.remove(_cachedPlayers, i) break end
     end
 end)
 
