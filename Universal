@@ -1010,7 +1010,7 @@ task.delay(3, function()
         end
         -- [ADDED v4.0] PF Silent Aim banner
         if IS_PF then
-            AddBanner(SilentPage,Color3.fromRGB(25,30,45),"Credits to Wapus made by iRay.✅ PF v4.0: Internal hooks (network.send + bulletObject.new)\nTrajectory prediction with bullet drop + enemy velocity")
+            AddBanner(SilentPage,Color3.fromRGB(25,30,45),"✅ PF v4.0: Internal hooks (network.send + bulletObject.new)\nTrajectory prediction with bullet drop + enemy velocity Credits to Wapus made by iRay.")
         end
         Tog(SilentPage,"Enable Silent Aim",false,function(v) Config.Silent.Enabled=v if not v then Config.Silent.Active=false end end)
         Drop(SilentPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Silent.KeybindMode=v end)
