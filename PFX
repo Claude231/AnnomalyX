@@ -1,954 +1,481 @@
 --[[
-    ╔═══════════════════════════════════════════════════════════╗
-    ║          ANNOMALY X - Phantom Forces Module v4.0          ║
-    ║                                                           ║
-    ║  Silent Aim: Internal hooks (network.send + bulletObject) ║
-    ║  Aimbot: cameraInterface angles + trajectory prediction   ║
-    ║  ESP: replicationInterface + health + weapon display      ║
-    ║  Hitbox: replicationInterface sphere hitboxes              ║
-    ║                                                           ║
-    ║  Creator: ElSacaLeche                                     ║
-    ╚═══════════════════════════════════════════════════════════╝
-    
-    PF ARCHITECTURE:
-    - Internal module system accessed via getgc()
-    - NetworkClient for packet interception
-    - ReplicationInterface for player iteration
-    - BulletObject.new for bullet creation hooks
-    - CameraInterface for aimbot angle manipulation
-    - PublicSettings.bulletAcceleration for trajectory calc
-    - Custom hitbox parts per desktopHitBox module
-    
-    CHANGES v4.0:
-    - Full internal hook system (no metamethod needed)
-    - Trajectory prediction with bullet drop + enemy velocity
-    - Silent aim via bulletObject.new + network.send hooks
-    - Aimbot via cameraInterface angle manipulation
-    - ESP via replicationInterface with health/weapon/distance
-    - Hitbox via replicationInterface sphere parts
-    - Proper cleanup function via AX_PF_Cleanup
+    ANNOMALY X - Rivals Module v3.7 OPT
+    Optimizaciones: RaycastParams cacheado, GetPlayers cacheado,
+    UpdateSilentTarget throttled a 20fps, _inHook guard anti-recursion
 ]]
 
--- ═══════════════════════════════════════════
--- WAIT FOR MAIN SCRIPT CONFIG
--- ═══════════════════════════════════════════
-
 if not getgenv().AX_Config then
-    repeat task.wait() until getgenv().AX_Config
+    local t=tick()
+    repeat task.wait() until getgenv().AX_Config or tick()-t>30
+end
+local Config=getgenv().AX_Config
+
+local hookfunction      = hookfunction or replaceclosure or detour_function
+local hookmetamethod    = hookmetamethod
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local checkcaller       = checkcaller or function() return false end
+local getconnections    = getconnections
+local mousemoverel      = mousemoverel or function() end
+local newcclosure       = newcclosure or function(f) return f end
+
+if not hookfunction or not hookmetamethod or not getnamecallmethod then return end
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local Workspace         = game:GetService("Workspace")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera            = Workspace.CurrentCamera
+local LocalPlayer       = Players.LocalPlayer
+
+local MAX_SILENT_ANGLE_DEG = 15
+local HITBOX_OFFSET_SCALE  = 0.3
+local MIN_SHOT_INTERVAL    = 0.06
+local _lastShotModified    = 0
+
+-- OPTIMIZACIÓN: RaycastParams cacheados
+local _visParams = RaycastParams.new()
+_visParams.FilterType = Enum.RaycastFilterType.Exclude
+_visParams.IgnoreWater = true
+
+local function UpdateVisFilter()
+    local char=LocalPlayer.Character
+    local t={Camera}
+    if char then table.insert(t,char) end
+    _visParams.FilterDescendantsInstances=t
+end
+UpdateVisFilter()
+
+-- OPTIMIZACIÓN: cache de jugadores
+local _cachedPlayers   = {}
+local _lastPlayerCache = 0
+local function GetCachedPlayers()
+    local t=tick()
+    if t-_lastPlayerCache>2 then
+        _cachedPlayers=Players:GetPlayers()
+        _lastPlayerCache=t
+    end
+    return _cachedPlayers
 end
 
-local Config = getgenv().AX_Config
+-- AC Bypass con delay 4s
+local function SafeACBypass()
+    pcall(function()
+        local remotes=ReplicatedStorage:FindFirstChild("Remotes")
+        if not remotes then return end
+        local pipeline=remotes:FindFirstChild("AnalyticsPipeline")
+        if not pipeline then return end
+        local re=pipeline:FindFirstChild("RemoteEvent")
+        if not re or not re.OnClientEvent then return end
+        if getconnections then
+            for _,conn in pairs(getconnections(re.OnClientEvent)) do
+                if conn.Function then
+                    pcall(function() hookfunction(conn.Function,newcclosure(function()end)) end)
+                end
+            end
+        end
+    end)
+    if not getgenv()._AX_KickHooked then
+        pcall(function()
+            for _,name in ipairs({"Kick","kick"}) do
+                local fn=LocalPlayer[name]
+                if typeof(fn)=="function" then
+                    local old=fn
+                    hookfunction(fn,newcclosure(function(self,...)
+                        if self==LocalPlayer then return end
+                        return old(self,...)
+                    end))
+                end
+            end
+            getgenv()._AX_KickHooked=true
+        end)
+    end
+end
+task.delay(4,SafeACBypass)
 
--- ═══════════════════════════════════════════
--- SERVICES & REFERENCES
--- ═══════════════════════════════════════════
-
-local cloneref = cloneref or function(o) return o end
-local newcclosure = newcclosure or function(f) return f end
-local hookfunction = hookfunction or replaceclosure or detour_function
-local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
-
-local Players = cloneref(game:GetService("Players"))
-local RunService = cloneref(game:GetService("RunService"))
-local UserInputService = cloneref(game:GetService("UserInputService"))
-local Workspace = cloneref(game:GetService("Workspace"))
-local StarterGui = cloneref(game:GetService("StarterGui"))
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
-
--- ═══════════════════════════════════════════
--- PROTECTION
--- ═══════════════════════════════════════════
-
-pcall(function()
-    local oldKick = LocalPlayer.Kick
-    if typeof(oldKick) == "function" then
-        hookfunction(oldKick, newcclosure(function(self, ...)
-            if self == LocalPlayer then return end
-            return oldKick(self, ...)
-        end))
+task.spawn(function()
+    task.wait(30)
+    while true do
+        pcall(function()
+            local sk={"signature","checksum","exploit","detect","anticheat"}
+            for k in pairs(_G) do
+                local ks=tostring(k):lower()
+                for _,s in ipairs(sk) do if ks:find(s) then _G[k]=nil break end end
+            end
+        end)
+        task.wait(25)
     end
 end)
 
-pcall(function()
-    local SC = cloneref(game:GetService("ScriptContext"))
-    if getconnections then
-        for _, conn in ipairs(getconnections(SC.Error)) do
-            pcall(function() conn:Disable() end)
+local function IsRivalsTeammate(p)
+    if not p or p==LocalPlayer then return false end
+    local ok1,r1=pcall(function() return p.Team and LocalPlayer.Team and p.Team==LocalPlayer.Team end)
+    if ok1 and r1 then return true end
+    local ok2,r2=pcall(function() return p.TeamColor and LocalPlayer.TeamColor and p.TeamColor==LocalPlayer.TeamColor end)
+    return ok2 and r2
+end
+local function ShouldSkip(p,tc) return tc and IsRivalsTeammate(p) end
+
+local function IsRivalsVisible(part)
+    if not part then return false end
+    local origin=Camera.CFrame.Position
+    local dir=part.Position-origin
+    local dist=dir.Magnitude
+    if dist<3 then return true end
+    local result=Workspace:Raycast(origin,dir.Unit*(dist-0.3),_visParams)
+    if not result then return true end
+    return result.Instance and result.Instance:IsDescendantOf(part.Parent)
+end
+
+local RIVALS_PARTS={"Head","HumanoidRootPart","UpperTorso","LowerTorso"}
+local randomPart="Head" local randomSwitch=0
+
+local function GetRivalsTargetPart(char,setting)
+    if not char then return nil end
+    if setting=="Random" then
+        if tick()-randomSwitch>0.5 then
+            local valid={}
+            for _,name in ipairs(RIVALS_PARTS) do if char:FindFirstChild(name) then table.insert(valid,name) end end
+            if #valid>0 then randomPart=valid[math.random(#valid)] end
+            randomSwitch=tick()
         end
+        return char:FindFirstChild(randomPart) or char:FindFirstChild("Head")
     end
-end)
-
--- ═══════════════════════════════════════════
--- GET PF INTERNAL MODULES
--- ═══════════════════════════════════════════
-
-local moduleCache
-for _, v in getgc(true) do
-    if type(v) == "table" and rawget(v, "ScreenCull") and rawget(v, "NetworkClient") then
-        moduleCache = v
-        break
-    end
+    return char:FindFirstChild(setting) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 
-if not moduleCache then
-    warn("[AX-PF] ❌ Could not find PF module cache")
-    return
-end
+local CurrentTarget,CurrentTargetPos,CurrentTargetPart=nil,nil,nil
+-- OPTIMIZACIÓN: throttle silent target a 20fps
+local _lastSilentUpdate=0
 
-local modules = {}
-for name, data in moduleCache do
-    if data then
-        if type(data) == "table" and data.module then
-            modules[name] = data.module
-        else
-            modules[name] = data
-        end
-    end
-end
+local function UpdateSilentTarget()
+    local now=tick()
+    if now-_lastSilentUpdate<0.05 then return end
+    _lastSilentUpdate=now
 
-local network = modules.NetworkClient
-local replicationInterface = modules.ReplicationInterface
-local charInterface = modules.CharacterInterface
-local weaponInterface = modules.WeaponControllerInterface
-local cameraInterface = modules.CameraInterface
-local publicSettings = modules.PublicSettings
-local contentInterface = modules.ContentInterface
-local bulletObject = modules.BulletObject
-local desktopHitBox = modules.DesktopHitBox
-local roundSystem = modules.RoundSystemClientInterface
-
-if not network or not replicationInterface or not bulletObject then
-    warn("[AX-PF] ❌ Critical modules missing")
-    return
-end
-
--- ═══════════════════════════════════════════
--- TRAJECTORY SOLVER (from Wapus)
--- ═══════════════════════════════════════════
-
-local function solve(v44, v45, v46, v47, v48)
-    if not v44 then return end
-    if v44 > -1e-10 and v44 < 1e-10 then return solve(v45, v46, v47, v48) end
-    if v48 then
-        local v49 = -v45 / (4 * v44)
-        local v50 = (v46 + v49 * (3 * v45 + 6 * v44 * v49)) / v44
-        local v51 = (v47 + v49 * (2 * v46 + v49 * (3 * v45 + 4 * v44 * v49))) / v44
-        local v52 = (v48 + v49 * (v47 + v49 * (v46 + v49 * (v45 + v44 * v49)))) / v44
-        if v51 > -1e-10 and v51 < 1e-10 then
-            local v53, v54 = solve(1, v50, v52)
-            if not v54 or v54 < 0 then return end
-            local v55 = math.sqrt(v53)
-            local v56 = math.sqrt(v54)
-            return v49 - v56, v49 - v55, v49 + v55, v49 + v56
-        else
-            local v57, _, v59 = solve(1, 2 * v50, v50 * v50 - 4 * v52, -v51 * v51)
-            local v60 = v59 or v57
-            if not v60 then return end
-            local v61 = math.sqrt(math.abs(v60))
-            local v62, v63 = solve(1, v61, (v60 + v50 - v51 / v61) / 2)
-            local v64, v65 = solve(1, -v61, (v60 + v50 + v51 / v61) / 2)
-            if v62 and v64 then return v49+v62, v49+v63, v49+v64, v49+v65
-            elseif v62 then return v49+v62, v49+v63
-            elseif v64 then return v49+v64, v49+v65 end
-        end
-    elseif v47 then
-        local v66 = -v45 / (3 * v44)
-        local v67 = -(v46 + v66 * (2 * v45 + 3 * v44 * v66)) / (3 * v44)
-        local v68 = -(v47 + v66 * (v46 + v66 * (v45 + v44 * v66))) / (2 * v44)
-        local v69 = v68*v68 - v67*v67*v67
-        local v70 = math.sqrt(math.abs(v69))
-        if v69 > 0 then
-            local v71 = v68 + v70
-            local v72 = v68 - v70
-            v71 = v71 < 0 and -(-v71)^(1/3) or v71^(1/3)
-            local v73 = v72 < 0 and -(-v72)^(1/3) or v72^(1/3)
-            return v66 + v71 + v73
-        else
-            local v74 = math.atan2(v70, v68) / 3
-            local v75 = 2 * math.sqrt(math.abs(v67))
-            return v66 - v75*math.sin(v74+0.5236), v66 + v75*math.sin(v74-0.5236), v66 + v75*math.cos(v74)
-        end
-    elseif v46 then
-        local v76 = -v45 / (2 * v44)
-        local v77 = v76*v76 - v46/v44
-        if v77 < 0 then return end
-        local v78 = math.sqrt(v77)
-        return v76 - v78, v76 + v78
-    elseif v45 then
-        return -v45 / v44
-    end
-end
-
-local function complexTrajectory(origin, accel, target, speed, enemyVel)
-    local ld = target - origin
-    accel = -accel
-    enemyVel = enemyVel or Vector3.zero
-    local r1, r2, r3, r4 = solve(
-        accel:Dot(accel) * 0.25,
-        accel:Dot(enemyVel),
-        accel:Dot(ld) + enemyVel:Dot(enemyVel) - speed^2,
-        ld:Dot(enemyVel) * 2,
-        ld:Dot(ld)
-    )
-    local x = (r1 and r1>0 and r1) or (r2 and r2>0 and r2) or (r3 and r3>0 and r3) or r4
-    if not x or x <= 0 then return ld.Unit * speed, 1 end
-    return (ld + enemyVel*x + 0.5*accel*x^2) / x, x
-end
-
-local function toAnglesYX(v)
-    local x, y, z = v.X, v.Y, v.Z
-    return math.asin(y / math.sqrt(x*x + y*y + z*z)), math.atan2(-x, -z), 0
-end
-
--- ═══════════════════════════════════════════
--- MOVEMENT CACHE (for prediction)
--- ═══════════════════════════════════════════
-
-local movementCache = { time = {}, position = {} }
-
-local function getEnemyVelocity(player)
-    local p = movementCache.position[player]
-    local t = movementCache.time
-    if p and p[15] and p[1] and t[15] and t[1] then
-        local dt = t[15] - t[1]
-        if dt > 0 then return (p[15] - p[1]) / dt end
-    end
-    return Vector3.zero
-end
-
--- ═══════════════════════════════════════════
--- VISIBILITY CHECK (PF internal)
--- ═══════════════════════════════════════════
-
-local physicsIgnore = {Workspace.Terrain, Workspace.Ignore, Workspace.Players, Camera}
-local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Exclude
-rayParams.IgnoreWater = true
-rayParams.FilterDescendantsInstances = physicsIgnore
-
-local function isPFVisible(origin, target)
-    local result = Workspace:Raycast(origin, target - origin, rayParams)
-    return result == nil
-end
-
--- ═══════════════════════════════════════════
--- GET CLOSEST ENEMY (PF internal)
--- ═══════════════════════════════════════════
-
-local function getPFClosestEnemy(fovRadius, visCheck, partName, screenCenter, teamCheck)
-    local bestDist = fovRadius or math.huge
-    local bestPos, bestEntry, bestPart
-
-    replicationInterface.operateOnAllEntries(function(player, entry)
-        if player == LocalPlayer then return end
-        if teamCheck and not entry._isEnemy then return end
-
-        local character = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
-        if not character then return end
-
-        local targetPartName = partName
-        if targetPartName == "HumanoidRootPart" then targetPartName = "Torso" end
-        if targetPartName == "Random" then
-            targetPartName = math.random(1,2) == 1 and "Head" or "Torso"
-        end
-
-        local part = character[targetPartName] or character.Head
-        if not part then return end
-
-        local targetPos = part.Position
-        local camPos = Camera.CFrame.Position
-
-        if visCheck and not isPFVisible(camPos, targetPos) then return end
-
-        local sp, onScreen = Camera:WorldToViewportPoint(targetPos)
-        if sp.Z <= 0 then return end
-
-        local dist2D = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
-        if dist2D < bestDist then
-            bestDist = dist2D
-            bestPos = targetPos
-            bestEntry = entry
-            bestPart = part
-        end
-    end)
-
-    return bestPos, bestEntry, bestPart
-end
-
--- ═══════════════════════════════════════════
--- HOOKS: SILENT AIM
--- ═══════════════════════════════════════════
-
-local originalBulletNew = bulletObject.new
-function bulletObject.new(bulletData)
-    if bulletData.onplayerhit and Config.Silent.Enabled and Config.Silent.Active then
-        local chance = math.random(1, 100)
-        if chance <= Config.Silent.HitChance then
-            local screenCenter = Camera.ViewportSize * 0.5
-            local partName = Config.Silent.TargetPart
-            local target, entry = getPFClosestEnemy(
-                Config.FOV.Enabled and Config.FOV.Radius or 800,
-                Config.Silent.VisibleCheck,
-                partName,
-                Vector2.new(screenCenter.X, screenCenter.Y),
-                Config.Silent.TeamCheck
-            )
-
-            if target and entry then
-                local enemyVel = getEnemyVelocity(entry._player)
-                local velocity = complexTrajectory(
-                    bulletData.position,
-                    bulletData.acceleration or publicSettings.bulletAcceleration,
-                    target,
-                    bulletData.velocity.Magnitude,
-                    enemyVel
-                )
-                bulletData.velocity = velocity
-            end
-        end
-    end
-    return originalBulletNew(bulletData)
-end
-
-local originalSend = network.send
-function network:send(name, ...)
-    if name == "newbullets" and Config.Silent.Enabled and Config.Silent.Active then
-        local uniqueId, bulletData, time = ...
-        local chance = math.random(1, 100)
-
-        if chance <= Config.Silent.HitChance then
-            local screenCenter = Camera.ViewportSize * 0.5
-            local partName = Config.Silent.TargetPart
-            local target, entry = getPFClosestEnemy(
-                Config.FOV.Enabled and Config.FOV.Radius or 800,
-                Config.Silent.VisibleCheck,
-                partName,
-                Vector2.new(screenCenter.X, screenCenter.Y),
-                Config.Silent.TeamCheck
-            )
-
-            if target and entry then
-                local enemyVel = getEnemyVelocity(entry._player)
-                local controller = weaponInterface.getActiveWeaponController()
-                local weapon = controller and controller:getActiveWeapon()
-                local bulletSpeed = weapon and weapon._weaponData and weapon._weaponData.bulletspeed or 2000
-
-                local velocity = complexTrajectory(
-                    bulletData.firepos or bulletData.camerapos,
-                    publicSettings.bulletAcceleration,
-                    target,
-                    bulletSpeed,
-                    enemyVel
-                )
-
-                for _, bullet in bulletData.bullets do
-                    bullet[1] = velocity.Unit
-                end
-            end
-        end
-    end
-
-    -- Block anticheat reports
-    if name == "flaguser" or name == "debug" or name == "logmessage" then
-        return
-    end
-
-    return originalSend(self, name, ...)
-end
-
--- ═══════════════════════════════════════════
--- ESP SYSTEM (PF internal)
--- ═══════════════════════════════════════════
-
-local PFESP = {}
-local PFLastESP = 0
-
-local function CreatePFESP(player)
-    if PFESP[player] then return end
-    local e = {}
-    e.BoxOutline = Drawing.new("Square")
-    e.BoxOutline.Thickness = 3; e.BoxOutline.Filled = false
-    e.BoxOutline.Color = Color3.fromRGB(0,0,0); e.BoxOutline.Transparency = 0.5; e.BoxOutline.Visible = false
-
-    e.Box = Drawing.new("Square")
-    e.Box.Thickness = 1; e.Box.Filled = false; e.Box.Visible = false
-
-    e.Name = Drawing.new("Text")
-    e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true
-    e.Name.Color = Color3.fromRGB(255,255,255); e.Name.Visible = false
-
-    e.Weapon = Drawing.new("Text")
-    e.Weapon.Size = 11; e.Weapon.Center = true; e.Weapon.Outline = true
-    e.Weapon.Color = Color3.fromRGB(200,200,200); e.Weapon.Visible = false
-
-    e.Distance = Drawing.new("Text")
-    e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true
-    e.Distance.Color = Color3.fromRGB(200,200,200); e.Distance.Visible = false
-
-    e.HealthBG = Drawing.new("Square")
-    e.HealthBG.Filled = true; e.HealthBG.Color = Color3.fromRGB(0,0,0)
-    e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
-
-    e.HealthBar = Drawing.new("Square")
-    e.HealthBar.Filled = true; e.HealthBar.Color = Color3.fromRGB(0,255,0)
-    e.HealthBar.Visible = false
-
-    PFESP[player] = e
-end
-
-local function RemovePFESP(player)
-    local e = PFESP[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d:Remove() end) end
-    PFESP[player] = nil
-end
-
-local function HidePFESP(player)
-    local e = PFESP[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
-end
-
-local function getCharacterScreenBounds(character, rootPos)
-    local minX, minY = math.huge, math.huge
-    local maxX, maxY = -math.huge, -math.huge
-    local anyOn = false
-
-    for partName, part in character do
-        if typeof(part) == "Instance" and part:IsA("BasePart") then
-            local halfY = part.Size.Y / 2
-            local topW = part.Position + Vector3.new(0, halfY, 0)
-            local botW = part.Position - Vector3.new(0, halfY, 0)
-
-            local ts = Camera:WorldToViewportPoint(topW)
-            local bs = Camera:WorldToViewportPoint(botW)
-
-            if ts.Z > 0 then
-                anyOn = true
-                minX = math.min(minX, ts.X); maxX = math.max(maxX, ts.X)
-                minY = math.min(minY, ts.Y); maxY = math.max(maxY, ts.Y)
-            end
-            if bs.Z > 0 then
-                anyOn = true
-                minX = math.min(minX, bs.X); maxX = math.max(maxX, bs.X)
-                minY = math.min(minY, bs.Y); maxY = math.max(maxY, bs.Y)
-            end
-        end
-    end
-
-    if not anyOn then return nil end
-
-    local pad = 4
-    minX = minX - pad; maxX = maxX + pad
-    minY = minY - pad; maxY = maxY + pad
-
-    local w = maxX - minX
-    local h = maxY - minY
-    local vp = Camera.ViewportSize
-
-    -- Clamp oversized boxes
-    if w > vp.X * 0.4 or h > vp.Y * 0.6 or w < 5 or h < 8 then
-        local dist = (Camera.CFrame.Position - rootPos).Magnitude
-        local sf = 1 / (dist * math.tan(math.rad(Camera.FieldOfView/2)) * 2 / vp.Y)
-        h = math.clamp(5.5 * sf, 15, vp.Y * 0.5)
-        w = h * 0.55
-        local cs = Camera:WorldToViewportPoint(rootPos)
-        if cs.Z <= 0 then return nil end
-        minX = cs.X - w/2; minY = cs.Y - h/2
-        maxX = cs.X + w/2; maxY = cs.Y + h/2
-    end
-
-    return {
-        minX = minX, minY = minY, maxX = maxX, maxY = maxY,
-        width = maxX - minX, height = maxY - minY,
-        centerX = (minX + maxX) / 2
-    }
-end
-
-local function UpdatePFESP()
-    if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(PFESP) do HidePFESP(p) end
-        return
-    end
-
-    local now = tick()
-    if now - PFLastESP < 0.08 then return end
-    PFLastESP = now
-
-    Camera = Workspace.CurrentCamera
+    Camera=Workspace.CurrentCamera
     if not Camera then return end
-
-    local activePlayers = {}
-
-    replicationInterface.operateOnAllEntries(function(player, entry)
-        if player == LocalPlayer then return end
-        activePlayers[player] = true
-
-        if Config.ESP.TeamCheck and not entry._isEnemy then
-            HidePFESP(player)
-            return
-        end
-
-        local thirdPerson = entry._thirdPersonObject
-        local character = thirdPerson and thirdPerson._characterModelHash
-        if not character or not character.Head then
-            HidePFESP(player)
-            return
-        end
-
-        if not PFESP[player] then CreatePFESP(player) end
-        local esp = PFESP[player]
-        if not esp then return end
-
-        local rootPos = entry._receivedPosition or character.Head.Position
-        local dist = (Camera.CFrame.Position - rootPos).Magnitude
-
-        if dist > Config.ESP.MaxDistance then
-            HidePFESP(player)
-            return
-        end
-
-        local bounds = getCharacterScreenBounds(character, rootPos)
-        if not bounds then
-            HidePFESP(player)
-            return
-        end
-
-        -- Health
-        local health = 100
-        pcall(function() health = entry:getHealth() end)
-        local healthRatio = math.clamp(health / 100, 0, 1)
-
-        -- Visibility color
-        local isVis = isPFVisible(Camera.CFrame.Position, character.Head.Position)
-        local boxCol = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
-        if not entry._isEnemy then boxCol = Color3.fromRGB(80, 150, 255) end
-
-        -- Box
-        if Config.ESP.Boxes then
-            esp.BoxOutline.Position = Vector2.new(bounds.minX - 1, bounds.minY - 1)
-            esp.BoxOutline.Size = Vector2.new(bounds.width + 2, bounds.height + 2)
-            esp.BoxOutline.Visible = true
-
-            esp.Box.Position = Vector2.new(bounds.minX, bounds.minY)
-            esp.Box.Size = Vector2.new(bounds.width, bounds.height)
-            esp.Box.Color = boxCol
-            esp.Box.Visible = true
-        else
-            esp.BoxOutline.Visible = false
-            esp.Box.Visible = false
-        end
-
-        -- Name
-        if Config.ESP.Names then
-            esp.Name.Position = Vector2.new(bounds.centerX, bounds.minY - 16)
-            esp.Name.Text = player.Name
-            esp.Name.Color = boxCol
-            esp.Name.Visible = true
-        else
-            esp.Name.Visible = false
-        end
-
-        -- Weapon name
-        local weaponName = "Unknown"
-        pcall(function()
-            local wObj = entry:getWeaponObject()
-            if wObj and wObj.weaponName then weaponName = wObj.weaponName end
-        end)
-        esp.Weapon.Position = Vector2.new(bounds.centerX, bounds.maxY + 2)
-        esp.Weapon.Text = weaponName
-        esp.Weapon.Visible = Config.ESP.Distance -- reuse distance toggle for weapon
-
-        -- Distance
-        if Config.ESP.Distance then
-            esp.Distance.Position = Vector2.new(bounds.centerX, bounds.maxY + 14)
-            esp.Distance.Text = math.floor(dist) .. "m"
-            esp.Distance.Visible = true
-        else
-            esp.Distance.Visible = false
-        end
-
-        -- Health Bar
-        if Config.ESP.Boxes then
-            local barX = bounds.minX - 6
-            local h = bounds.height
-
-            esp.HealthBG.Position = Vector2.new(barX - 1, bounds.minY - 1)
-            esp.HealthBG.Size = Vector2.new(5, h + 2)
-            esp.HealthBG.Visible = true
-
-            local fillH = h * healthRatio
-            local hc = healthRatio > 0.5
-                and Color3.fromRGB(math.floor(255*(1-healthRatio)*2), 255, 0)
-                or Color3.fromRGB(255, math.floor(255*healthRatio*2), 0)
-
-            esp.HealthBar.Position = Vector2.new(barX, bounds.minY + (h - fillH))
-            esp.HealthBar.Size = Vector2.new(3, fillH)
-            esp.HealthBar.Color = hc
-            esp.HealthBar.Visible = true
-        else
-            esp.HealthBG.Visible = false
-            esp.HealthBar.Visible = false
-        end
-    end)
-
-    -- Cleanup removed players
-    for p in pairs(PFESP) do
-        if not activePlayers[p] then
-            if not p.Parent then RemovePFESP(p) else HidePFESP(p) end
-        end
+    if not(Config.Silent.Enabled and Config.Silent.Active) then
+        CurrentTarget,CurrentTargetPos,CurrentTargetPart=nil,nil,nil return
     end
-end
-
--- ═══════════════════════════════════════════
--- AIMBOT (PF internal - camera angles)
--- ═══════════════════════════════════════════
-
-local pfAimbotting = false
-local pfAimTime = nil
-local pfLockedPlayer = nil
-local pi = math.pi
-local tau = 2 * pi
-
-local function UpdatePFAimbot(dt)
-    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
-        pfAimbotting = false
-        pfAimTime = nil
-        if not Config.Aimbot.Active then pfLockedPlayer = nil end
-        return
-    end
-
-    Camera = Workspace.CurrentCamera
-    if not Camera then return end
-
-    local clockTime = os.clock()
-    local vp = Camera.ViewportSize
-    local center = Vector2.new(vp.X/2, vp.Y/2)
-    local mousePos = UserInputService:GetMouseLocation()
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
-
-    -- Aimlock: try locked player first
-    if Config.Aimbot.Method == "Aimlock" and pfLockedPlayer then
-        local valid = false
+    local bestDist=Config.FOV.Enabled and Config.FOV.Radius or 9e9
+    local closest,bestPos,bestPart=nil,nil,nil
+    local mouse=UserInputService:GetMouseLocation()
+    for _,plr in ipairs(GetCachedPlayers()) do
+        if plr==LocalPlayer or ShouldSkip(plr,Config.Silent.TeamCheck) then continue end
+        local char=plr.Character if not char then continue end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health<=0 or char:FindFirstChildOfClass("ForceField") then continue end
+        local tp=GetRivalsTargetPart(char,Config.Silent.TargetPart)
+        if not tp then continue end
+        if Config.Silent.VisibleCheck and not IsRivalsVisible(tp) then continue end
+        local predicted=tp.Position
         pcall(function()
-            if pfLockedPlayer.Parent then
-                local entry = replicationInterface.getEntry(pfLockedPlayer)
-                if entry and entry._isEnemy then
-                    local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
-                    if ch and ch.Head then valid = true end
-                end
+            if Config.Aimbot.Prediction and Config.Aimbot.Prediction>0 then
+                local vel=tp.AssemblyLinearVelocity
+                if vel and vel.Magnitude>0.5 then predicted=predicted+vel*Config.Aimbot.Prediction end
             end
         end)
-        if not valid then pfLockedPlayer = nil end
+        -- Angulo manual sin :Dot()
+        local camPos=Camera.CFrame.Position
+        local look=Camera.CFrame.LookVector
+        local toT=predicted-camPos
+        local toTMag=toT.Magnitude
+        if toTMag<0.01 then continue end
+        local dot=look.X*(toT.X/toTMag)+look.Y*(toT.Y/toTMag)+look.Z*(toT.Z/toTMag)
+        local angle=math.deg(math.acos(math.clamp(dot,-1,1)))
+        if angle>MAX_SILENT_ANGLE_DEG then continue end
+        local screen,onScreen=Camera:WorldToViewportPoint(predicted)
+        if not onScreen then continue end
+        local sd=(Vector2.new(screen.X,screen.Y)-mouse).Magnitude
+        if sd<bestDist then bestDist=sd closest=plr bestPos=predicted bestPart=tp end
     end
-
-    local targetPos, targetEntry
-    local bestDist = Config.Aimbot.FOVRadius
-
-    replicationInterface.operateOnAllEntries(function(player, entry)
-        if player == LocalPlayer then return end
-        if Config.Aimbot.TeamCheck and not entry._isEnemy then return end
-
-        -- Aimlock: skip if we have a locked player and this isn't them
-        if Config.Aimbot.Method == "Aimlock" and pfLockedPlayer and player ~= pfLockedPlayer then return end
-
-        local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
-        if not ch then return end
-
-        local partName = Config.Aimbot.TargetPart
-        if partName == "HumanoidRootPart" then partName = "Torso" end
-        if partName == "Random" then partName = math.random(1,2) == 1 and "Head" or "Torso" end
-        local part = ch[partName] or ch.Head
-        if not part then return end
-
-        if Config.Aimbot.VisibleCheck and not isPFVisible(Camera.CFrame.Position, part.Position) then return end
-
-        local sp, on = Camera:WorldToViewportPoint(part.Position)
-        if not on or sp.Z <= 0 then return end
-
-        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
-        if d < bestDist then
-            bestDist = d
-            targetPos = part.Position
-            targetEntry = entry
-        end
-    end)
-
-    if not targetPos or not targetEntry then
-        pfAimbotting = false
-        pfAimTime = nil
-        return
-    end
-
-    -- Lock the player for Aimlock mode
-    if Config.Aimbot.Method == "Aimlock" then
-        pfLockedPlayer = targetEntry._player
-    end
-
-    pfAimbotting = true
-    pfAimTime = pfAimTime or clockTime
-
-    -- Get weapon data for trajectory
-    local controller = weaponInterface.getActiveWeaponController()
-    local weapon = controller and controller:getActiveWeapon()
-    local bulletSpeed = weapon and weapon._weaponData and weapon._weaponData.bulletspeed or 10000
-    local enemyVel = getEnemyVelocity(targetEntry._player)
-
-    -- Add basic prediction from config
-    if Config.Aimbot.Prediction > 0 then
-        targetPos = targetPos + enemyVel * Config.Aimbot.Prediction
-    end
-
-    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
-
-    if Config.Aimbot.Method == "Aimbot" then
-        -- Internal camera angle method (PF specific)
-        local cameraObj = nil
-        pcall(function() cameraObj = cameraInterface:getActiveCamera() end)
-
-        if cameraObj and cameraObj._angles then
-            local velocity = complexTrajectory(
-                Camera.CFrame.Position,
-                publicSettings.bulletAcceleration,
-                targetPos,
-                bulletSpeed,
-                enemyVel
-            )
-
-            local vx, vy = toAnglesYX(velocity)
-            local cy = cameraObj._angles.Y
-            local x = math.clamp(vx, cameraObj._minAngle or -1.4, cameraObj._maxAngle or 1.4)
-            local y = (vy + pi - cy) % tau - pi + cy
-            local newAngles = Vector3.new(x, y, 0)
-
-            -- Apply smoothing
-            local factor = math.clamp(1/sm, 0.05, 1)
-            if sm > 1 then
-                newAngles = cameraObj._angles:Lerp(newAngles, factor)
-            end
-
-            cameraObj._delta = (newAngles - cameraObj._angles) / (dt or 0.016)
-            cameraObj._angles = newAngles
-        else
-            -- Fallback: CFrame method
-            local cur = Camera.CFrame
-            local tgt = CFrame.lookAt(cur.Position, targetPos)
-            Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
-        end
-
-    elseif Config.Aimbot.Method == "Aimlock" then
-        -- Mouse move method
-        local sp, on = Camera:WorldToViewportPoint(targetPos)
-        if on then
-            local mp = UserInputService:GetMouseLocation()
-            local dx, dy = sp.X - mp.X, sp.Y - mp.Y
-            local d = math.sqrt(dx*dx + dy*dy)
-            if d > 1 then
-                local spd = math.clamp(1/sm, 0.05, 0.8)
-                local mx = math.clamp(dx*spd, -150, 150)
-                local my = math.clamp(dy*spd, -150, 150)
-                if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
-                    mousemoverel(mx, my)
-                end
-            end
-        end
-    end
+    CurrentTarget=closest CurrentTargetPos=bestPos CurrentTargetPart=bestPart
 end
 
--- ═══════════════════════════════════════════
--- HITBOX SYSTEM (PF internal)
--- ═══════════════════════════════════════════
+local rivalsAimbotLocked=nil local rivalsAimbotRandom="Head" local rivalsAimbotSwitch=0
 
-local hitboxFolder = Instance.new("Folder", Workspace)
-hitboxFolder.Name = "AX_PF_Hitboxes"
-
-local function UpdatePFHitboxes()
-    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
-        hitboxFolder:ClearAllChildren()
-        return
+local function GetRivalsAimbotPart(character)
+    if not character then return nil end
+    local s=Config.Aimbot.TargetPart
+    if s=="Random" then
+        local t=tick()
+        if t-rivalsAimbotSwitch>(Config.Aimbot.RandomInterval or 0.5) then
+            local valid={}
+            for _,n in ipairs(RIVALS_PARTS) do if character:FindFirstChild(n) then table.insert(valid,n) end end
+            if #valid>0 then rivalsAimbotRandom=valid[math.random(#valid)] end
+            rivalsAimbotSwitch=t
+        end
+        return character:FindFirstChild(rivalsAimbotRandom) or character:FindFirstChild("Head")
     end
+    return character:FindFirstChild(s) or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+end
 
-    local mousePos = UserInputService:GetMouseLocation()
-    local fov = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+local function IsRivalsPlayerValid(player)
+    if not player or not player.Parent or player==LocalPlayer then return false end
+    if ShouldSkip(player,Config.Aimbot.TeamCheck) then return false end
+    local c=player.Character if not c or c:FindFirstChildOfClass("ForceField") then return false end
+    local h=c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health>0
+end
 
-    replicationInterface.operateOnAllEntries(function(player, entry)
-        if not entry._isEnemy then return end
-        if Config.Hitbox.TeamCheck and not entry._isEnemy then return end
-
-        local sphere = hitboxFolder:FindFirstChild(player.Name)
-
-        if entry._receivedPosition then
-            -- FOV check for dynamic
-            local shouldExpand = true
-            if Config.Hitbox.Method == "DHE (Dynamic)" then
-                local sp, on = Camera:WorldToViewportPoint(entry._receivedPosition)
-                if on then
-                    local sd = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
-                    if sd > fov then shouldExpand = false end
-                else
-                    shouldExpand = false
-                end
+local function GetRivalsAimbotTarget()
+    Camera=Workspace.CurrentCamera if not Camera then return nil end
+    local fov=Config.Aimbot.FOVRadius or 150
+    local vp=Camera.ViewportSize
+    local center=Vector2.new(vp.X/2,vp.Y/2)
+    local mousePos=UserInputService:GetMouseLocation()
+    local ref=Config.Aimbot.Method=="Aimbot" and center or mousePos
+    if Config.Aimbot.Method=="Aimlock" and rivalsAimbotLocked then
+        if IsRivalsPlayerValid(rivalsAimbotLocked) then
+            local tp=GetRivalsAimbotPart(rivalsAimbotLocked.Character)
+            if tp and(not Config.Aimbot.VisibleCheck or IsRivalsVisible(tp)) then
+                local sp,on=Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
             end
+        end
+        rivalsAimbotLocked=nil
+    end
+    local best,bestDist,bestP=nil,fov,nil
+    for _,player in ipairs(GetCachedPlayers()) do
+        if not IsRivalsPlayerValid(player) then continue end
+        local tp=GetRivalsAimbotPart(player.Character)
+        if not tp then continue end
+        if Config.Aimbot.VisibleCheck and not IsRivalsVisible(tp) then continue end
+        local sp,on=Camera:WorldToViewportPoint(tp.Position)
+        if not on then continue end
+        local d=(Vector2.new(sp.X,sp.Y)-ref).Magnitude
+        if d<bestDist then bestDist=d best=tp bestP=player end
+    end
+    if Config.Aimbot.Method=="Aimlock" and bestP then rivalsAimbotLocked=bestP end
+    return best
+end
 
-            if shouldExpand then
-                if not sphere then
-                    local size = Config.Hitbox.MaxSize
-                    sphere = Instance.new("Part")
-                    sphere.Name = player.Name
-                    sphere.Shape = Enum.PartType.Ball
-                    sphere.Size = Vector3.new(size, size, size)
-                    sphere.CanCollide = false
-                    sphere.Anchored = true
-                    sphere.Material = Enum.Material.ForceField
-                    sphere.Transparency = Config.Hitbox.Transparency
-                    sphere.Color = Color3.fromRGB(0, 100, 255)
-                    sphere.Parent = hitboxFolder
-                end
+-- ESP
+local RivalsESP={} local RivalsLastESP=0
+local function CreateRivalsESP(player)
+    if RivalsESP[player] then return end
+    local e={}
+    e.Box=Drawing.new("Square") e.Box.Thickness=1 e.Box.Filled=false e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Visible=false
+    e.Outline=Drawing.new("Square") e.Outline.Thickness=3 e.Outline.Filled=false e.Outline.Color=Color3.fromRGB(0,0,0) e.Outline.Transparency=0.5 e.Outline.Visible=false
+    e.Name=Drawing.new("Text") e.Name.Size=13 e.Name.Center=true e.Name.Outline=true e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Visible=false
+    e.Distance=Drawing.new("Text") e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Visible=false
+    e.HealthBG=Drawing.new("Square") e.HealthBG.Thickness=1 e.HealthBG.Filled=true e.HealthBG.Color=Color3.fromRGB(0,0,0) e.HealthBG.Transparency=0.5 e.HealthBG.Visible=false
+    e.HealthBar=Drawing.new("Square") e.HealthBar.Thickness=1 e.HealthBar.Filled=true e.HealthBar.Color=Color3.fromRGB(0,255,0) e.HealthBar.Visible=false
+    RivalsESP[player]=e
+end
+local function RemoveRivalsESP(p) local e=RivalsESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d:Remove() end) end RivalsESP[p]=nil end
+local function HideRivalsESP(p) local e=RivalsESP[p] if not e then return end for _,d in pairs(e) do pcall(function() d.Visible=false end) end end
 
-                -- Dynamic sizing
-                if Config.Hitbox.Method == "DHE (Dynamic)" then
-                    local sp, on = Camera:WorldToViewportPoint(entry._receivedPosition)
-                    if on then
-                        local sd = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
-                        local pf = 1 - (sd / fov)
-                        local dynSize = 1 + (Config.Hitbox.MaxSize - 1) * pf
-                        sphere.Size = Vector3.new(dynSize, dynSize, dynSize)
+local function UpdateRivalsESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then for p in pairs(RivalsESP) do HideRivalsESP(p) end return end
+    local now=tick() if now-RivalsLastESP<0.08 then return end RivalsLastESP=now
+    Camera=Workspace.CurrentCamera if not Camera then return end
+    local active={}
+    for _,player in ipairs(GetCachedPlayers()) do
+        if player==LocalPlayer then continue end
+        active[player]=true
+        local isTm=IsRivalsTeammate(player)
+        if Config.ESP.TeamCheck and isTm then HideRivalsESP(player) continue end
+        if not RivalsESP[player] then pcall(function() CreateRivalsESP(player) end) end
+        local esp=RivalsESP[player] if not esp then continue end
+        local c=player.Character
+        local h=c and c:FindFirstChildOfClass("Humanoid")
+        local rp=c and(c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso"))
+        local head=c and c:FindFirstChild("Head")
+        if not c or not h or not rp or h.Health<=0 or c:FindFirstChildOfClass("ForceField") then HideRivalsESP(player) continue end
+        local dist=(Camera.CFrame.Position-rp.Position).Magnitude
+        if dist>Config.ESP.MaxDistance then HideRivalsESP(player) continue end
+        local sp,on=Camera:WorldToViewportPoint(rp.Position)
+        if not on then HideRivalsESP(player) continue end
+        local hSP=head and select(1,Camera:WorldToViewportPoint(head.Position+Vector3.new(0,0.5,0))) or sp
+        local fSP=select(1,Camera:WorldToViewportPoint(rp.Position-Vector3.new(0,3,0)))
+        local height=math.max(math.abs(hSP.Y-fSP.Y),10)
+        local width=height/2 local minX=sp.X-width/2 local minY=hSP.Y
+        local col=isTm and Color3.fromRGB(80,150,255) or(head and IsRivalsVisible(head) and Color3.fromRGB(50,255,50) or Color3.fromRGB(255,50,50))
+        if Config.ESP.Boxes then
+            esp.Outline.Size=Vector2.new(width+2,height+2) esp.Outline.Position=Vector2.new(minX-1,minY-1) esp.Outline.Visible=true
+            esp.Box.Size=Vector2.new(width,height) esp.Box.Position=Vector2.new(minX,minY) esp.Box.Color=col esp.Box.Visible=true
+        else esp.Box.Visible=false esp.Outline.Visible=false end
+        if Config.ESP.Names then esp.Name.Text=player.DisplayName or player.Name esp.Name.Position=Vector2.new(minX+width/2,minY-16) esp.Name.Color=col esp.Name.Visible=true
+        else esp.Name.Visible=false end
+        if Config.ESP.Distance then esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(minX+width/2,minY+height+2) esp.Distance.Visible=true
+        else esp.Distance.Visible=false end
+        if Config.ESP.Boxes and h then
+            local pct=math.clamp(h.Health/math.max(h.MaxHealth,1),0,1)
+            local bh=height*pct
+            local hc=pct>0.5 and Color3.fromRGB(math.floor(255*(1-pct)*2),255,0) or Color3.fromRGB(255,math.floor(255*pct*2),0)
+            esp.HealthBG.Size=Vector2.new(3,height) esp.HealthBG.Position=Vector2.new(minX-6,minY) esp.HealthBG.Visible=true
+            esp.HealthBar.Size=Vector2.new(3,bh) esp.HealthBar.Position=Vector2.new(minX-6,minY+(height-bh)) esp.HealthBar.Color=hc esp.HealthBar.Visible=true
+        else esp.HealthBG.Visible=false esp.HealthBar.Visible=false end
+    end
+    for p in pairs(RivalsESP) do if not active[p] then if not p.Parent then RemoveRivalsESP(p) else HideRivalsESP(p) end end end
+end
+
+-- ================== NAMECALL HOOK ==================
+task.delay(12,function()
+    local char=LocalPlayer.Character
+    if not char then local t=tick() repeat task.wait(0.5) until LocalPlayer.Character or tick()-t>10 end
+    local _inHook=false
+    local oldNamecall
+    oldNamecall=hookmetamethod(game,"__namecall",newcclosure(function(self,...)
+        if _inHook or checkcaller() then return oldNamecall(self,...) end
+        local method=getnamecallmethod()
+        local isRaycast=method=="Raycast" or method=="FindPartOnRay"
+            or method=="FindPartOnRayWithIgnoreList" or method=="FindPartOnRayWithWhitelist"
+        local isFireServer=method=="FireServer"
+        if not(isRaycast or isFireServer) then return oldNamecall(self,...) end
+        if not(Config.Silent.Enabled and Config.Silent.Active and CurrentTargetPos and CurrentTargetPart) then return oldNamecall(self,...) end
+        if math.random(100)>Config.Silent.HitChance then return oldNamecall(self,...) end
+        if tick()-_lastShotModified<MIN_SHOT_INTERVAL then return oldNamecall(self,...) end
+        _inHook=true
+        local args={...}
+        if isRaycast and(self==Workspace or self==workspace) then
+            local cam=Workspace.CurrentCamera
+            if method=="Raycast" then
+                local origin,direction=args[1],args[2]
+                if typeof(origin)=="Vector3" and typeof(direction)=="Vector3" and cam then
+                    local cp=cam.CFrame.Position
+                    local dx,dy,dz=origin.X-cp.X,origin.Y-cp.Y,origin.Z-cp.Z
+                    if math.sqrt(dx*dx+dy*dy+dz*dz)<=8 then
+                        local tp=CurrentTargetPos
+                        local tx,ty,tz=tp.X-origin.X,tp.Y-origin.Y,tp.Z-origin.Z
+                        local tMag=math.sqrt(tx*tx+ty*ty+tz*tz)
+                        local dMag=math.sqrt(direction.X*direction.X+direction.Y*direction.Y+direction.Z*direction.Z)
+                        if tMag>0 and dMag>0 then
+                            local dot=(direction.X/dMag)*(tx/tMag)+(direction.Y/dMag)*(ty/tMag)+(direction.Z/dMag)*(tz/tMag)
+                            if math.deg(math.acos(math.clamp(dot,-1,1)))<=MAX_SILENT_ANGLE_DEG then
+                                local part=CurrentTargetPart local size=part.Size
+                                local off=Vector3.new((math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE)
+                                local ft=tp+off
+                                local nx,ny,nz=ft.X-origin.X,ft.Y-origin.Y,ft.Z-origin.Z
+                                local nMag=math.sqrt(nx*nx+ny*ny+nz*nz)
+                                if nMag>0 then
+                                    local sc=dMag/nMag
+                                    args[2]=Vector3.new(nx*sc,ny*sc,nz*sc)
+                                    _lastShotModified=tick() _inHook=false
+                                    return oldNamecall(self,unpack(args))
+                                end
+                            end
+                        end
                     end
-                else
-                    local s = Config.Hitbox.MaxSize
-                    sphere.Size = Vector3.new(s, s, s)
                 end
-
-                sphere.Position = entry._receivedPosition
-                sphere.Transparency = Config.Hitbox.Transparency
-            elseif sphere then
-                sphere:Destroy()
+            elseif method=="FindPartOnRay" or method=="FindPartOnRayWithIgnoreList" or method=="FindPartOnRayWithWhitelist" then
+                local ray=args[1]
+                if typeof(ray)=="Ray" and cam then
+                    local origin,direction=ray.Origin,ray.Direction
+                    local cp=cam.CFrame.Position
+                    local dx,dy,dz=origin.X-cp.X,origin.Y-cp.Y,origin.Z-cp.Z
+                    if math.sqrt(dx*dx+dy*dy+dz*dz)<=8 then
+                        local tp=CurrentTargetPos
+                        local tx,ty,tz=tp.X-origin.X,tp.Y-origin.Y,tp.Z-origin.Z
+                        local tMag=math.sqrt(tx*tx+ty*ty+tz*tz)
+                        local dMag=math.sqrt(direction.X*direction.X+direction.Y*direction.Y+direction.Z*direction.Z)
+                        if tMag>0 and dMag>0 then
+                            local dot=(direction.X/dMag)*(tx/tMag)+(direction.Y/dMag)*(ty/tMag)+(direction.Z/dMag)*(tz/tMag)
+                            if math.deg(math.acos(math.clamp(dot,-1,1)))<=MAX_SILENT_ANGLE_DEG then
+                                local part=CurrentTargetPart local size=part.Size
+                                local ft=tp+Vector3.new((math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE)
+                                local nx,ny,nz=ft.X-origin.X,ft.Y-origin.Y,ft.Z-origin.Z
+                                local nMag=math.sqrt(nx*nx+ny*ny+nz*nz)
+                                if nMag>0 then
+                                    local sc=dMag/nMag
+                                    args[1]=Ray.new(origin,Vector3.new(nx*sc,ny*sc,nz*sc))
+                                    _lastShotModified=tick() _inHook=false
+                                    return oldNamecall(self,unpack(args))
+                                end
+                            end
+                        end
+                    end
+                end
             end
-        elseif sphere then
-            sphere:Destroy()
-        end
-    end)
-
-    -- Cleanup spheres for disconnected players
-    for _, child in hitboxFolder:GetChildren() do
-        local player = Players:FindFirstChild(child.Name)
-        if not player then child:Destroy() end
-    end
-end
-
--- ═══════════════════════════════════════════
--- MAIN LOOPS
--- ═══════════════════════════════════════════
-
-local pfConnections = {}
-
--- Movement cache update
-table.insert(pfConnections, RunService.Stepped:Connect(function()
-    local ct = os.clock()
-    replicationInterface.operateOnAllEntries(function(player, entry)
-        if entry._isEnemy then
-            local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
-            movementCache.position[player] = movementCache.position[player] or {}
-            if ch and ch.Head then
-                table.insert(movementCache.position[player], 1, ch.Head.Position)
-                table.remove(movementCache.position[player], 16)
+        elseif isFireServer then
+            local isRemote=false pcall(function() isRemote=typeof(self)=="Instance" and self.ClassName=="RemoteEvent" end)
+            if isRemote then
+                local cam=Workspace.CurrentCamera
+                if cam then
+                    local cp=cam.CFrame.Position local cl=cam.CFrame.LookVector
+                    local tp=CurrentTargetPos
+                    local tx,ty,tz=tp.X-cp.X,tp.Y-cp.Y,tp.Z-cp.Z
+                    local tMag=math.sqrt(tx*tx+ty*ty+tz*tz)
+                    local lMag=math.sqrt(cl.X*cl.X+cl.Y*cl.Y+cl.Z*cl.Z)
+                    if tMag>0 and lMag>0 then
+                        local dot=(cl.X/lMag)*(tx/tMag)+(cl.Y/lMag)*(ty/tMag)+(cl.Z/lMag)*(tz/tMag)
+                        if math.deg(math.acos(math.clamp(dot,-1,1)))<=MAX_SILENT_ANGLE_DEG then
+                            local part=CurrentTargetPart local size=part.Size
+                            local ft=tp+Vector3.new((math.random()-0.5)*size.X*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Y*HITBOX_OFFSET_SCALE,(math.random()-0.5)*size.Z*HITBOX_OFFSET_SCALE)
+                            local modified=false
+                            for i,arg in ipairs(args) do if typeof(arg)=="CFrame" then args[i]=CFrame.new(arg.Position,ft) modified=true end end
+                            if modified then _lastShotModified=tick() _inHook=false return oldNamecall(self,unpack(args)) end
+                        end
+                    end
+                end
             end
         end
-    end)
-    table.insert(movementCache.time, 1, ct)
-    table.remove(movementCache.time, 16)
-end))
-
--- Aimbot (RenderStepped for smooth camera)
-table.insert(pfConnections, RunService.RenderStepped:Connect(function(dt)
-    Camera = Workspace.CurrentCamera
-    UpdatePFAimbot(dt)
-end))
-
--- ESP + Hitbox (Heartbeat)
-table.insert(pfConnections, RunService.Heartbeat:Connect(function()
-    Camera = Workspace.CurrentCamera
-    UpdatePFESP()
-    UpdatePFHitboxes()
-end))
-
--- ═══════════════════════════════════════════
--- CLEANUP
--- ═══════════════════════════════════════════
-
-local function PFCleanup()
-    -- Restore hooks
-    if originalBulletNew then bulletObject.new = originalBulletNew end
-    if originalSend then network.send = originalSend end
-
-    -- Disconnect events
-    for _, conn in pfConnections do
-        pcall(function() conn:Disconnect() end)
-    end
-
-    -- Cleanup ESP
-    for p in pairs(PFESP) do RemovePFESP(p) end
-
-    -- Cleanup hitboxes
-    pcall(function() hitboxFolder:Destroy() end)
-
-    -- Clear flags
-    getgenv().AX_PF_HandlesAimbot = nil
-    getgenv().AX_PF_HandlesESP = nil
-    getgenv().AX_PF_HandlesSilent = nil
-    getgenv().AX_PF_HandlesHitbox = nil
-    getgenv().AX_PF_Cleanup = nil
-
-    warn("[AX-PF] ✅ Cleanup complete")
-end
-
--- ═══════════════════════════════════════════
--- PLAYER EVENTS
--- ═══════════════════════════════════════════
-
-Players.PlayerRemoving:Connect(function(p)
-    if pfLockedPlayer == p then pfLockedPlayer = nil end
-    RemovePFESP(p)
-    movementCache.position[p] = nil
-    local sphere = hitboxFolder:FindFirstChild(p.Name)
-    if sphere then sphere:Destroy() end
+        _inHook=false
+        return oldNamecall(self,...)
+    end))
 end)
 
+-- LOOPS CON DELAY
+task.delay(3,function()
+    RunService.RenderStepped:Connect(function()
+        Camera=Workspace.CurrentCamera
+        UpdateSilentTarget()
+        if Config.Aimbot.Enabled and Config.Aimbot.Active then
+            local t=GetRivalsAimbotTarget()
+            if t then
+                local pos=t.Position
+                pcall(function()
+                    if Config.Aimbot.Prediction and Config.Aimbot.Prediction>0 then
+                        local v=t.AssemblyLinearVelocity
+                        if v and v.Magnitude>0.5 then pos=pos+v*Config.Aimbot.Prediction end
+                    end
+                end)
+                local sm=math.max(Config.Aimbot.Smoothness or 5,1)
+                if Config.Aimbot.Method=="Aimbot" then
+                    local cur=Camera.CFrame local tgt=CFrame.lookAt(cur.Position,pos)
+                    Camera.CFrame=sm<=1 and tgt or cur:Lerp(tgt,1/sm)
+                else
+                    local sp,on=Camera:WorldToViewportPoint(pos)
+                    if on then
+                        local mp=UserInputService:GetMouseLocation()
+                        local dx,dy=sp.X-mp.X,sp.Y-mp.Y
+                        local d=math.sqrt(dx*dx+dy*dy)
+                        if d>1 then
+                            local spd=math.clamp(1/sm,0.05,0.8)
+                            local mx=math.clamp(dx*spd,-150,150) local my=math.clamp(dy*spd,-150,150)
+                            if math.abs(mx)>0.3 or math.abs(my)>0.3 then mousemoverel(mx,my) end
+                        end
+                    end
+                end
+            else if not Config.Aimbot.Active then rivalsAimbotLocked=nil end end
+        else if not Config.Aimbot.Active then rivalsAimbotLocked=nil end end
+    end)
+end)
+
+task.delay(4,function()
+    RunService.Heartbeat:Connect(function() UpdateRivalsESP() end)
+end)
+
+getgenv().AX_RivalsLoaded=true
+getgenv().AX_RivalsHandlesAimbot=true
+getgenv().AX_RivalsHandlesESP=true
+getgenv().AX_RivalsHandlesSilent=true
+
+task.delay(1,function()
+    for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then pcall(function() CreateRivalsESP(p) end) end end
+end)
+Players.PlayerAdded:Connect(function(p) task.delay(2,function() pcall(function() CreateRivalsESP(p) end) end) end)
+Players.PlayerRemoving:Connect(function(p)
+    if rivalsAimbotLocked==p then rivalsAimbotLocked=nil end
+    RemoveRivalsESP(p)
+    for i,v in ipairs(_cachedPlayers) do if v==p then table.remove(_cachedPlayers,i) break end end
+end)
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    Camera = Workspace.CurrentCamera
-    pfLockedPlayer = nil
-    pfAimTime = nil
-    hitboxFolder:ClearAllChildren()
+    Camera=Workspace.CurrentCamera
+    CurrentTarget=nil CurrentTargetPos=nil CurrentTargetPart=nil rivalsAimbotLocked=nil
+    UpdateVisFilter()
+    task.wait(3) pcall(SafeACBypass)
 end)
-
--- ═══════════════════════════════════════════
--- REGISTER WITH MAIN SCRIPT
--- ═══════════════════════════════════════════
-
-getgenv().AX_PF_HandlesAimbot = true
-getgenv().AX_PF_HandlesESP = true
-getgenv().AX_PF_HandlesSilent = true
-getgenv().AX_PF_HandlesHitbox = true
-getgenv().AX_PF_Cleanup = PFCleanup
-
--- ═══════════════════════════════════════════
--- NOTIFICATIONS
--- ═══════════════════════════════════════════
-
-task.delay(3, function()
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = "⚡ AX - Phantom Forces v4.0",
-            Text = "Internal hooks loaded! Silent+Aimbot+ESP+Hitbox",
-            Duration = 6
-        })
-    end)
-end)
-
-print("  ✅ PF MODULE v4.0 - Internal hooks active")
-print("  ✅ Silent Aim: bulletObject.new + network.send")
-print("  ✅ Aimbot: cameraInterface angles + trajectory")
-print("  ✅ ESP: replicationInterface + health + weapon")
-print("  ✅ Hitbox: replicationInterface spheres")
