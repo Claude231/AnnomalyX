@@ -1,1 +1,1277 @@
-local _0x={};local _1a=cloneref or function(_2b)return _2b end;local _3c=newcclosure or function(_4d)return _4d end;local _5e=checkcaller or function()return false end;local _6f=getnamecallmethod or get_namecall_method;local _7g=hookfunction or replaceclosure;local _8h=hookmetamethod;local _9i=mousemoverel or function()end;if not _7g or not _8h or not _6f then return end;local _Aa=_1a(game:GetService("\80\108\97\121\101\114\115"));local _Bb=_1a(game:GetService("\87\111\114\107\115\112\97\99\101"));local _Cc=_1a(game:GetService("\82\117\110\83\101\114\118\105\99\101"));local _Dd=_1a(game:GetService("\85\115\101\114\73\110\112\117\116\83\101\114\118\105\99\101"));local _Ee=_1a(game:GetService("\67\111\114\101\71\117\105"));local _Ff=_Aa.LocalPlayer;local _Gg=_Bb.CurrentCamera;local _Hh=game.PlaceId;local _Ii=game.GameId;local _Jj=(_Hh==(0x7C5E1B8B8E5ED));local _Kk=(_Hh==(0x1170A5E5));local _Ll=(_Ii==(0x167E5D312));local _Mm=(_Ii==(0x143333E55));local _Nn=(_Hh==(0x1110CCBD));local _Oo=(_Hh==(0x19F0E3B89A007));local _Pp=(_Hh==(0x4EE4CF5EEB46))or(_Ii==(0x165727D89));if not _Pp then pcall(function()local _Qq=game:GetService("\77\97\114\107\101\116\112\108\97\99\101\83\101\114\118\105\99\101"):GetProductInfo(_Hh);if _Qq and _Qq.Name and _Qq.Name:lower():find("\104\121\112\101\114\115\104\111\116")then _Pp=true end end)end;local _Rr=(_Hh==(0x7A7B99FB96EC))or(_Ii==(0x6F0E49B891D9));if not _Rr then pcall(function()if tostring(_Ii)=="\49\50\50\50\57\49\48\52\49\50\57\53\48\48\49"or tostring(_Hh)=="\49\51\52\55\56\52\54\54\56\52\54\56\54\50\48"then _Rr=true end end)end;if not _Rr then pcall(function()local _Ss=game:GetService("\77\97\114\107\101\116\112\108\97\99\101\83\101\114\118\105\99\101"):GetProductInfo(_Hh);if _Ss and _Ss.Name then local _Tt=_Ss.Name:lower();if _Tt:find("\102\97\116\101\32\116\114\105\103\103\101\114")or _Tt:find("\102\97\116\101\116\114\105\103\103\101\114")or _Tt:find("\102\97\116\101\95\116\114\105\103\103\101\114")then _Rr=true end end end)end;warn(string.format("\91\65\88\93\32\80\108\97\99\101\73\100\58\32\37\115\32\124\32\71\97\109\101\73\100\58\32\37\115",tostring(_Hh),tostring(_Ii)));warn(string.format("\91\65\88\93\32\73\83\95\70\65\84\69\84\82\73\71\71\69\82\58\32\37\115\32\124\32\73\83\95\72\89\80\69\82\83\72\79\84\58\32\37\115",tostring(_Rr),tostring(_Pp)));local _Uu=_Jj or _Kk or _Ll or _Mm or _Nn or _Oo or _Pp or _Rr;local _Vv=_Mm or _Oo;local _Ww=_Mm or _Oo;local _Xx=_Oo;local _Yy=_Oo;local _Zz=_Oo;local _0A=_Mm;local _1B="\85\110\105\118\101\114\115\97\108";if _Rr then _1B="\70\97\116\101\32\84\114\105\103\103\101\114"elseif _Pp then _1B="\72\121\112\101\114\83\104\111\116"elseif _Jj then _1B="\70\108\105\99\107"elseif _Kk then _1B="\80\104\97\110\116\111\109\32\70\111\114\99\101\115"elseif _Ll then _1B="\82\105\118\97\108\115"elseif _Mm then _1B="\67\111\109\98\97\116\32\65\114\101\110\97"elseif _Nn then _1B="\65\114\115\101\110\97\108"elseif _Oo then _1B="\66\108\111\120\32\83\116\114\105\107\101"end;warn("\91\65\88\93\32\71\97\109\101\32\77\111\100\101\58\32".._1B);local _2C=nil;local _3D={};local _4E={};local _5F={};local _6G={};local _7H={};local _8I={};local _9J={};local _aK=0;local _bL=0;local _cM={};local _dN=nil;local _eO=nil;local _fP="\72\101\97\100";local _gQ=0;local _hR=0;local _iS=5e-2;local _jT=0;local _kU=16e-3;local _lV={["\83\105\108\101\110\116"]={["\69\110\97\98\108\101\100"]=false,["\65\99\116\105\118\101"]=false,["\75\101\121\98\105\110\100"]=Enum.KeyCode.E,["\75\101\121\98\105\110\100\77\111\100\101"]="\84\111\103\103\108\101",["\84\97\114\103\101\116\80\97\114\116"]="\72\101\97\100",["\72\105\116\67\104\97\110\99\101"]=100,["\84\101\97\109\67\104\101\99\107"]=false,["\86\105\115\105\98\108\101\67\104\101\99\107"]=false},["\65\105\109\98\111\116"]={["\69\110\97\98\108\101\100"]=false,["\65\99\116\105\118\101"]=false,["\75\101\121\98\105\110\100"]=Enum.KeyCode.Q,["\75\101\121\98\105\110\100\77\111\100\101"]="\72\111\108\100",["\77\101\116\104\111\100"]="\65\105\109\98\111\116",["\84\97\114\103\101\116\80\97\114\116"]="\72\101\97\100",["\84\101\97\109\67\104\101\99\107"]=false,["\86\105\115\105\98\108\101\67\104\101\99\107"]=false,["\83\109\111\111\116\104\110\101\115\115"]=5,["\70\79\86\82\97\100\105\117\115"]=150,["\70\79\86\86\105\115\105\98\108\101"]=true,["\70\79\86\67\111\108\111\114"]=Color3.fromRGB(255,200,0),["\82\97\110\100\111\109\73\110\116\101\114\118\97\108"]=0.5,["\80\114\101\100\105\99\116\105\111\110"]=0},["\72\105\116\98\111\120"]={["\69\110\97\98\108\101\100"]=false,["\65\99\116\105\118\101"]=false,["\75\101\121\98\105\110\100"]=Enum.KeyCode.H,["\75\101\121\98\105\110\100\77\111\100\101"]="\84\111\103\103\108\101",["\77\101\116\104\111\100"]="\68\72\69\32\40\68\121\110\97\109\105\99\41",["\77\97\120\83\105\122\101"]=8,["\84\97\114\103\101\116\80\97\114\116"]="\72\101\97\100",["\84\114\97\110\115\112\97\114\101\110\99\121"]=0.7,["\82\97\110\100\111\109\73\110\116\101\114\118\97\108"]=0.5,["\84\101\97\109\67\104\101\99\107"]=false,["\70\79\86\69\110\97\98\108\101\100"]=true,["\70\79\86\82\97\100\105\117\115"]=150,["\70\79\86\86\105\115\105\98\108\101"]=false,["\70\79\86\67\111\108\111\114"]=Color3.fromRGB(0,255,150)},["\70\79\86"]={["\69\110\97\98\108\101\100"]=true,["\82\97\100\105\117\115"]=150,["\86\105\115\105\98\108\101"]=true,["\67\111\108\111\114"]=Color3.fromRGB(255,255,255)},["\69\83\80"]={["\69\110\97\98\108\101\100"]=false,["\65\99\116\105\118\101"]=false,["\75\101\121\98\105\110\100"]=Enum.KeyCode.V,["\75\101\121\98\105\110\100\77\111\100\101"]="\84\111\103\103\108\101",["\66\111\120\101\115"]=true,["\78\97\109\101\115"]=true,["\68\105\115\116\97\110\99\101"]=true,["\77\97\120\68\105\115\116\97\110\99\101"]=1000,["\84\101\97\109\67\104\101\99\107"]=false},["\84\114\105\103\103\101\114\98\111\116"]={["\69\110\97\98\108\101\100"]=false,["\65\99\116\105\118\101"]=false,["\75\101\121\98\105\110\100"]=Enum.KeyCode.T,["\75\101\121\98\105\110\100\77\111\100\101"]="\84\111\103\103\108\101",["\84\101\97\109\67\104\101\99\107"]=true,["\68\101\108\97\121"]=0.05,["\70\79\86\66\97\115\101\100"]=true,["\85\115\101\83\99\114\101\101\110\82\97\121"]=true},["\71\85\73"]={["\84\111\103\103\108\101\75\101\121"]=Enum.KeyCode.End}};getgenv().AX_Config=_lV;local _mW=RaycastParams.new();_mW.FilterType=Enum.RaycastFilterType.Exclude;_mW.FilterDescendantsInstances={};local _nX=RaycastParams.new();_nX.FilterType=Enum.RaycastFilterType.Exclude;_nX.FilterDescendantsInstances={};local _oY={};local _pZ=0;local _q0=2;local function _r1()local _s2=tick();if _s2-_pZ>_q0 then _oY=_Aa:GetPlayers();_pZ=_s2 end;return _oY end;local _t3={"\95\95\97\99\115\105\103\110\97\116\117\114\101","\95\95\99\104\101\99\107\115\117\109","\95\95\104\97\115\104","\95\95\105\110\116\101\103\114\105\116\121","\95\95\118\97\108\105\100\97\116\105\111\110","\95\95\101\120\112\108\111\105\116\95\102\108\97\103","\95\97\99\95\116\111\107\101\110","\95\115\101\99\117\114\105\116\121\95\104\97\115\104","\95\95\97\110\116\105\99\104\101\97\116","\95\95\100\101\116\101\99\116","\95\95\98\97\110\102\108\97\103"};if not getgenv()._AX_KickHooked then pcall(function()for _,_u4 in ipairs({"\75\105\99\107","\107\105\99\107"})do local _v5=_Ff[_u4];if typeof(_v5)=="\102\117\110\99\116\105\111\110"then local _w6=_v5;_7g(_v5,_3c(function(_x7,...)if _x7==_Ff then return end;return _w6(_x7,...)end))end end;getgenv()._AX_KickHooked=true end)end;if not _Ll and not _Ww then pcall(function()local _y8=_1a(game:GetService("\83\99\114\105\112\116\67\111\110\116\101\120\116"));if getconnections then for _,_z9 in ipairs(getconnections(_y8.Error))do pcall(function()_z9:Disable()end)end;for _,_A0 in ipairs(getconnections(_y8.ScriptAdded))do pcall(function()_A0:Disable()end)end;for _,_B1 in ipairs(getconnections(_y8.ScriptRemoved))do pcall(function()_B1:Disable()end)end end end)end;pcall(function()local _C2={"\115\105\103\110\97\116\117\114\101","\99\104\101\99\107\115\117\109","\104\97\115\104","\101\120\112\108\111\105\116","\99\104\101\97\116","\104\97\99\107","\100\101\116\101\99\116","\97\110\116\105\99\104\101\97\116","\98\97\110"};for _D3 in pairs(_G)do local _E4=tostring(_D3):lower();for _,_F5 in ipairs(_C2)do if _E4:find(_F5)then _G[_D3]=nil;break end end end end);if not _Ll and getgc then pcall(function()local _G6=getgc(true);for _H7=1,math.min(#_G6,2000)do local _I8=_G6[_H7];if type(_I8)=="\116\97\98\108\101"then pcall(function()for _,_J9 in ipairs(_t3)do if rawget(_I8,_J9)then rawset(_I8,_J9,nil)end end end)end end end)end;task.spawn(function()task.wait(_Ll and 2 or 0.5);if _Rr then warn("\91\65\88\93\32\67\97\114\103\97\110\100\111\32\109\111\100\117\108\111\32\70\97\116\101\32\84\114\105\103\103\101\114\46\46\46");local _Ka,_Lb=pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\70\84\88"))()end);if not _Ka then warn("\91\65\88\93\32\226\157\140\32\69\114\114\111\114\32\99\97\114\103\97\110\100\111\32\70\84\88\58\32"..tostring(_Lb))end elseif _Pp then warn("\91\65\88\93\32\67\97\114\103\97\110\100\111\32\109\111\100\117\108\111\32\72\121\112\101\114\83\104\111\116\46\46\46");local _Mc,_Nd=pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\72\83\88"))()end);if not _Mc then warn("\91\65\88\93\32\226\157\140\32\69\114\114\111\114\32\99\97\114\103\97\110\100\111\32\72\83\88\58\32"..tostring(_Nd))end elseif _Jj then pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\70\108\105\99\107\88"))()end)elseif _Kk then warn("\91\65\88\93\32\67\97\114\103\97\110\100\111\32\109\111\100\117\108\111\32\80\104\97\110\116\111\109\32\70\111\114\99\101\115\32\118\52\46\48\46\46\46");local _Oe,_Pf=pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\80\70\88"))()end);if not _Oe then warn("\91\65\88\93\32\226\157\140\32\69\114\114\111\114\32\99\97\114\103\97\110\100\111\32\80\70\88\58\32"..tostring(_Pf))end elseif _Ll then pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\82\105\118\97\108\115\88"))()end)elseif _Mm then pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\67\65\88"))()end)elseif _Nn then pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\65\114\115\101\110\97\108\88"))()end)elseif _Oo then pcall(function()loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\66\83\88"))()end)end end);local _Qg,_Rh,_Si;task.delay(5,function()_Qg=Drawing.new("\67\105\114\99\108\101");_Qg.Thickness=1.5;_Qg.NumSides=100;_Qg.Radius=_lV.FOV.Radius;_Qg.Filled=false;_Qg.Visible=false;_Qg.Color=_lV.FOV.Color;_Qg.Transparency=1;_Rh=Drawing.new("\67\105\114\99\108\101");_Rh.Thickness=1.5;_Rh.NumSides=100;_Rh.Radius=_lV.Aimbot.FOVRadius;_Rh.Filled=false;_Rh.Visible=false;_Rh.Color=_lV.Aimbot.FOVColor;_Rh.Transparency=1;_Si=Drawing.new("\67\105\114\99\108\101");_Si.Thickness=1.5;_Si.NumSides=100;_Si.Radius=_lV.Hitbox.FOVRadius;_Si.Filled=false;_Si.Visible=false;_Si.Color=_lV.Hitbox.FOVColor;_Si.Transparency=1 end);local function _Tj()return _Dd:GetMouseLocation()end;local function _Uk()local _Vl=_Gg.ViewportSize;return Vector2.new(_Vl.X/2,_Vl.Y/2)end;local function _Wm()return getgenv().AX_BSX_HandlesAimbot or getgenv().AX_PF_HandlesAimbot or getgenv().AX_RivalsHandlesAimbot or getgenv().AX_FlickHandlesAimbot or getgenv().AX_ArsenalHandlesAimbot or getgenv().AX_CAHandlesAimbot or getgenv().AX_HyperShotHandlesAimbot or getgenv().AX_FateTriggerHandlesAimbot or _Zz end;local function _Xn()return getgenv().AX_PF_HandlesESP or getgenv().AX_RivalsHandlesESP or getgenv().AX_FlickHandlesESP or getgenv().AX_ArsenalHandlesESP or getgenv().AX_CAHandlesESP or getgenv().AX_HyperShotHandlesESP or getgenv().AX_FateTriggerHandlesESP end;local function _Yo()return getgenv().AX_RivalsHandlesSilent or getgenv().AX_FlickHandlesSilent or getgenv().AX_PF_HandlesSilent or getgenv().AX_ArsenalHandlesSilent or getgenv().AX_CAHandlesSilent or getgenv().AX_HyperShotHandlesSilent or getgenv().AX_FateTriggerHandlesSilent end;local function _Zp()return getgenv().AX_PF_HandlesHitbox or _Yy end;local function _0q(_1r,_2s)if not _2s then return false end;if not _1r or _1r==_Ff then return false end;if _Oo and getgenv().AX_BSX_AreTeammates then local _3t,_4u=pcall(getgenv().AX_BSX_AreTeammates,_Ff,_1r);if _3t then return _4u end end;local _5v,_6w=pcall(function()return _1r.Team and _Ff.Team and _1r.Team==_Ff.Team end);return _5v and _6w end;local function _7x()local _8y=_Ff.Character;local _9z={_Gg};if _8y then table.insert(_9z,_8y)end;_mW.FilterDescendantsInstances=_9z end;_7x();local function _aA(_bB)if not _bB then return false end;local _cC=_Gg.CFrame.Position;local _dD=_bB.Position-_cC;local _eE=_Bb:Raycast(_cC,_dD,_mW);if _eE then return _eE.Instance:IsDescendantOf(_bB.Parent)end;return true end;local function _fF(_gG,_hH)if not _gG then return nil end;if _hH=="\82\97\110\100\111\109"then local _iI={};for _,_jJ in ipairs({"\72\101\97\100\72\66","\72\101\97\100","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\85\112\112\101\114\84\111\114\115\111","\84\111\114\115\111"})do local _kK=_gG:FindFirstChild(_jJ);if _kK then table.insert(_iI,_kK)end end;if #_iI>0 then return _iI[math.random(1,#_iI)]end end;return _gG:FindFirstChild(_hH)or _gG:FindFirstChild("\72\101\97\100\72\66")or _gG:FindFirstChild("\72\101\97\100")or _gG:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116")end;local function _lL()local _mM,_nN=nil,_lV.FOV.Enabled and _lV.FOV.Radius or math.huge;local _oO=_Tj();for _,_pP in ipairs(_r1())do if _pP==_Ff then continue end;if _0q(_pP,_lV.Silent.TeamCheck)then continue end;local _qQ=_pP.Character;if not _qQ then continue end;local _rR=_qQ:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if not _rR or _rR.Health<=0 then continue end;if _qQ:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then continue end;local _sS=_fF(_qQ,_lV.Silent.TargetPart);if not _sS then continue end;if _lV.Silent.VisibleCheck and not _aA(_sS)then continue end;local _tT,_uU=_Gg:WorldToViewportPoint(_sS.Position);if not _uU then continue end;local _vV=(_oO-Vector2.new(_tT.X,_tT.Y)).Magnitude;if _vV<_nN then _nN=_vV;_mM=_sS end end;return _mM end;local function _wW(_xX)if not _xX then return nil end;if _lV.Aimbot.TargetPart=="\82\97\110\100\111\109"then local _yY=tick();if _yY-_gQ>=_lV.Aimbot.RandomInterval then local _zZ={};for _,_A0 in ipairs({"\72\101\97\100","\72\101\97\100\72\66","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\85\112\112\101\114\84\111\114\115\111","\84\111\114\115\111"})do if _xX:FindFirstChild(_A0)then table.insert(_zZ,_A0)end end;if #_zZ>0 then _fP=_zZ[math.random(1,#_zZ)]end;_gQ=_yY end;return _xX:FindFirstChild(_fP)or _xX:FindFirstChild("\72\101\97\100")or _xX:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116")end;return _xX:FindFirstChild(_lV.Aimbot.TargetPart)or _xX:FindFirstChild("\72\101\97\100\72\66")or _xX:FindFirstChild("\72\101\97\100")or _xX:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116")end;local function _B1(_C2p)if not _C2p or not _C2p.Parent then return false end;if _C2p==_Ff then return false end;if _0q(_C2p,_lV.Aimbot.TeamCheck)then return false end;local _D3p=_C2p.Character;if not _D3p or _D3p:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then return false end;local _E4p=_D3p:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");return _E4p and _E4p.Health>0 end;local function _F5p()local _G6p=_lV.Aimbot.Method;if _G6p=="\65\105\109\98\111\116"then local _H7p=_Uk();local _I8p,_J9p=nil,_lV.Aimbot.FOVRadius;for _,_K0=1,1 do for _,_La in ipairs(_r1())do if not _B1(_La)then continue end;local _Mb=_wW(_La.Character);if not _Mb then continue end;if _lV.Aimbot.VisibleCheck and not _aA(_Mb)then continue end;local _Nc,_Od=_Gg:WorldToViewportPoint(_Mb.Position);if not _Od then continue end;local _Pe=(_H7p-Vector2.new(_Nc.X,_Nc.Y)).Magnitude;if _Pe<_J9p then _J9p=_Pe;_I8p=_Mb end end end;return _I8p elseif _G6p=="\65\105\109\108\111\99\107"then if _eO and _B1(_eO)then local _Qf=_wW(_eO.Character);if _Qf and(not _lV.Aimbot.VisibleCheck or _aA(_Qf))then local _Rg,_Sh=_Gg:WorldToViewportPoint(_Qf.Position);if _Sh then return _Qf end end;_eO=nil end;local _Ti=_Tj();local _Uj,_Vk,_Wl=nil,_lV.Aimbot.FOVRadius,nil;for _,_Xm in ipairs(_r1())do if not _B1(_Xm)then continue end;local _Yn=_wW(_Xm.Character);if not _Yn then continue end;if _lV.Aimbot.VisibleCheck and not _aA(_Yn)then continue end;local _Zo,_0p=_Gg:WorldToViewportPoint(_Yn.Position);if not _0p then continue end;local _1q=(_Ti-Vector2.new(_Zo.X,_Zo.Y)).Magnitude;if _1q<_Vk then _Vk=_1q;_Uj=_Yn;_Wl=_Xm end end;if _Wl then _eO=_Wl end;return _Uj end end;local function _2r()if _Wm()then return end;if not _lV.Aimbot.Enabled or not _lV.Aimbot.Active then _dN=nil;if not _lV.Aimbot.Active then _eO=nil end;return end;local _3s=_F5p();_dN=_3s;if not _3s then return end;local _4t=_3s.Position;if _lV.Aimbot.Prediction>0 then pcall(function()local _5u=_3s.AssemblyLinearVelocity;if _5u and _5u.Magnitude>0.5 then _4t=_4t+_5u*_lV.Aimbot.Prediction end end)end;local _6v=_lV.Aimbot.Smoothness;if _lV.Aimbot.Method=="\65\105\109\98\111\116"then local _7w=_Gg.CFrame;local _8x=CFrame.lookAt(_7w.Position,_4t);_Gg.CFrame=_6v<=1 and _8x or _7w:Lerp(_8x,1/_6v)elseif _lV.Aimbot.Method=="\65\105\109\108\111\99\107"then local _9y,_Az=_Gg:WorldToViewportPoint(_4t);if not _Az then return end;local _B0=_Tj();local _C1,_D2=_9y.X-_B0.X,_9y.Y-_B0.Y;local _E3=math.sqrt(_C1*_C1+_D2*_D2);if _E3<2 then return end;local _F4=math.clamp(1/math.max(_6v,1),0.05,0.8);local _G5=math.clamp(_C1*_F4,-150,150);local _H6=math.clamp(_D2*_F4,-150,150);if math.abs(_G5)>0.5 or math.abs(_H6)>0.5 then _9i(_G5,_H6)end end end;local _I7=0;local function _J8()if not _lV.Triggerbot.Enabled or not _lV.Triggerbot.Active then return end;local _K9=tick();if _K9-_I7<_lV.Triggerbot.Delay then return end;local _La2=_Ff.Character;if not _La2 then return end;local _Mb2=_La2:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if not _Mb2 or _Mb2.Health<=0 then return end;_nX.FilterDescendantsInstances={_La2,_Gg};local _Nc2=false;if _lV.Triggerbot.UseScreenRay then local _Od2=_Tj();local _Pe2=_Gg:ViewportPointToRay(_Od2.X,_Od2.Y);local _Qf2=_Bb:Raycast(_Pe2.Origin,_Pe2.Direction*5000,_nX);if _Qf2 and _Qf2.Instance then local _Rg2=_Aa:GetPlayerFromCharacter(_Qf2.Instance.Parent)or _Aa:GetPlayerFromCharacter(_Qf2.Instance.Parent and _Qf2.Instance.Parent.Parent);if _Rg2 and _Rg2~=_Ff and not _0q(_Rg2,_lV.Triggerbot.TeamCheck)then local _Sh2=_Rg2.Character;if _Sh2 and not _Sh2:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then local _Ti2=_Sh2:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if _Ti2 and _Ti2.Health>0 then _Nc2=true end end end end end;if not _Nc2 and _lV.Triggerbot.FOVBased then local _Uj2=_Tj();local _Vk2=_lV.FOV.Enabled and _lV.FOV.Radius or 150;for _,_Wl2 in ipairs(_r1())do if _Wl2==_Ff then continue end;if _0q(_Wl2,_lV.Triggerbot.TeamCheck)then continue end;local _Xm2=_Wl2.Character;if not _Xm2 then continue end;local _Yn2=_Xm2:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if not _Yn2 or _Yn2.Health<=0 or _Xm2:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then continue end;local _Zo2=_Xm2:FindFirstChild("\72\101\97\100\72\66")or _Xm2:FindFirstChild("\72\101\97\100")or _Xm2:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116");if not _Zo2 then continue end;local _0p2,_1q2=_Gg:WorldToViewportPoint(_Zo2.Position);if not _1q2 then continue end;if(_Uj2-Vector2.new(_0p2.X,_0p2.Y)).Magnitude<=_Vk2 then if _aA(_Zo2)then _Nc2=true;break end end end end;if _Nc2 then _I7=_K9;pcall(function()if mouse1press and mouse1release then mouse1press();task.delay(0.02+math.random()*0.02,function()pcall(mouse1release)end)elseif mouse1click then mouse1click()end end)end end;local function _2r2(_3s2)local _4t2=tick();if not _9J[_3s2]or(_4t2-_9J[_3s2])>=_lV.Hitbox.RandomInterval then _8I[_3s2]=math.random(1,2)==1 and"\72\101\97\100"or"\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116";_9J[_3s2]=_4t2 end;return _8I[_3s2]or"\72\101\97\100"end;local function _5u2(_6v2,_7w2,_8x2)if not _4E[_6v2]then _4E[_6v2]={}end;if not _5F[_6v2]then _5F[_6v2]={}end;if not _6G[_6v2]then _6G[_6v2]={}end;if not _7H[_6v2]then _7H[_6v2]={}end;if not _4E[_6v2][_7w2]then _4E[_6v2][_7w2]=_8x2.Size;_5F[_6v2][_7w2]=_8x2.Transparency;_6G[_6v2][_7w2]=_8x2.CanCollide;_7H[_6v2][_7w2]=_8x2.Massless end end;local function _9y2(_Az2)if not _Az2 then return end;local _B02,_C12=pcall(function()return _Az2.Character end);if not _B02 or not _C12 then return end;if _4E[_Az2]then for _D22,_E32 in pairs(_4E[_Az2])do local _F42=_C12:FindFirstChild(_D22);if _F42 then pcall(function()_F42.Size=_E32;_F42.Transparency=_5F[_Az2][_D22];_F42.Massless=_7H[_Az2][_D22];_F42.CanCollide=_6G[_Az2][_D22]end)end end end;_cM[_Az2]=nil end;local function _G52(_H62)_9y2(_H62);_4E[_H62]=nil;_5F[_H62]=nil;_6G[_H62]=nil;_7H[_H62]=nil;_8I[_H62]=nil;_9J[_H62]=nil;_cM[_H62]=nil end;local function _I72()for _J82 in pairs(_cM)do _9y2(_J82)end;_4E={};_5F={};_6G={};_7H={};_cM={}end;local function _K92(_La3,_Mb3,_Nc3)if _Yy then return end;local _Od3=_La3.Character;if not _Od3 then return end;local _Pe3={"\72\101\97\100","\72\101\97\100\72\66","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116"};if _Nn then _Pe3={"\72\101\97\100","\72\101\97\100\72\66","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\72\105\116\98\111\120","\82\105\103\104\116\85\112\112\101\114\76\101\103","\76\101\102\116\85\112\112\101\114\76\101\103"}end;for _,_Qf3 in ipairs(_Pe3)do local _Rg3=_Od3:FindFirstChild(_Qf3);if _Rg3 and _Rg3:IsA("\66\97\115\101\80\97\114\116")then _5u2(_La3,_Qf3,_Rg3);local _Sh3=(_Qf3==_Mb3)or(_Mb3=="\72\101\97\100"and(_Qf3=="\72\101\97\100\72\66"or _Qf3=="\72\105\116\98\111\120"));pcall(function()if _Sh3 then _Rg3.CanCollide=false;_Rg3.Massless=true;_Rg3.Size=Vector3.new(_Nc3,_Nc3,_Nc3);_Rg3.Transparency=_lV.Hitbox.Transparency elseif _4E[_La3]and _4E[_La3][_Qf3]then _Rg3.Size=_4E[_La3][_Qf3];_Rg3.Transparency=_5F[_La3][_Qf3];_Rg3.CanCollide=_6G[_La3][_Qf3];_Rg3.Massless=_7H[_La3][_Qf3]end end)end end;_cM[_La3]=true end;local function _Ti3()if _Zp()then return end;if not _lV.Hitbox.Enabled or not _lV.Hitbox.Active then _I72();return end;local _Uj3=tick();if _Uj3-_aK<0.05 then return end;_aK=_Uj3;local _Vk3={};if _lV.Hitbox.Method=="\72\69\32\40\83\116\97\116\105\99\41"then for _,_Wl3 in ipairs(_r1())do if _Wl3==_Ff or not _Wl3.Parent then continue end;if _0q(_Wl3,_lV.Hitbox.TeamCheck)then continue end;local _Xm3=_Wl3.Character;if not _Xm3 then continue end;local _Yn3=_Xm3:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if not _Yn3 or _Yn3.Health<=0 or _Xm3:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then continue end;local _Zo3=_lV.Hitbox.TargetPart=="\82\97\110\100\111\109"and _2r2(_Wl3)or _lV.Hitbox.TargetPart;_Vk3[_Wl3]={partToModify=_Zo3,dynamicSize=_lV.Hitbox.MaxSize}end else local _0p3=_Tj();local _1q3=_lV.Hitbox.FOVEnabled and _lV.Hitbox.FOVRadius or _lV.FOV.Radius;for _,_2r3 in ipairs(_r1())do if _2r3==_Ff or not _2r3.Parent then continue end;if _0q(_2r3,_lV.Hitbox.TeamCheck)then continue end;local _3s3=_2r3.Character;if not _3s3 then continue end;local _4t3=_3s3:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");if not _4t3 or _4t3.Health<=0 or _3s3:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then continue end;local _5u3=_lV.Hitbox.TargetPart=="\82\97\110\100\111\109"and _2r2(_2r3)or _lV.Hitbox.TargetPart;local _6v3=_3s3:FindFirstChild(_5u3)or _3s3:FindFirstChild("\72\101\97\100")or _3s3:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116");if not _6v3 then continue end;local _7w3,_8x3=_Gg:WorldToViewportPoint(_6v3.Position);if not _8x3 then continue end;local _9y3=(_0p3-Vector2.new(_7w3.X,_7w3.Y)).Magnitude;if _9y3>_1q3 then continue end;local _Az3=1-(_9y3/_1q3);_Vk3[_2r3]={partToModify=_5u3,dynamicSize=1+(_lV.Hitbox.MaxSize-1)*_Az3}end end;for _B03 in pairs(_cM)do if not _Vk3[_B03]then _9y2(_B03)end end;for _C13,_D23 in pairs(_Vk3)do _K92(_C13,_D23.partToModify,_D23.dynamicSize)end end;local function _E33(_F43)if _3D[_F43]then return end;_3D[_F43]={Box=Drawing.new("\83\113\117\97\114\101"),Name=Drawing.new("\84\101\120\116"),Distance=Drawing.new("\84\101\120\116")};local _G53=_3D[_F43];_G53.Box.Thickness=1;_G53.Box.Filled=false;_G53.Box.Color=Color3.fromRGB(255,255,255);_G53.Box.Transparency=1;_G53.Box.Visible=false;_G53.Name.Size=13;_G53.Name.Center=true;_G53.Name.Outline=true;_G53.Name.Color=Color3.fromRGB(255,255,255);_G53.Name.Transparency=1;_G53.Name.Visible=false;_G53.Distance.Size=12;_G53.Distance.Center=true;_G53.Distance.Outline=true;_G53.Distance.Color=Color3.fromRGB(200,200,200);_G53.Distance.Transparency=1;_G53.Distance.Visible=false end;local function _H63()if _Xn()then return end;if not _lV.ESP.Enabled or not _lV.ESP.Active then return end;local _I73=tick();if _I73-_bL<0.1 then return end;_bL=_I73;for _J83,_K93 in pairs(_3D)do if not _J83 or not _J83.Parent then for _,_La4 in pairs(_K93)do _La4.Visible=false end;continue end;if _0q(_J83,_lV.ESP.TeamCheck)then for _,_Mb4 in pairs(_K93)do _Mb4.Visible=false end;continue end;local _Nc4=_J83.Character;local _Od4=_Nc4 and _Nc4:FindFirstChildOfClass("\72\117\109\97\110\111\105\100");local _Pe4=_Nc4 and(_Nc4:FindFirstChild("\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116")or _Nc4:FindFirstChild("\84\111\114\115\111"));if _Nc4 and _Od4 and _Pe4 and _Od4.Health>0 and not _Nc4:FindFirstChildOfClass("\70\111\114\99\101\70\105\101\108\100")then local _Qf4=(_Gg.CFrame.Position-_Pe4.Position).Magnitude;if _Qf4<=_lV.ESP.MaxDistance then local _Rg4,_Sh4=_Gg:WorldToViewportPoint(_Pe4.Position);if _Sh4 then local _Ti4=Vector2.new(2000/_Qf4,2500/_Qf4);_K93.Box.Size=_Ti4;_K93.Box.Position=Vector2.new(_Rg4.X-_Ti4.X/2,_Rg4.Y-_Ti4.Y/2);_K93.Box.Visible=_lV.ESP.Boxes;_K93.Name.Text=_J83.DisplayName or _J83.Name;_K93.Name.Position=Vector2.new(_Rg4.X,_Rg4.Y-_Ti4.Y/2-15);_K93.Name.Visible=_lV.ESP.Names;_K93.Distance.Text=math.floor(_Qf4).."\109";_K93.Distance.Position=Vector2.new(_Rg4.X,_Rg4.Y+_Ti4.Y/2+5);_K93.Distance.Visible=_lV.ESP.Distance;continue end end end;for _,_Uj4 in pairs(_K93)do _Uj4.Visible=false end end end;task.delay(_Ll and 2 or 0.3,function()if not _Uu and not _Vv and not _0A then local _Vk4=false;local _Wl4;_Wl4=_8h(game,"\95\95\110\97\109\101\99\97\108\108",_3c(function(_Xm4,...)if _Vk4 or _5e()then return _Wl4(_Xm4,...)end;local _Yn4=_6f();if _Yn4~="\82\97\121\99\97\115\116"and _Yn4~="\70\105\110\100\80\97\114\116\79\110\82\97\121"and _Yn4~="\70\105\110\100\80\97\114\116\79\110\82\97\121\87\105\116\104\73\103\110\111\114\101\76\105\115\116"and _Yn4~="\70\105\110\100\80\97\114\116\79\110\82\97\121\87\105\116\104\87\104\105\116\101\108\105\115\116"then return _Wl4(_Xm4,...)end;if not(_lV.Silent.Enabled and _lV.Silent.Active and _2C and _2C.Parent)then return _Wl4(_Xm4,...)end;if math.random(1,100)>_lV.Silent.HitChance then return _Wl4(_Xm4,...)end;_Vk4=true;local _Zo4={...};if _Xm4==_Bb or _Xm4==workspace then local _0p4=_Bb.CurrentCamera;if _0p4 then if _Yn4=="\82\97\121\99\97\115\116"then local _1q4,_2r4=_Zo4[1],_Zo4[2];if typeof(_1q4)=="\86\101\99\116\111\114\51"and typeof(_2r4)=="\86\101\99\116\111\114\51"then local _3s4=_0p4.CFrame.Position;local _4t4,_5u4,_6v4=_1q4.X-_3s4.X,_1q4.Y-_3s4.Y,_1q4.Z-_3s4.Z;if math.sqrt(_4t4*_4t4+_5u4*_5u4+_6v4*_6v4)<=10 then local _7w4=_2C.Position;local _8x4,_9y4,_Az4=_7w4.X-_1q4.X,_7w4.Y-_1q4.Y,_7w4.Z-_1q4.Z;local _B04=math.sqrt(_8x4*_8x4+_9y4*_9y4+_Az4*_Az4);local _C14=math.sqrt(_2r4.X*_2r4.X+_2r4.Y*_2r4.Y+_2r4.Z*_2r4.Z);if _B04>0 and _C14>0 then local _D24=(_2r4.X/_C14)*(_8x4/_B04)+(_2r4.Y/_C14)*(_9y4/_B04)+(_2r4.Z/_C14)*(_Az4/_B04);if math.deg(math.acos(math.clamp(_D24,-1,1)))<=20 then _Zo4[2]=Vector3.new(_8x4/_B04*_C14,_9y4/_B04*_C14,_Az4/_B04*_C14);_Vk4=false;return _Wl4(_Xm4,unpack(_Zo4))end end end end elseif _Yn4=="\70\105\110\100\80\97\114\116\79\110\82\97\121"or _Yn4=="\70\105\110\100\80\97\114\116\79\110\82\97\121\87\105\116\104\73\103\110\111\114\101\76\105\115\116"or _Yn4=="\70\105\110\100\80\97\114\116\79\110\82\97\121\87\105\116\104\87\104\105\116\101\108\105\115\116"then local _E34=_Zo4[1];if typeof(_E34)=="\82\97\121"then local _F44,_G54=_E34.Origin,_E34.Direction;local _H64=_0p4.CFrame.Position;local _I74,_J84,_K94=_F44.X-_H64.X,_F44.Y-_H64.Y,_F44.Z-_H64.Z;if math.sqrt(_I74*_I74+_J84*_J84+_K94*_K94)<=10 then local _La5=_2C.Position;local _Mb5,_Nc5,_Od5=_La5.X-_F44.X,_La5.Y-_F44.Y,_La5.Z-_F44.Z;local _Pe5=math.sqrt(_Mb5*_Mb5+_Nc5*_Nc5+_Od5*_Od5);local _Qf5=math.sqrt(_G54.X*_G54.X+_G54.Y*_G54.Y+_G54.Z*_G54.Z);if _Pe5>0 and _Qf5>0 then local _Rg5=(_G54.X/_Qf5)*(_Mb5/_Pe5)+(_G54.Y/_Qf5)*(_Nc5/_Pe5)+(_G54.Z/_Qf5)*(_Od5/_Pe5);if math.deg(math.acos(math.clamp(_Rg5,-1,1)))<=20 then _Zo4[1]=Ray.new(_F44,Vector3.new(_Mb5/_Pe5*_Qf5,_Nc5/_Pe5*_Qf5,_Od5/_Pe5*_Qf5));_Vk4=false;return _Wl4(_Xm4,unpack(_Zo4))end end end end end end end;_Vk4=false;return _Wl4(_Xm4,...)end))end end);task.delay(3,function()local _Sh5=Instance.new("\83\99\114\101\101\110\71\117\105");_Sh5.Name="\65\88"..math.random(100000,999999);_Sh5.ResetOnSpawn=false;pcall(function()if syn then syn.protect_gui(_Sh5)end end);pcall(function()_Sh5.Parent=gethui and gethui()or _Ee end);if not _Sh5.Parent then _Sh5.Parent=_Ee end;local _Ti5=Instance.new("\70\114\97\109\101");_Ti5.Name="\77"..math.random(1000,9999);_Ti5.Parent=_Sh5;_Ti5.BackgroundColor3=Color3.fromRGB(20,20,20);_Ti5.BorderSizePixel=0;_Ti5.Position=UDim2.new(0.3,0,0.15,0);_Ti5.Size=UDim2.new(0,490,0,620);_Ti5.Active=true;_Ti5.Draggable=true;Instance.new("\85\73\67\111\114\110\101\114",_Ti5).CornerRadius=UDim.new(0,10);local _Uj5=Instance.new("\70\114\97\109\101",_Ti5);_Uj5.BackgroundColor3=Color3.fromRGB(30,30,30);_Uj5.BorderSizePixel=0;_Uj5.Size=UDim2.new(1,0,0,40);Instance.new("\85\73\67\111\114\110\101\114",_Uj5).CornerRadius=UDim.new(0,10);local _Vk5=Instance.new("\84\101\120\116\76\97\98\101\108",_Uj5);_Vk5.BackgroundTransparency=1;_Vk5.Position=UDim2.new(0,15,0,0);_Vk5.Size=UDim2.new(1,-80,1,0);_Vk5.Font=Enum.Font.GothamBold;_Vk5.Text="\226\154\161\32\65\78\78\79\77\65\76\89\32\88\32\118\49\55\46\55";_Vk5.TextColor3=Color3.fromRGB(255,255,255);_Vk5.TextSize=16;_Vk5.TextXAlignment=Enum.TextXAlignment.Left;local _Wl5=Instance.new("\84\101\120\116\76\97\98\101\108",_Uj5);_Wl5.BackgroundTransparency=1;_Wl5.Position=UDim2.new(1,-200,0,0);_Wl5.Size=UDim2.new(0,160,1,0);_Wl5.Font=Enum.Font.Gotham;_Wl5.Text="\98\121\32\69\108\83\97\99\97\76\101\99\104\101";_Wl5.TextColor3=Color3.fromRGB(150,150,150);_Wl5.TextSize=12;_Wl5.TextXAlignment=Enum.TextXAlignment.Right;local _Xm5=Instance.new("\84\101\120\116\66\117\116\116\111\110",_Uj5);_Xm5.BackgroundColor3=Color3.fromRGB(220,50,50);_Xm5.BorderSizePixel=0;_Xm5.Position=UDim2.new(1,-35,0,7);_Xm5.Size=UDim2.new(0,26,0,26);_Xm5.Font=Enum.Font.GothamBold;_Xm5.Text="\226\156\149";_Xm5.TextColor3=Color3.fromRGB(255,255,255);_Xm5.TextSize=14;Instance.new("\85\73\67\111\114\110\101\114",_Xm5).CornerRadius=UDim.new(0,6);local _Yn5=Instance.new("\70\114\97\109\101",_Ti5);_Yn5.BackgroundColor3=Color3.fromRGB(25,25,25);_Yn5.BorderSizePixel=0;_Yn5.Position=UDim2.new(0,0,0,40);_Yn5.Size=UDim2.new(1,0,0,40);local _Zo5=Instance.new("\70\114\97\109\101",_Ti5);_Zo5.BackgroundTransparency=1;_Zo5.Position=UDim2.new(0,0,0,80);_Zo5.Size=UDim2.new(1,0,1,-80);local _0p5,_1q5={},{};local function _2r5(_3s5)for _4t5,_5u5 in pairs(_0p5)do _5u5.Visible=(_4t5==_3s5)end;for _6v5,_7w5 in pairs(_1q5)do _7w5.BackgroundColor3=_6v5==_3s5 and Color3.fromRGB(55,55,55)or Color3.fromRGB(25,25,25);_7w5.TextColor3=_6v5==_3s5 and Color3.fromRGB(255,255,255)or Color3.fromRGB(140,140,140)end end;local _8x5,_9y5=6,0;local function _Az5(_B05,_C15)local _D25=_9y5;_9y5=_9y5+1;local _E35=Instance.new("\84\101\120\116\66\117\116\116\111\110",_Yn5);_E35.BackgroundColor3=Color3.fromRGB(25,25,25);_E35.BorderSizePixel=0;_E35.Position=UDim2.new(_D25/_8x5,0,0,0);_E35.Size=UDim2.new(1/_8x5,0,1,0);_E35.Font=Enum.Font.GothamBold;_E35.Text=_C15.."\32".._B05;_E35.TextColor3=Color3.fromRGB(140,140,140);_E35.TextSize=9;_1q5[_B05]=_E35;local _F45=Instance.new("\83\99\114\111\108\108\105\110\103\70\114\97\109\101",_Zo5);_F45.BackgroundTransparency=1;_F45.Position=UDim2.new(0,8,0,8);_F45.Size=UDim2.new(1,-16,1,-16);_F45.CanvasSize=UDim2.new(0,0,0,0);_F45.ScrollBarThickness=5;_F45.ScrollBarImageColor3=Color3.fromRGB(80,80,80);_F45.BorderSizePixel=0;_F45.Visible=false;local _G55=Instance.new("\85\73\76\105\115\116\76\97\121\111\117\116",_F45);_G55.Padding=UDim.new(0,8);_G55:GetPropertyChangedSignal("\65\98\115\111\108\117\116\101\67\111\110\116\101\110\116\83\105\122\101"):Connect(function()_F45.CanvasSize=UDim2.new(0,0,0,_G55.AbsoluteContentSize.Y+10)end);_0p5[_B05]=_F45;_E35.MouseButton1Click:Connect(function()_2r5(_B05)end);if _D25==0 then _2r5(_B05)end;return _F45 end;local function _H65(_I75,_J85)local _K95=Instance.new("\70\114\97\109\101",_I75);_K95.BackgroundColor3=Color3.fromRGB(35,35,35);_K95.BorderSizePixel=0;_K95.Size=UDim2.new(1,0,0,28);Instance.new("\85\73\67\111\114\110\101\114",_K95).CornerRadius=UDim.new(0,6);local _La6=Instance.new("\84\101\120\116\76\97\98\101\108",_K95);_La6.BackgroundTransparency=1;_La6.Size=UDim2.new(1,0,1,0);_La6.Font=Enum.Font.GothamBold;_La6.Text=_J85;_La6.TextColor3=Color3.fromRGB(255,255,255);_La6.TextSize=13 end;local function _Mb6(_Nc6,_Od6,_Pe6,_Qf6)local _Rg6=Instance.new("\70\114\97\109\101",_Nc6);_Rg6.BackgroundColor3=Color3.fromRGB(30,30,30);_Rg6.BorderSizePixel=0;_Rg6.Size=UDim2.new(1,0,0,34);Instance.new("\85\73\67\111\114\110\101\114",_Rg6).CornerRadius=UDim.new(0,6);local _Sh6=Instance.new("\84\101\120\116\76\97\98\101\108",_Rg6);_Sh6.BackgroundTransparency=1;_Sh6.Position=UDim2.new(0,12,0,0);_Sh6.Size=UDim2.new(0.68,0,1,0);_Sh6.Font=Enum.Font.Gotham;_Sh6.Text=_Od6;_Sh6.TextColor3=Color3.fromRGB(240,240,240);_Sh6.TextSize=12;_Sh6.TextXAlignment=Enum.TextXAlignment.Left;local _Ti6=Instance.new("\84\101\120\116\66\117\116\116\111\110",_Rg6);_Ti6.BackgroundColor3=_Pe6 and Color3.fromRGB(50,200,100)or Color3.fromRGB(200,60,60);_Ti6.BorderSizePixel=0;_Ti6.Position=UDim2.new(1,-58,0.5,-11);_Ti6.Size=UDim2.new(0,48,0,22);_Ti6.Font=Enum.Font.GothamBold;_Ti6.Text=_Pe6 and"\79\78"or"\79\70\70";_Ti6.TextColor3=Color3.fromRGB(255,255,255);_Ti6.TextSize=10;Instance.new("\85\73\67\111\114\110\101\114",_Ti6).CornerRadius=UDim.new(0,5);local _Uj6=_Pe6;_Ti6.MouseButton1Click:Connect(function()_Uj6=not _Uj6;_Ti6.Text=_Uj6 and"\79\78"or"\79\70\70";_Ti6.BackgroundColor3=_Uj6 and Color3.fromRGB(50,200,100)or Color3.fromRGB(200,60,60);_Qf6(_Uj6)end)end;local function _Vk6(_Wl6,_Xm6,_Yn6,_Zo6,_0p6,_1q6,_2r6)local _3s6=Instance.new("\70\114\97\109\101",_Wl6);_3s6.BackgroundColor3=Color3.fromRGB(30,30,30);_3s6.BorderSizePixel=0;_3s6.Size=UDim2.new(1,0,0,52);Instance.new("\85\73\67\111\114\110\101\114",_3s6).CornerRadius=UDim.new(0,6);local function _4t6(_5u6)return _2r6 and string.format("\37\46".._2r6.."\102",_5u6)or tostring(math.floor(_5u6))end;local _6v6=Instance.new("\84\101\120\116\76\97\98\101\108",_3s6);_6v6.BackgroundTransparency=1;_6v6.Position=UDim2.new(0,12,0,4);_6v6.Size=UDim2.new(1,-24,0,18);_6v6.Font=Enum.Font.Gotham;_6v6.Text=_Xm6.."\58\32".._4t6(_0p6);_6v6.TextColor3=Color3.fromRGB(240,240,240);_6v6.TextSize=12;_6v6.TextXAlignment=Enum.TextXAlignment.Left;local _7w6=Instance.new("\70\114\97\109\101",_3s6);_7w6.BackgroundColor3=Color3.fromRGB(45,45,45);_7w6.BorderSizePixel=0;_7w6.Position=UDim2.new(0,12,0,30);_7w6.Size=UDim2.new(1,-24,0,10);Instance.new("\85\73\67\111\114\110\101\114",_7w6).CornerRadius=UDim.new(1,0);local _8x6=Instance.new("\70\114\97\109\101",_7w6);_8x6.BackgroundColor3=Color3.fromRGB(100,150,255);_8x6.BorderSizePixel=0;_8x6.Size=UDim2.new((_0p6-_Yn6)/(_Zo6-_Yn6),0,1,0);Instance.new("\85\73\67\111\114\110\101\114",_8x6).CornerRadius=UDim.new(1,0);local _9y6=Instance.new("\84\101\120\116\66\117\116\116\111\110",_7w6);_9y6.BackgroundColor3=Color3.fromRGB(255,255,255);_9y6.BorderSizePixel=0;_9y6.Position=UDim2.new((_0p6-_Yn6)/(_Zo6-_Yn6),-7,0.5,-7);_9y6.Size=UDim2.new(0,14,0,14);_9y6.Text="";Instance.new("\85\73\67\111\114\110\101\114",_9y6).CornerRadius=UDim.new(1,0);local _Az6=false;_9y6.MouseButton1Down:Connect(function()_Az6=true end);local function _B06()if not _Az6 then return end;local _C16=_Dd:GetMouseLocation();local _D26=math.clamp((_C16.X-_7w6.AbsolutePosition.X)/_7w6.AbsoluteSize.X,0,1);local _E36=_2r6 and(math.floor((_Yn6+(_Zo6-_Yn6)*_D26)*(10^_2r6))/(10^_2r6))or math.floor(_Yn6+(_Zo6-_Yn6)*_D26);_8x6.Size=UDim2.new(_D26,0,1,0);_9y6.Position=UDim2.new(_D26,-7,0.5,-7);_6v6.Text=_Xm6.."\58\32".._4t6(_E36);_1q6(_E36)end;_Dd.InputChanged:Connect(function(_F46)if _F46.UserInputType==Enum.UserInputType.MouseMovement then _B06()end end);_Dd.InputEnded:Connect(function(_G56)if _G56.UserInputType==Enum.UserInputType.MouseButton1 then _Az6=false end end)end;local function _H66(_I76,_J86,_K96,_La7,_Mb7)local _Nc7=Instance.new("\70\114\97\109\101",_I76);_Nc7.BackgroundColor3=Color3.fromRGB(30,30,30);_Nc7.BorderSizePixel=0;_Nc7.Size=UDim2.new(1,0,0,34);Instance.new("\85\73\67\111\114\110\101\114",_Nc7).CornerRadius=UDim.new(0,6);local _Od7=Instance.new("\84\101\120\116\76\97\98\101\108",_Nc7);_Od7.BackgroundTransparency=1;_Od7.Position=UDim2.new(0,12,0,0);_Od7.Size=UDim2.new(0.42,0,1,0);_Od7.Font=Enum.Font.Gotham;_Od7.Text=_J86;_Od7.TextColor3=Color3.fromRGB(240,240,240);_Od7.TextSize=12;_Od7.TextXAlignment=Enum.TextXAlignment.Left;local _Pe7=Instance.new("\84\101\120\116\66\117\116\116\111\110",_Nc7);_Pe7.BackgroundColor3=Color3.fromRGB(40,40,40);_Pe7.BorderSizePixel=0;_Pe7.Position=UDim2.new(0.46,0,0.5,-11);_Pe7.Size=UDim2.new(0.52,-12,0,22);_Pe7.Font=Enum.Font.Gotham;_Pe7.Text=_La7;_Pe7.TextColor3=Color3.fromRGB(255,255,255);_Pe7.TextSize=10;Instance.new("\85\73\67\111\114\110\101\114",_Pe7).CornerRadius=UDim.new(0,5);local _Qf7=table.find(_K96,_La7)or 1;_Pe7.MouseButton1Click:Connect(function()_Qf7=_Qf7%#_K96+1;_Pe7.Text=_K96[_Qf7];_Mb7(_K96[_Qf7])end)end;local function _Rg7(_Sh7,_Ti7,_Uj7,_Vk7)local _Wl7=Instance.new("\70\114\97\109\101",_Sh7);_Wl7.BackgroundColor3=Color3.fromRGB(30,30,30);_Wl7.BorderSizePixel=0;_Wl7.Size=UDim2.new(1,0,0,34);Instance.new("\85\73\67\111\114\110\101\114",_Wl7).CornerRadius=UDim.new(0,6);local _Xm7=Instance.new("\84\101\120\116\76\97\98\101\108",_Wl7);_Xm7.BackgroundTransparency=1;_Xm7.Position=UDim2.new(0,12,0,0);_Xm7.Size=UDim2.new(0.5,0,1,0);_Xm7.Font=Enum.Font.Gotham;_Xm7.Text=_Ti7;_Xm7.TextColor3=Color3.fromRGB(240,240,240);_Xm7.TextSize=12;_Xm7.TextXAlignment=Enum.TextXAlignment.Left;local _Yn7=Instance.new("\84\101\120\116\66\117\116\116\111\110",_Wl7);_Yn7.BackgroundColor3=Color3.fromRGB(40,40,40);_Yn7.BorderSizePixel=0;_Yn7.Position=UDim2.new(0.54,0,0.5,-11);_Yn7.Size=UDim2.new(0.44,-12,0,22);_Yn7.Font=Enum.Font.GothamBold;_Yn7.Text=_Uj7.Name;_Yn7.TextColor3=Color3.fromRGB(255,255,255);_Yn7.TextSize=9;Instance.new("\85\73\67\111\114\110\101\114",_Yn7).CornerRadius=UDim.new(0,5);local _Zo7=false;_Yn7.MouseButton1Click:Connect(function()if _Zo7 then return end;_Zo7=true;_Yn7.Text="\46\46\46";_Yn7.BackgroundColor3=Color3.fromRGB(100,150,255);local _0p7;_0p7=_Dd.InputBegan:Connect(function(_1q7,_2r7)if not _2r7 and _1q7.UserInputType==Enum.UserInputType.Keyboard then _Zo7=false;_Yn7.Text=_1q7.KeyCode.Name;_Yn7.BackgroundColor3=Color3.fromRGB(40,40,40);_Vk7(_1q7.KeyCode);_0p7:Disconnect()end end)end)end;local function _3s7(_4t7,_5u7,_6v7)local _7w7=Instance.new("\70\114\97\109\101",_4t7);_7w7.BackgroundColor3=_5u7;_7w7.BorderSizePixel=0;_7w7.Size=UDim2.new(1,0,0,36);Instance.new("\85\73\67\111\114\110\101\114",_7w7).CornerRadius=UDim.new(0,6);local _8x7=Instance.new("\84\101\120\116\76\97\98\101\108",_7w7);_8x7.BackgroundTransparency=1;_8x7.Position=UDim2.new(0,12,0,0);_8x7.Size=UDim2.new(1,-24,1,0);_8x7.Font=Enum.Font.Gotham;_8x7.Text=_6v7;_8x7.TextColor3=Color3.fromRGB(220,255,220);_8x7.TextSize=10;_8x7.TextWrapped=true;_8x7.TextYAlignment=Enum.TextYAlignment.Center end;local _9y7=_Az5("\83\105\108\101\110\116","\240\159\142\175");local _Az7=_Az5("\65\105\109\98\111\116","\240\159\148\171");local _B07=_Az5("\72\105\116\98\111\120","\240\159\147\166");local _C17=_Az5("\69\83\80","\240\159\145\129");local _D27=_Az5("\84\114\105\103\103\101\114","\240\159\148\165");local _E37=_Az5("\73\110\102\111","\226\132\185");if _Nn or _Xx or _0A then _H65(_9y7,"\226\154\161\32\83\105\108\101\110\116\32\65\105\109\32\40\68\105\115\97\98\108\101\100\41");local _F47=_Oo and"\226\154\160\32\83\105\108\101\110\116\32\68\73\83\65\66\76\69\68\32\112\97\114\97\32\66\83\88\46\10\85\115\97\32\65\105\109\98\111\116\32\40\81\41\33"or _Nn and"\226\154\160\32\83\105\108\101\110\116\32\110\111\32\100\105\115\112\111\110\105\98\108\101\32\101\110\32\65\114\115\101\110\97\108\46\10\85\115\97\32\68\72\69\43\65\105\109\98\111\116\33"or"\226\154\160\32\83\105\108\101\110\116\32\110\111\32\100\105\115\112\111\110\105\98\108\101\46\10\85\115\97\32\65\105\109\98\111\116\32\40\81\41\33";local _G57=Instance.new("\70\114\97\109\101",_9y7);_G57.BackgroundColor3=Color3.fromRGB(30,30,30);_G57.BorderSizePixel=0;_G57.Size=UDim2.new(1,0,0,60);Instance.new("\85\73\67\111\114\110\101\114",_G57).CornerRadius=UDim.new(0,6);local _H67=Instance.new("\84\101\120\116\76\97\98\101\108",_G57);_H67.BackgroundTransparency=1;_H67.Position=UDim2.new(0,12,0,0);_H67.Size=UDim2.new(1,-24,1,0);_H67.Font=Enum.Font.Gotham;_H67.Text=_F47;_H67.TextColor3=Color3.fromRGB(255,200,100);_H67.TextSize=12;_H67.TextWrapped=true;_H67.TextYAlignment=Enum.TextYAlignment.Center else local _I77=_Rr and"\32\40\70\97\116\101\32\84\114\105\103\103\101\114\41"or _Ll and"\32\40\82\105\118\97\108\115\41"or _Jj and"\32\40\70\108\105\99\107\41"or _Kk and"\32\40\80\104\97\110\116\111\109\32\70\111\114\99\101\115\41"or _Pp and"\32\40\72\121\112\101\114\83\104\111\116\41"or"";_H65(_9y7,"\226\154\161\32\83\105\108\101\110\116\32\65\105\109".._I77);if _Rr then _3s7(_9y7,Color3.fromRGB(40,20,20),"\226\156\133\32\70\84\88\58\32\82\97\121\99\97\115\116\32\43\32\77\111\117\115\101\46\72\105\116\32\43\32\70\105\114\101\83\101\114\118\101\114\32\104\111\111\107\115")end;if _Pp then _3s7(_9y7,Color3.fromRGB(40,25,25),"\226\154\160\239\184\143\32\79\78\76\89\32\87\79\82\75\73\78\71\32\79\78\32\66\79\84\83\32\226\128\148\32\80\108\97\121\101\114\32\80\118\80\32\110\111\116\32\115\117\112\112\111\114\116\101\100")end;if _Kk then _3s7(_9y7,Color3.fromRGB(25,30,45),"\226\156\133\32\80\70\32\118\52\46\48\58\32\67\114\101\100\105\116\115\32\116\111\32\87\97\112\117\115\32\109\97\100\101\32\98\121\32\105\82\97\121")end;_Mb6(_9y7,"\69\110\97\98\108\101\32\83\105\108\101\110\116\32\65\105\109",false,function(_J87)_lV.Silent.Enabled=_J87;if not _J87 then _lV.Silent.Active=false end end);_H66(_9y7,"\75\101\121\98\105\110\100\32\77\111\100\101",{"\84\111\103\103\108\101","\72\111\108\100"},"\84\111\103\103\108\101",function(_K97)_lV.Silent.KeybindMode=_K97 end);_Rg7(_9y7,"\75\101\121\98\105\110\100",_lV.Silent.Keybind,function(_La8)_lV.Silent.Keybind=_La8 end);_H66(_9y7,"\84\97\114\103\101\116\32\80\97\114\116",{"\72\101\97\100","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\82\97\110\100\111\109"},"\72\101\97\100",function(_Mb8)_lV.Silent.TargetPart=_Mb8 end);_Vk6(_9y7,"\72\105\116\32\67\104\97\110\99\101\32\37",0,100,100,function(_Nc8)_lV.Silent.HitChance=_Nc8 end);_Mb6(_9y7,"\84\101\97\109\32\67\104\101\99\107",false,function(_Od8)_lV.Silent.TeamCheck=_Od8 end);_Mb6(_9y7,"\86\105\115\105\98\108\101\32\67\104\101\99\107",false,function(_Pe8)_lV.Silent.VisibleCheck=_Pe8 end)end;_H65(_9y7,"\240\159\142\175\32\70\79\86");_Mb6(_9y7,"\69\110\97\98\108\101\32\70\79\86",true,function(_Qf8)_lV.FOV.Enabled=_Qf8 end);_Mb6(_9y7,"\83\104\111\119\32\70\79\86\32\67\105\114\99\108\101",true,function(_Rg8)_lV.FOV.Visible=_Rg8 end);_Vk6(_9y7,"\70\79\86\32\82\97\100\105\117\115",30,500,150,function(_Sh8)_lV.FOV.Radius=_Sh8 end);_H65(_Az7,"\240\159\148\171\32\65\105\109\98\111\116\32\47\32\65\105\109\108\111\99\107");if _Rr then _3s7(_Az7,Color3.fromRGB(40,20,20),"\226\156\133\32\70\84\88\58\32\83\105\108\101\110\116\32\43\32\65\105\109\98\111\116\32\43\32\69\83\80\32\100\101\100\105\99\97\100\111")elseif _Oo then _3s7(_Az7,Color3.fromRGB(25,35,25),"\226\156\133\32\66\83\88\58\32\109\111\117\115\101\109\111\118\101\114\101\108\32\40\65\67\32\115\97\102\101\41")elseif _Kk then _3s7(_Az7,Color3.fromRGB(25,30,40),"\226\156\133\32\80\70\32\118\52\46\48\58\32\84\114\97\106\101\99\116\111\114\121\32\112\114\101\100\105\99\116\105\111\110\32\43\32\99\97\109\101\114\97\73\110\116\101\114\102\97\99\101\32\97\110\103\108\101\115\32\43\32\114\101\112\108\105\99\97\116\105\111\110\73\110\116\101\114\102\97\99\101")elseif _Ll then _3s7(_Az7,Color3.fromRGB(40,25,35),"\226\156\133\32\82\105\118\97\108\115\58\32\67\117\115\116\111\109\32\97\105\109\98\111\116\32\43\32\65\67\32\98\121\112\97\115\115")elseif _Jj then _3s7(_Az7,Color3.fromRGB(35,25,40),"\226\156\133\32\70\108\105\99\107\58\32\67\117\115\116\111\109\32\97\105\109\98\111\116\32\43\32\72\101\97\100\72\66")elseif _Nn then _3s7(_Az7,Color3.fromRGB(40,35,25),"\226\156\133\32\65\114\115\101\110\97\108\58\32\67\117\115\116\111\109\32\97\105\109\98\111\116")elseif _Mm then _3s7(_Az7,Color3.fromRGB(25,40,35),"\226\156\133\32\67\65\58\32\67\117\115\116\111\109\32\97\105\109\98\111\116")elseif _Pp then _3s7(_Az7,Color3.fromRGB(40,25,25),"\226\154\160\239\184\143\32\79\78\76\89\32\87\79\82\75\73\78\71\32\79\78\32\66\79\84\83\32\226\128\148\32\80\108\97\121\101\114\32\80\118\80\32\110\111\116\32\115\117\112\112\111\114\116\101\100")end;_Mb6(_Az7,"\69\110\97\98\108\101",false,function(_Ti8)_lV.Aimbot.Enabled=_Ti8;if not _Ti8 then _lV.Aimbot.Active=false;_eO=nil;_dN=nil end end);_H66(_Az7,"\77\101\116\104\111\100",{"\65\105\109\98\111\116","\65\105\109\108\111\99\107"},"\65\105\109\98\111\116",function(_Uj8)_lV.Aimbot.Method=_Uj8;_eO=nil end);_H66(_Az7,"\75\101\121\98\105\110\100\32\77\111\100\101",{"\84\111\103\103\108\101","\72\111\108\100"},"\72\111\108\100",function(_Vk8)_lV.Aimbot.KeybindMode=_Vk8 end);_Rg7(_Az7,"\75\101\121\98\105\110\100",_lV.Aimbot.Keybind,function(_Wl8)_lV.Aimbot.Keybind=_Wl8 end);_H66(_Az7,"\84\97\114\103\101\116\32\80\97\114\116",{"\72\101\97\100","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\82\97\110\100\111\109"},"\72\101\97\100",function(_Xm8)_lV.Aimbot.TargetPart=_Xm8 end);_Mb6(_Az7,"\84\101\97\109\32\67\104\101\99\107",false,function(_Yn8)_lV.Aimbot.TeamCheck=_Yn8 end);_Mb6(_Az7,"\86\105\115\105\98\108\101\32\67\104\101\99\107",false,function(_Zo8)_lV.Aimbot.VisibleCheck=_Zo8 end);_H65(_Az7,"\226\154\153\32\83\101\116\116\105\110\103\115");_Vk6(_Az7,"\83\109\111\111\116\104\110\101\115\115",1,20,5,function(_0p8)_lV.Aimbot.Smoothness=_0p8 end);_Vk6(_Az7,"\80\114\101\100\105\99\116\105\111\110",0,0.5,0,function(_1q8)_lV.Aimbot.Prediction=_1q8 end,2);_Vk6(_Az7,"\82\97\110\100\111\109\32\83\119\105\116\99\104\32\40\115\41",0.1,2,0.5,function(_2r8)_lV.Aimbot.RandomInterval=_2r8 end,1);_H65(_Az7,"\240\159\142\175\32\65\105\109\98\111\116\32\70\79\86");_Vk6(_Az7,"\70\79\86\32\82\97\100\105\117\115",30,500,150,function(_3s8)_lV.Aimbot.FOVRadius=_3s8 end);_Mb6(_Az7,"\83\104\111\119\32\70\79\86\32\67\105\114\99\108\101",true,function(_4t8)_lV.Aimbot.FOVVisible=_4t8 end);if _Yy then _H65(_B07,"\240\159\147\166\32\72\105\116\98\111\120\32\40\68\105\115\97\98\108\101\100\41");local _5u8=Instance.new("\70\114\97\109\101",_B07);_5u8.BackgroundColor3=Color3.fromRGB(30,30,30);_5u8.BorderSizePixel=0;_5u8.Size=UDim2.new(1,0,0,60);Instance.new("\85\73\67\111\114\110\101\114",_5u8).CornerRadius=UDim.new(0,6);local _6v8=Instance.new("\84\101\120\116\76\97\98\101\108",_5u8);_6v8.BackgroundTransparency=1;_6v8.Position=UDim2.new(0,12,0,0);_6v8.Size=UDim2.new(1,-24,1,0);_6v8.Font=Enum.Font.Gotham;_6v8.Text="\226\154\160\32\68\72\69\47\72\69\32\68\73\83\65\66\76\69\68\32\112\97\114\97\32\66\83\88\46";_6v8.TextColor3=Color3.fromRGB(255,200,100);_6v8.TextSize=12;_6v8.TextWrapped=true;_6v8.TextYAlignment=Enum.TextYAlignment.Center else _H65(_B07,"\240\159\147\166\32\72\105\116\98\111\120\32\69\120\112\97\110\100\101\114");if _Rr then _3s7(_B07,Color3.fromRGB(40,20,20),"\226\132\185\32\70\84\88\58\32\111\110\101\45\115\104\111\116\32\103\97\109\101\44\32\104\105\116\98\111\120\32\111\112\99\105\111\110\97\108")end;if _Kk then _3s7(_B07,Color3.fromRGB(25,30,40),"\226\156\133\32\80\70\32\118\52\46\48\58\32\72\105\116\98\111\120\32\118\105\97\32\114\101\112\108\105\99\97\116\105\111\110\73\110\116\101\114\102\97\99\101")end;if _Pp then _3s7(_B07,Color3.fromRGB(40,25,25),"\226\154\160\239\184\143\32\79\78\76\89\32\87\79\82\75\73\78\71\32\79\78\32\66\79\84\83\32\226\128\148\32\80\108\97\121\101\114\32\80\118\80\32\110\111\116\32\115\117\112\112\111\114\116\101\100")end;_Mb6(_B07,"\69\110\97\98\108\101\32\72\105\116\98\111\120",false,function(_7w8)_lV.Hitbox.Enabled=_7w8;if not _7w8 then _lV.Hitbox.Active=false;_I72()end end);_H66(_B07,"\77\101\116\104\111\100",{"\68\72\69\32\40\68\121\110\97\109\105\99\41","\72\69\32\40\83\116\97\116\105\99\41"},"\68\72\69\32\40\68\121\110\97\109\105\99\41",function(_8x8)_lV.Hitbox.Method=_8x8;_I72()end);_H66(_B07,"\75\101\121\98\105\110\100\32\77\111\100\101",{"\84\111\103\103\108\101","\72\111\108\100"},"\84\111\103\103\108\101",function(_9y8)_lV.Hitbox.KeybindMode=_9y8 end);_Rg7(_B07,"\75\101\121\98\105\110\100",_lV.Hitbox.Keybind,function(_Az8)_lV.Hitbox.Keybind=_Az8 end);_Mb6(_B07,"\84\101\97\109\32\67\104\101\99\107",false,function(_B08)_lV.Hitbox.TeamCheck=_B08 end);_H66(_B07,"\84\97\114\103\101\116\32\80\97\114\116",{"\72\101\97\100","\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116","\82\97\110\100\111\109"},"\72\101\97\100",function(_C18)_lV.Hitbox.TargetPart=_C18 end);_Vk6(_B07,"\77\97\120\32\83\105\122\101",1,15,8,function(_D28)_lV.Hitbox.MaxSize=_D28 end);_H65(_B07,"\240\159\142\168\32\65\112\112\101\97\114\97\110\99\101");_Vk6(_B07,"\84\114\97\110\115\112\97\114\101\110\99\121",0,1,0.7,function(_E38)_lV.Hitbox.Transparency=_E38 end,1);_Vk6(_B07,"\82\97\110\100\111\109\32\83\119\105\116\99\104\32\40\115\41",0.1,2,0.5,function(_F48)_lV.Hitbox.RandomInterval=_F48 end,1);_H65(_B07,"\240\159\142\175\32\68\72\69\32\70\79\86");_Mb6(_B07,"\85\115\101\32\67\117\115\116\111\109\32\70\79\86",true,function(_G58)_lV.Hitbox.FOVEnabled=_G58 end);_Vk6(_B07,"\68\72\69\32\70\79\86\32\82\97\100\105\117\115",30,500,150,function(_H68)_lV.Hitbox.FOVRadius=_H68 end);_Mb6(_B07,"\83\104\111\119\32\68\72\69\32\70\79\86\32\67\105\114\99\108\101",false,function(_I78)_lV.Hitbox.FOVVisible=_I78 end)end;_H65(_C17,"\240\159\145\129\32\69\83\80");if _Uu then local _J88=_Rr and"\70\84\58\32\67\117\115\116\111\109\43\104\101\97\108\116\104\32\98\97\114\115"or _Kk and"\80\70\32\118\52\46\48\58\32\114\101\112\108\105\99\97\116\105\111\110\73\110\116\101\114\102\97\99\101\32\43\32\104\101\97\108\116\104\32\43\32\119\101\97\112\111\110"or _Oo and"\66\83\88\58\32\67\117\115\116\111\109\43\104\101\97\108\116\104"or _Ll and"\82\105\118\97\108\115\58\32\67\117\115\116\111\109\43\104\101\97\108\116\104"or _Jj and"\70\108\105\99\107\58\32\67\117\115\116\111\109\43\72\101\97\100\72\66"or _Nn and"\65\114\115\101\110\97\108\58\32\67\117\115\116\111\109"or _Mm and"\67\65\58\32\67\117\115\116\111\109"or _Pp and"\72\121\112\101\114\83\104\111\116\58\32\67\117\115\116\111\109\43\104\101\97\108\116\104"or"";if _J88~=""then _3s7(_C17,Color3.fromRGB(30,30,40),"\226\156\133\32".._J88)end end;_Mb6(_C17,"\69\110\97\98\108\101\32\69\83\80",false,function(_K98)_lV.ESP.Enabled=_K98;if not _K98 then _lV.ESP.Active=false;for _,_La9 in pairs(_3D)do for _,_Mb9 in pairs(_La9)do _Mb9.Visible=false end end end end);_H66(_C17,"\75\101\121\98\105\110\100\32\77\111\100\101",{"\84\111\103\103\108\101","\72\111\108\100"},"\84\111\103\103\108\101",function(_Nc9)_lV.ESP.KeybindMode=_Nc9 end);_Rg7(_C17,"\75\101\121\98\105\110\100",_lV.ESP.Keybind,function(_Od9)_lV.ESP.Keybind=_Od9 end);_Mb6(_C17,"\84\101\97\109\32\67\104\101\99\107",false,function(_Pe9)_lV.ESP.TeamCheck=_Pe9 end);_Mb6(_C17,"\83\104\111\119\32\66\111\120\101\115",true,function(_Qf9)_lV.ESP.Boxes=_Qf9 end);_Mb6(_C17,"\83\104\111\119\32\78\97\109\101\115",true,function(_Rg9)_lV.ESP.Names=_Rg9 end);_Mb6(_C17,"\83\104\111\119\32\68\105\115\116\97\110\99\101",true,function(_Sh9)_lV.ESP.Distance=_Sh9 end);_Vk6(_C17,"\77\97\120\32\68\105\115\116\97\110\99\101",100,2000,1000,function(_Ti9)_lV.ESP.MaxDistance=_Ti9 end);_H65(_D27,"\240\159\148\165\32\84\114\105\103\103\101\114\98\111\116");_Mb6(_D27,"\69\110\97\98\108\101\32\84\114\105\103\103\101\114\98\111\116",false,function(_Uj9)_lV.Triggerbot.Enabled=_Uj9;if not _Uj9 then _lV.Triggerbot.Active=false end end);_H66(_D27,"\75\101\121\98\105\110\100\32\77\111\100\101",{"\84\111\103\103\108\101","\72\111\108\100"},"\84\111\103\103\108\101",function(_Vk9)_lV.Triggerbot.KeybindMode=_Vk9 end);_Rg7(_D27,"\75\101\121\98\105\110\100",_lV.Triggerbot.Keybind,function(_Wl9)_lV.Triggerbot.Keybind=_Wl9 end);_Mb6(_D27,"\84\101\97\109\32\67\104\101\99\107",true,function(_Xm9)_lV.Triggerbot.TeamCheck=_Xm9 end);_H65(_D27,"\226\154\153\32\83\101\116\116\105\110\103\115");_Mb6(_D27,"\83\99\114\101\101\110\32\82\97\121\32\68\101\116\101\99\116\105\111\110",true,function(_Yn9)_lV.Triggerbot.UseScreenRay=_Yn9 end);_Mb6(_D27,"\70\79\86\32\66\97\115\101\100\32\68\101\116\101\99\116\105\111\110",true,function(_Zo9)_lV.Triggerbot.FOVBased=_Zo9 end);_Vk6(_D27,"\70\105\114\101\32\68\101\108\97\121\32\40\115\41",0.01,0.5,0.05,function(_0pA)_lV.Triggerbot.Delay=_0pA end,2);_H65(_E37,"\240\159\148\146\32\73\110\102\111\32\38\32\83\101\116\116\105\110\103\115");_Rg7(_E37,"\84\111\103\103\108\101\32\71\85\73",_lV.GUI.ToggleKey,function(_1qA)_lV.GUI.ToggleKey=_1qA end);local _2rA=Instance.new("\70\114\97\109\101",_E37);_2rA.BackgroundColor3=Color3.fromRGB(30,30,30);_2rA.BorderSizePixel=0;_2rA.Size=UDim2.new(1,0,0,200);Instance.new("\85\73\67\111\114\110\101\114",_2rA).CornerRadius=UDim.new(0,6);local _3sA=Instance.new("\84\101\120\116\76\97\98\101\108",_2rA);_3sA.BackgroundTransparency=1;_3sA.Position=UDim2.new(0,12,0,10);_3sA.Size=UDim2.new(1,-24,1,-20);_3sA.Font=Enum.Font.Gotham;_3sA.TextColor3=Color3.fromRGB(200,200,200);_3sA.TextSize=10;_3sA.TextWrapped=true;_3sA.TextYAlignment=Enum.TextYAlignment.Top;_3sA.Text="\226\154\161\32\65\88\32\118\49\55\46\55\32\79\80\84\32\124\32\98\121\32\69\108\83\97\99\97\76\101\99\104\101\10\10\226\156\133\32".._1B.."\32\77\79\68\69\10\10\91\69\110\100\93\61\71\85\73\32\124\32\91\69\93\61\83\105\108\101\110\116\32\124\32\91\81\93\61\65\105\109\98\111\116\10\91\72\93\61\72\105\116\98\111\120\32\124\32\91\86\93\61\69\83\80\32\124\32\91\84\93\61\84\114\105\103\103\101\114\10\10\226\156\133\32\80\70\32\118\52\46\48\58\32\73\110\116\101\114\110\97\108\32\104\111\111\107\115\32\109\101\116\104\111\100\10\226\156\133\32\95\105\110\72\111\111\107\32\103\117\97\114\100\32\97\110\116\105\45\115\116\97\99\107\32\111\118\101\114\102\108\111\119\10\226\156\133\32\82\97\121\99\97\115\116\80\97\114\97\109\115\32\99\97\99\104\101\97\100\111\115\10\226\156\133\32\71\101\116\80\108\97\121\101\114\115\32\99\97\99\104\101\97\100\111\32\99\97\100\97\32\50\115";_Xm5.MouseButton1Click:Connect(function()_I72();_Sh5:Destroy();if _Qg then _Qg:Remove()end;if _Rh then _Rh:Remove()end;if _Si then _Si:Remove()end;for _,_4tA in pairs(_3D)do for _,_5uA in pairs(_4tA)do _5uA:Remove()end end;if getgenv().AX_PF_Cleanup then pcall(getgenv().AX_PF_Cleanup)end end)end);_Dd.InputBegan:Connect(function(_6vA,_7wA)if _7wA then return end;if _6vA.KeyCode==_lV.GUI.ToggleKey then pcall(function()for _,_8xA in ipairs(_Ee:GetChildren())do if _8xA.Name:match("\94\65\88")then _8xA.Enabled=not _8xA.Enabled end end end)end;if not _Nn and not _Xx and not _0A then if _6vA.KeyCode==_lV.Silent.Keybind and _lV.Silent.Enabled then if _lV.Silent.KeybindMode=="\84\111\103\103\108\101"then _lV.Silent.Active=not _lV.Silent.Active else _lV.Silent.Active=true end end end;if _6vA.KeyCode==_lV.Aimbot.Keybind and _lV.Aimbot.Enabled then if _lV.Aimbot.KeybindMode=="\84\111\103\103\108\101"then _lV.Aimbot.Active=not _lV.Aimbot.Active;if not _lV.Aimbot.Active then _eO=nil;_dN=nil end else _lV.Aimbot.Active=true end end;if not _Yy then if _6vA.KeyCode==_lV.Hitbox.Keybind and _lV.Hitbox.Enabled then if _lV.Hitbox.KeybindMode=="\84\111\103\103\108\101"then _lV.Hitbox.Active=not _lV.Hitbox.Active;if not _lV.Hitbox.Active then _I72()end else _lV.Hitbox.Active=true end end end;if _6vA.KeyCode==_lV.ESP.Keybind and _lV.ESP.Enabled then if _lV.ESP.KeybindMode=="\84\111\103\103\108\101"then _lV.ESP.Active=not _lV.ESP.Active else _lV.ESP.Active=true end end;if _6vA.KeyCode==_lV.Triggerbot.Keybind and _lV.Triggerbot.Enabled then if _lV.Triggerbot.KeybindMode=="\84\111\103\103\108\101"then _lV.Triggerbot.Active=not _lV.Triggerbot.Active else _lV.Triggerbot.Active=true end end end);_Dd.InputEnded:Connect(function(_9yA)if not _Nn and not _Xx and not _0A then if _9yA.KeyCode==_lV.Silent.Keybind and _lV.Silent.KeybindMode=="\72\111\108\100"then _lV.Silent.Active=false end end;if _9yA.KeyCode==_lV.Aimbot.Keybind and _lV.Aimbot.KeybindMode=="\72\111\108\100"then _lV.Aimbot.Active=false;_eO=nil;_dN=nil end;if not _Yy then if _9yA.KeyCode==_lV.Hitbox.Keybind and _lV.Hitbox.KeybindMode=="\72\111\108\100"then _lV.Hitbox.Active=false;_I72()end end;if _9yA.KeyCode==_lV.ESP.Keybind and _lV.ESP.KeybindMode=="\72\111\108\100"then _lV.ESP.Active=false end;if _9yA.KeyCode==_lV.Triggerbot.Keybind and _lV.Triggerbot.KeybindMode=="\72\111\108\100"then _lV.Triggerbot.Active=false end end);if not _Kk and not _Oo and not _Ll and not _Jj and not _Nn and not _Mm and not _Pp and not _Rr then for _,_AzA in ipairs(_Aa:GetPlayers())do if _AzA~=_Ff then _E33(_AzA)end end;_Aa.PlayerAdded:Connect(function(_B0A)if _B0A~=_Ff then _E33(_B0A)end end)end;_Aa.PlayerRemoving:Connect(function(_C1A)_G52(_C1A);if _eO==_C1A then _eO=nil end;if _3D[_C1A]then for _,_D2A in pairs(_3D[_C1A])do _D2A:Remove()end;_3D[_C1A]=nil end;for _E3A,_F4A in ipairs(_oY)do if _F4A==_C1A then table.remove(_oY,_E3A);break end end end);_Ff.CharacterAdded:Connect(function()task.wait(0.5);_2C=nil;_dN=nil;_eO=nil;for _G5A in pairs(_cM)do _G52(_G5A)end;task.wait(0.5);_7x()end);task.delay(_Ll and 8 or 1,function()_Cc.Heartbeat:Connect(function()_Gg=_Bb.CurrentCamera;local _H6A=_Tj();if _Qg then local _I7A=_lV.Silent.Enabled and _lV.Silent.Active and not _Xx and not _0A;_Qg.Position=_H6A;_Qg.Radius=_lV.FOV.Radius;_Qg.Visible=_lV.FOV.Visible and(_I7A or(_lV.Triggerbot.Enabled and _lV.Triggerbot.Active))end;if _Rh then _Rh.Position=_lV.Aimbot.Method=="\65\105\109\98\111\116"and _Uk()or _H6A;_Rh.Radius=_lV.Aimbot.FOVRadius;_Rh.Color=_lV.Aimbot.FOVColor;_Rh.Visible=_lV.Aimbot.FOVVisible and _lV.Aimbot.Enabled and _lV.Aimbot.Active end;if _Si then local _J8A=not _Yy and not _Zp()and _lV.Hitbox.FOVVisible and _lV.Hitbox.FOVEnabled and _lV.Hitbox.Enabled and _lV.Hitbox.Active and _lV.Hitbox.Method=="\68\72\69\32\40\68\121\110\97\109\105\99\41";_Si.Position=_H6A;_Si.Radius=_lV.Hitbox.FOVRadius;_Si.Color=_lV.Hitbox.FOVColor;_Si.Visible=_J8A end;if not _Uu and not _Vv and not _0A and not _Yo()then local _K9A=tick();if _K9A-_hR>=_iS then _hR=_K9A;_2C=(_lV.Silent.Enabled and _lV.Silent.Active)and _lL()or nil end end;_2r();_J8();_Ti3();_H63()end)end);if _Nn or _Xx or _0A then _lV.Silent.Enabled=false;_lV.Silent.Active=false end;if _Yy then _lV.Hitbox.Enabled=false;_lV.Hitbox.Active=false end;task.delay(_Ll and 4 or 2,function()pcall(function()game:GetService("\83\116\97\114\116\101\114\71\117\105"):SetCore("\83\101\110\100\78\111\116\105\102\105\99\97\116\105\111\110",{Title="\226\154\161\32\65\88\32\118\49\55\46\55\32\79\80\84",Text=_1B.."\32\124\32\91\69\110\100\93\61\71\85\73",Duration=5})end)end)
+--[[
+    ANNOMALY X v17.7 OPTIMIZED
+    Compatible: PF Module v4.0 (internal hooks)
+    Fix: GameId correcto para Fate Trigger (122291041295001)
+    Fix: _inHook guard en hook universal
+    Soporte: Universal, Flick, PF, Rivals, CA, Arsenal, BSX, HyperShot, Fate Trigger
+]]
+
+local cloneref    = cloneref    or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local checkcaller = checkcaller or function() return false end
+local getnamecallmethod = getnamecallmethod or get_namecall_method
+local hookfunction    = hookfunction    or replaceclosure
+local hookmetamethod  = hookmetamethod
+local mousemoverel    = mousemoverel    or function() end
+
+if not hookfunction or not hookmetamethod or not getnamecallmethod then return end
+
+local Players         = cloneref(game:GetService("Players"))
+local Workspace       = cloneref(game:GetService("Workspace"))
+local RunService      = cloneref(game:GetService("RunService"))
+local UserInputService= cloneref(game:GetService("UserInputService"))
+local CoreGui         = cloneref(game:GetService("CoreGui"))
+local LocalPlayer     = Players.LocalPlayer
+local Camera          = Workspace.CurrentCamera
+
+local _pid = game.PlaceId
+local _gid = game.GameId
+
+local IS_FLICK   = (_pid == 136801880565837)
+local IS_PF      = (_pid == 292439477)
+local IS_RIVALS  = (_gid == 6035872082)
+local IS_CA      = (_gid == 5421899973)
+local IS_ARSENAL = (_pid == 286090429)
+local IS_BSX     = (_pid == 114234929420007)
+
+local IS_HYPERSHOT = (_pid == 86696142930150) or (_gid == 5995470825)
+if not IS_HYPERSHOT then
+    pcall(function()
+        local info = game:GetService("MarketplaceService"):GetProductInfo(_pid)
+        if info and info.Name and info.Name:lower():find("hypershot") then
+            IS_HYPERSHOT = true
+        end
+    end)
+end
+
+local IS_FATETRIGGER = (_pid == 134784668468620) or (_gid == 122291041295001)
+if not IS_FATETRIGGER then
+    pcall(function()
+        if tostring(_gid) == "122291041295001" or tostring(_pid) == "134784668468620" then
+            IS_FATETRIGGER = true
+        end
+    end)
+end
+if not IS_FATETRIGGER then
+    pcall(function()
+        local info = game:GetService("MarketplaceService"):GetProductInfo(_pid)
+        if info and info.Name then
+            local nameLower = info.Name:lower()
+            if nameLower:find("fate trigger") or nameLower:find("fatetrigger") or nameLower:find("fate_trigger") then
+                IS_FATETRIGGER = true
+            end
+        end
+    end)
+end
+
+warn(string.format("[AX] PlaceId: %s | GameId: %s", tostring(_pid), tostring(_gid)))
+warn(string.format("[AX] IS_FATETRIGGER: %s | IS_HYPERSHOT: %s", tostring(IS_FATETRIGGER), tostring(IS_HYPERSHOT)))
+
+local HAS_DEDICATED_MODULE = IS_FLICK or IS_PF or IS_RIVALS or IS_CA
+    or IS_ARSENAL or IS_BSX or IS_HYPERSHOT or IS_FATETRIGGER
+local NO_METAMETHOD     = IS_CA or IS_BSX
+local NO_PROTECTION     = IS_CA or IS_BSX
+local BSX_NO_SILENT     = IS_BSX
+local BSX_NO_HITBOX     = IS_BSX
+local BSX_CUSTOM_AIMBOT = IS_BSX
+local CA_NO_SILENT      = IS_CA
+
+local GAME_MODE_NAME = "Universal"
+if IS_FATETRIGGER   then GAME_MODE_NAME = "Fate Trigger"
+elseif IS_HYPERSHOT then GAME_MODE_NAME = "HyperShot"
+elseif IS_FLICK     then GAME_MODE_NAME = "Flick"
+elseif IS_PF        then GAME_MODE_NAME = "Phantom Forces"
+elseif IS_RIVALS    then GAME_MODE_NAME = "Rivals"
+elseif IS_CA        then GAME_MODE_NAME = "Combat Arena"
+elseif IS_ARSENAL   then GAME_MODE_NAME = "Arsenal"
+elseif IS_BSX       then GAME_MODE_NAME = "Blox Strike"
+end
+
+warn("[AX] Game Mode: " .. GAME_MODE_NAME)
+
+local CurrentTarget       = nil
+local ESPObjects          = {}
+local OriginalSizes       = {}
+local OriginalTransparencies = {}
+local OriginalCanCollide  = {}
+local OriginalMassless    = {}
+local RandomPartSelection = {}
+local LastRandomSwitch    = {}
+local LastHitboxUpdate    = 0
+local LastESPUpdate       = 0
+local ExpandedPlayers     = {}
+local AimbotCurrentTarget = nil
+local AimbotLockedPlayer  = nil
+local AimbotRandomPart    = "Head"
+local AimbotLastRandomSwitch = 0
+local LastSilentUpdate    = 0
+local SILENT_UPDATE_RATE  = 0.05
+local LastAimbotUpdate    = 0
+local AIMBOT_UPDATE_RATE  = 0.016
+
+local Config = {
+    Silent = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.E, KeybindMode = "Toggle",
+        TargetPart = "Head", HitChance = 100,
+        TeamCheck = false, VisibleCheck = false
+    },
+    Aimbot = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.Q, KeybindMode = "Hold",
+        Method = "Aimbot", TargetPart = "Head",
+        TeamCheck = false, VisibleCheck = false,
+        Smoothness = 5, FOVRadius = 150, FOVVisible = true,
+        FOVColor = Color3.fromRGB(255, 200, 0),
+        RandomInterval = 0.5, Prediction = 0
+    },
+    Hitbox = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.H, KeybindMode = "Toggle",
+        Method = "DHE (Dynamic)", MaxSize = 8,
+        TargetPart = "Head", Transparency = 0.7,
+        RandomInterval = 0.5, TeamCheck = false,
+        FOVEnabled = true, FOVRadius = 150,
+        FOVVisible = false, FOVColor = Color3.fromRGB(0, 255, 150)
+    },
+    FOV = {
+        Enabled = true, Radius = 150,
+        Visible = true, Color = Color3.fromRGB(255, 255, 255)
+    },
+    ESP = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.V, KeybindMode = "Toggle",
+        Boxes = true, Names = true, Distance = true,
+        MaxDistance = 1000, TeamCheck = false
+    },
+    Triggerbot = {
+        Enabled = false, Active = false,
+        Keybind = Enum.KeyCode.T, KeybindMode = "Toggle",
+        TeamCheck = true, Delay = 0.05,
+        FOVBased = true, UseScreenRay = true
+    },
+    GUI = { ToggleKey = Enum.KeyCode.End }
+}
+getgenv().AX_Config = Config
+
+local _visRayParams = RaycastParams.new()
+_visRayParams.FilterType = Enum.RaycastFilterType.Exclude
+_visRayParams.FilterDescendantsInstances = {}
+
+local _triggerRayParams = RaycastParams.new()
+_triggerRayParams.FilterType = Enum.RaycastFilterType.Exclude
+_triggerRayParams.FilterDescendantsInstances = {}
+
+local _cachedPlayers    = {}
+local _lastPlayerCache  = 0
+local PLAYER_CACHE_RATE = 2
+
+local function GetCachedPlayers()
+    local t = tick()
+    if t - _lastPlayerCache > PLAYER_CACHE_RATE then
+        _cachedPlayers   = Players:GetPlayers()
+        _lastPlayerCache = t
+    end
+    return _cachedPlayers
+end
+
+local _acKeys = {"__acsignature","__checksum","__hash","__integrity",
+                 "__validation","__exploit_flag","_ac_token","_security_hash",
+                 "__anticheat","__detect","__banflag"}
+
+if not getgenv()._AX_KickHooked then
+    pcall(function()
+        for _, kickName in ipairs({"Kick","kick"}) do
+            local fn = LocalPlayer[kickName]
+            if typeof(fn) == "function" then
+                local oldFn = fn
+                hookfunction(fn, newcclosure(function(self, ...)
+                    if self == LocalPlayer then return end
+                    return oldFn(self, ...)
+                end))
+            end
+        end
+        getgenv()._AX_KickHooked = true
+    end)
+end
+
+if not IS_RIVALS and not NO_PROTECTION then
+    pcall(function()
+        local SC = cloneref(game:GetService("ScriptContext"))
+        if getconnections then
+            for _, conn in ipairs(getconnections(SC.Error)) do pcall(function() conn:Disable() end) end
+            for _, c in ipairs(getconnections(SC.ScriptAdded))   do pcall(function() c:Disable() end) end
+            for _, c in ipairs(getconnections(SC.ScriptRemoved)) do pcall(function() c:Disable() end) end
+        end
+    end)
+end
+
+pcall(function()
+    local sk = {"signature","checksum","hash","exploit","cheat","hack","detect","anticheat","ban"}
+    for k in pairs(_G) do
+        local ks = tostring(k):lower()
+        for _, s in ipairs(sk) do if ks:find(s) then _G[k] = nil break end end
+    end
+end)
+
+if not IS_RIVALS and getgc then
+    pcall(function()
+        local gc = getgc(true)
+        for i = 1, math.min(#gc, 2000) do
+            local obj = gc[i]
+            if type(obj) == "table" then
+                pcall(function()
+                    for _, k in ipairs(_acKeys) do
+                        if rawget(obj, k) then rawset(obj, k, nil) end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+-- ================== CARGA DE MODULOS ==================
+task.spawn(function()
+    task.wait(IS_RIVALS and 2 or 0.5)
+    if IS_FATETRIGGER then
+        warn("[AX] Cargando modulo Fate Trigger...")
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/FTX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando FTX: " .. tostring(err)) end
+    elseif IS_HYPERSHOT then
+        warn("[AX] Cargando modulo HyperShot...")
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/HSX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando HSX: " .. tostring(err)) end
+    elseif IS_FLICK then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/FlickX"))() end)
+    elseif IS_PF then
+        warn("[AX] Cargando modulo Phantom Forces v4.0...") -- [CHANGED v4.0]
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/PFX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando PFX: " .. tostring(err)) end -- [CHANGED v4.0]
+    elseif IS_RIVALS then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/RivalsX"))() end)
+    elseif IS_CA then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/CAX"))() end)
+    elseif IS_ARSENAL then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/ArsenalX"))() end)
+    elseif IS_BSX then
+        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/BSX"))() end)
+    end
+end)
+
+local FOVCircle, AimbotFOVCircle, HitboxFOVCircle
+
+task.delay(5, function()
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Thickness=1.5 FOVCircle.NumSides=100
+    FOVCircle.Radius=Config.FOV.Radius FOVCircle.Filled=false
+    FOVCircle.Visible=false FOVCircle.Color=Config.FOV.Color FOVCircle.Transparency=1
+
+    AimbotFOVCircle = Drawing.new("Circle")
+    AimbotFOVCircle.Thickness=1.5 AimbotFOVCircle.NumSides=100
+    AimbotFOVCircle.Radius=Config.Aimbot.FOVRadius AimbotFOVCircle.Filled=false
+    AimbotFOVCircle.Visible=false AimbotFOVCircle.Color=Config.Aimbot.FOVColor AimbotFOVCircle.Transparency=1
+
+    HitboxFOVCircle = Drawing.new("Circle")
+    HitboxFOVCircle.Thickness=1.5 HitboxFOVCircle.NumSides=100
+    HitboxFOVCircle.Radius=Config.Hitbox.FOVRadius HitboxFOVCircle.Filled=false
+    HitboxFOVCircle.Visible=false HitboxFOVCircle.Color=Config.Hitbox.FOVColor HitboxFOVCircle.Transparency=1
+end)
+
+local function GetMouseLocation()  return UserInputService:GetMouseLocation() end
+local function GetViewportCenter()
+    local vp = Camera.ViewportSize
+    return Vector2.new(vp.X/2, vp.Y/2)
+end
+
+local function ModuleHandlesAimbot()
+    return getgenv().AX_BSX_HandlesAimbot or getgenv().AX_PF_HandlesAimbot
+        or getgenv().AX_RivalsHandlesAimbot or getgenv().AX_FlickHandlesAimbot
+        or getgenv().AX_ArsenalHandlesAimbot or getgenv().AX_CAHandlesAimbot
+        or getgenv().AX_HyperShotHandlesAimbot or getgenv().AX_FateTriggerHandlesAimbot
+        or BSX_CUSTOM_AIMBOT
+end
+local function ModuleHandlesESP()
+    return getgenv().AX_PF_HandlesESP or getgenv().AX_RivalsHandlesESP
+        or getgenv().AX_FlickHandlesESP or getgenv().AX_ArsenalHandlesESP
+        or getgenv().AX_CAHandlesESP or getgenv().AX_HyperShotHandlesESP
+        or getgenv().AX_FateTriggerHandlesESP
+end
+local function ModuleHandlesSilent()
+    return getgenv().AX_RivalsHandlesSilent or getgenv().AX_FlickHandlesSilent
+        or getgenv().AX_PF_HandlesSilent or getgenv().AX_ArsenalHandlesSilent
+        or getgenv().AX_CAHandlesSilent or getgenv().AX_HyperShotHandlesSilent
+        or getgenv().AX_FateTriggerHandlesSilent
+end
+local function ModuleHandlesHitbox()
+    return getgenv().AX_PF_HandlesHitbox or BSX_NO_HITBOX
+end
+
+local function ShouldSkipPlayer(player, teamCheckEnabled)
+    if not teamCheckEnabled then return false end
+    if not player or player == LocalPlayer then return false end
+    if IS_BSX and getgenv().AX_BSX_AreTeammates then
+        local ok, result = pcall(getgenv().AX_BSX_AreTeammates, LocalPlayer, player)
+        if ok then return result end
+    end
+    local ok, result = pcall(function()
+        return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+    end)
+    return ok and result
+end
+
+local function UpdateVisFilterCache()
+    local char = LocalPlayer.Character
+    local instances = {Camera}
+    if char then table.insert(instances, char) end
+    _visRayParams.FilterDescendantsInstances = instances
+end
+UpdateVisFilterCache()
+
+local function IsVisible(targetPart)
+    if not targetPart then return false end
+    local origin    = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local result    = Workspace:Raycast(origin, direction, _visRayParams)
+    if result then return result.Instance:IsDescendantOf(targetPart.Parent) end
+    return true
+end
+
+local function GetTargetPart(character, setting)
+    if not character then return nil end
+    if setting == "Random" then
+        local valid = {}
+        for _, name in ipairs({"HeadHB","Head","HumanoidRootPart","UpperTorso","Torso"}) do
+            local p = character:FindFirstChild(name)
+            if p then table.insert(valid, p) end
+        end
+        if #valid > 0 then return valid[math.random(1,#valid)] end
+    end
+    return character:FindFirstChild(setting)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetClosestPlayer()
+    local closest, distance = nil, Config.FOV.Enabled and Config.FOV.Radius or math.huge
+    local mousePos = GetMouseLocation()
+    for _, player in ipairs(GetCachedPlayers()) do
+        if player == LocalPlayer then continue end
+        if ShouldSkipPlayer(player, Config.Silent.TeamCheck) then continue end
+        local character = player.Character
+        if not character then continue end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        if character:FindFirstChildOfClass("ForceField") then continue end
+        local targetPart = GetTargetPart(character, Config.Silent.TargetPart)
+        if not targetPart then continue end
+        if Config.Silent.VisibleCheck and not IsVisible(targetPart) then continue end
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        local sd = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+        if sd < distance then distance = sd closest = targetPart end
+    end
+    return closest
+end
+
+local function GetAimbotTargetPart(character)
+    if not character then return nil end
+    if Config.Aimbot.TargetPart == "Random" then
+        local t = tick()
+        if t - AimbotLastRandomSwitch >= Config.Aimbot.RandomInterval then
+            local opts = {}
+            for _, n in ipairs({"Head","HeadHB","HumanoidRootPart","UpperTorso","Torso"}) do
+                if character:FindFirstChild(n) then table.insert(opts, n) end
+            end
+            if #opts > 0 then AimbotRandomPart = opts[math.random(1,#opts)] end
+            AimbotLastRandomSwitch = t
+        end
+        return character:FindFirstChild(AimbotRandomPart)
+            or character:FindFirstChild("Head")
+            or character:FindFirstChild("HumanoidRootPart")
+    end
+    return character:FindFirstChild(Config.Aimbot.TargetPart)
+        or character:FindFirstChild("HeadHB")
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsPlayerValid(player)
+    if not player or not player.Parent then return false end
+    if player == LocalPlayer then return false end
+    if ShouldSkipPlayer(player, Config.Aimbot.TeamCheck) then return false end
+    local c = player.Character
+    if not c or c:FindFirstChildOfClass("ForceField") then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetAimbotTarget()
+    local method = Config.Aimbot.Method
+    if method == "Aimbot" then
+        local center = GetViewportCenter()
+        local closestPart, closestDist = nil, Config.Aimbot.FOVRadius
+        for _, player in ipairs(GetCachedPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = Camera:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then closestDist = d closestPart = tp end
+        end
+        return closestPart
+    elseif method == "Aimlock" then
+        if AimbotLockedPlayer and IsPlayerValid(AimbotLockedPlayer) then
+            local tp = GetAimbotTargetPart(AimbotLockedPlayer.Character)
+            if tp and (not Config.Aimbot.VisibleCheck or IsVisible(tp)) then
+                local sp, on = Camera:WorldToViewportPoint(tp.Position)
+                if on then return tp end
+            end
+            AimbotLockedPlayer = nil
+        end
+        local mousePos = GetMouseLocation()
+        local closestPart, closestDist, closestPlayer = nil, Config.Aimbot.FOVRadius, nil
+        for _, player in ipairs(GetCachedPlayers()) do
+            if not IsPlayerValid(player) then continue end
+            local tp = GetAimbotTargetPart(player.Character)
+            if not tp then continue end
+            if Config.Aimbot.VisibleCheck and not IsVisible(tp) then continue end
+            local sp, on = Camera:WorldToViewportPoint(tp.Position)
+            if not on then continue end
+            local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+            if d < closestDist then closestDist = d closestPart = tp closestPlayer = player end
+        end
+        if closestPlayer then AimbotLockedPlayer = closestPlayer end
+        return closestPart
+    end
+end
+
+local function UpdateAimbot()
+    if ModuleHandlesAimbot() then return end
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        AimbotCurrentTarget = nil
+        if not Config.Aimbot.Active then AimbotLockedPlayer = nil end
+        return
+    end
+    local tp = GetAimbotTarget()
+    AimbotCurrentTarget = tp
+    if not tp then return end
+    local pos = tp.Position
+    if Config.Aimbot.Prediction > 0 then
+        pcall(function()
+            local vel = tp.AssemblyLinearVelocity
+            if vel and vel.Magnitude > 0.5 then pos = pos + vel * Config.Aimbot.Prediction end
+        end)
+    end
+    local sm = Config.Aimbot.Smoothness
+    if Config.Aimbot.Method == "Aimbot" then
+        local cur = Camera.CFrame
+        local tgt = CFrame.lookAt(cur.Position, pos)
+        Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+    elseif Config.Aimbot.Method == "Aimlock" then
+        local sp, on = Camera:WorldToViewportPoint(pos)
+        if not on then return end
+        local mp = GetMouseLocation()
+        local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        if dist < 2 then return end
+        local spd = math.clamp(1/math.max(sm,1), 0.05, 0.8)
+        local mx  = math.clamp(dx*spd, -150, 150)
+        local my  = math.clamp(dy*spd, -150, 150)
+        if math.abs(mx) > 0.5 or math.abs(my) > 0.5 then mousemoverel(mx, my) end
+    end
+end
+
+local TriggerLastShot = 0
+local function UpdateTriggerbot()
+    if not Config.Triggerbot.Enabled or not Config.Triggerbot.Active then return end
+    local now = tick()
+    if now - TriggerLastShot < Config.Triggerbot.Delay then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    _triggerRayParams.FilterDescendantsInstances = {character, Camera}
+    local foundTarget = false
+    if Config.Triggerbot.UseScreenRay then
+        local mousePos = GetMouseLocation()
+        local screenRay = Camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+        local result = Workspace:Raycast(screenRay.Origin, screenRay.Direction * 5000, _triggerRayParams)
+        if result and result.Instance then
+            local hitPlayer = Players:GetPlayerFromCharacter(result.Instance.Parent)
+                or Players:GetPlayerFromCharacter(result.Instance.Parent and result.Instance.Parent.Parent)
+            if hitPlayer and hitPlayer ~= LocalPlayer
+                and not ShouldSkipPlayer(hitPlayer, Config.Triggerbot.TeamCheck) then
+                local hitChar = hitPlayer.Character
+                if hitChar and not hitChar:FindFirstChildOfClass("ForceField") then
+                    local hitHum = hitChar:FindFirstChildOfClass("Humanoid")
+                    if hitHum and hitHum.Health > 0 then foundTarget = true end
+                end
+            end
+        end
+    end
+    if not foundTarget and Config.Triggerbot.FOVBased then
+        local mousePos  = GetMouseLocation()
+        local fovRadius = Config.FOV.Enabled and Config.FOV.Radius or 150
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer then continue end
+            if ShouldSkipPlayer(player, Config.Triggerbot.TeamCheck) then continue end
+            local pChar = player.Character if not pChar then continue end
+            local pHum = pChar:FindFirstChildOfClass("Humanoid")
+            if not pHum or pHum.Health <= 0 or pChar:FindFirstChildOfClass("ForceField") then continue end
+            local targetPart = pChar:FindFirstChild("HeadHB") or pChar:FindFirstChild("Head") or pChar:FindFirstChild("HumanoidRootPart")
+            if not targetPart then continue end
+            local sp, on = Camera:WorldToViewportPoint(targetPart.Position)
+            if not on then continue end
+            if (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude <= fovRadius then
+                if IsVisible(targetPart) then foundTarget = true break end
+            end
+        end
+    end
+    if foundTarget then
+        TriggerLastShot = now
+        pcall(function()
+            if mouse1press and mouse1release then
+                mouse1press()
+                task.delay(0.02 + math.random()*0.02, function() pcall(mouse1release) end)
+            elseif mouse1click then mouse1click() end
+        end)
+    end
+end
+
+local function GetRandomPartForPlayer(player)
+    local t = tick()
+    if not LastRandomSwitch[player] or (t - LastRandomSwitch[player]) >= Config.Hitbox.RandomInterval then
+        RandomPartSelection[player] = math.random(1,2) == 1 and "Head" or "HumanoidRootPart"
+        LastRandomSwitch[player] = t
+    end
+    return RandomPartSelection[player] or "Head"
+end
+
+local function SaveOriginalProperties(player, partName, part)
+    if not OriginalSizes[player]          then OriginalSizes[player]          = {} end
+    if not OriginalTransparencies[player] then OriginalTransparencies[player] = {} end
+    if not OriginalCanCollide[player]     then OriginalCanCollide[player]     = {} end
+    if not OriginalMassless[player]       then OriginalMassless[player]       = {} end
+    if not OriginalSizes[player][partName] then
+        OriginalSizes[player][partName]          = part.Size
+        OriginalTransparencies[player][partName] = part.Transparency
+        OriginalCanCollide[player][partName]     = part.CanCollide
+        OriginalMassless[player][partName]       = part.Massless
+    end
+end
+
+local function RestoreOriginalSize(player)
+    if not player then return end
+    local ok, character = pcall(function() return player.Character end)
+    if not ok or not character then return end
+    if OriginalSizes[player] then
+        for pn, os in pairs(OriginalSizes[player]) do
+            local p = character:FindFirstChild(pn)
+            if p then pcall(function()
+                p.Size         = os
+                p.Transparency = OriginalTransparencies[player][pn]
+                p.Massless     = OriginalMassless[player][pn]
+                p.CanCollide   = OriginalCanCollide[player][pn]
+            end) end
+        end
+    end
+    ExpandedPlayers[player] = nil
+end
+
+local function CleanupPlayerHitbox(player)
+    RestoreOriginalSize(player)
+    OriginalSizes[player]=nil OriginalTransparencies[player]=nil
+    OriginalCanCollide[player]=nil OriginalMassless[player]=nil
+    RandomPartSelection[player]=nil LastRandomSwitch[player]=nil
+    ExpandedPlayers[player]=nil
+end
+
+local function CleanupAllHitboxes()
+    for player in pairs(ExpandedPlayers) do RestoreOriginalSize(player) end
+    OriginalSizes={} OriginalTransparencies={} OriginalCanCollide={} OriginalMassless={} ExpandedPlayers={}
+end
+
+local function ExpandPlayerHitbox(player, partToModify, size)
+    if BSX_NO_HITBOX then return end
+    local character = player.Character if not character then return end
+    local partsToCheck = {"Head","HeadHB","HumanoidRootPart"}
+    if IS_ARSENAL then partsToCheck = {"Head","HeadHB","HumanoidRootPart","Hitbox","RightUpperLeg","LeftUpperLeg"} end
+    for _, pn in ipairs(partsToCheck) do
+        local part = character:FindFirstChild(pn)
+        if part and part:IsA("BasePart") then
+            SaveOriginalProperties(player, pn, part)
+            local shouldMod = (pn == partToModify)
+                or (partToModify == "Head" and (pn == "HeadHB" or pn == "Hitbox"))
+            pcall(function()
+                if shouldMod then
+                    part.CanCollide=false part.Massless=true
+                    part.Size=Vector3.new(size,size,size) part.Transparency=Config.Hitbox.Transparency
+                elseif OriginalSizes[player] and OriginalSizes[player][pn] then
+                    part.Size=OriginalSizes[player][pn]
+                    part.Transparency=OriginalTransparencies[player][pn]
+                    part.CanCollide=OriginalCanCollide[player][pn]
+                    part.Massless=OriginalMassless[player][pn]
+                end
+            end)
+        end
+    end
+    ExpandedPlayers[player] = true
+end
+
+local function UpdateDynamicHitboxes()
+    if ModuleHandlesHitbox() then return end
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then CleanupAllHitboxes() return end
+    local t = tick() if t - LastHitboxUpdate < 0.05 then return end LastHitboxUpdate = t
+    local shouldBeExpanded = {}
+    if Config.Hitbox.Method == "HE (Static)" then
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer or not player.Parent then continue end
+            if ShouldSkipPlayer(player, Config.Hitbox.TeamCheck) then continue end
+            local c = player.Character if not c then continue end
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
+            local ptm = Config.Hitbox.TargetPart=="Random" and GetRandomPartForPlayer(player) or Config.Hitbox.TargetPart
+            shouldBeExpanded[player] = {partToModify=ptm, dynamicSize=Config.Hitbox.MaxSize}
+        end
+    else
+        local mp = GetMouseLocation()
+        local fr = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+        for _, player in ipairs(GetCachedPlayers()) do
+            if player == LocalPlayer or not player.Parent then continue end
+            if ShouldSkipPlayer(player, Config.Hitbox.TeamCheck) then continue end
+            local c = player.Character if not c then continue end
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health <= 0 or c:FindFirstChildOfClass("ForceField") then continue end
+            local ptm = Config.Hitbox.TargetPart=="Random" and GetRandomPartForPlayer(player) or Config.Hitbox.TargetPart
+            local cp = c:FindFirstChild(ptm) or c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
+            if not cp then continue end
+            local sp, on = Camera:WorldToViewportPoint(cp.Position)
+            if not on then continue end
+            local sd = (mp - Vector2.new(sp.X, sp.Y)).Magnitude
+            if sd > fr then continue end
+            local pf = 1 - (sd/fr)
+            shouldBeExpanded[player] = {partToModify=ptm, dynamicSize=1+(Config.Hitbox.MaxSize-1)*pf}
+        end
+    end
+    for player in pairs(ExpandedPlayers) do
+        if not shouldBeExpanded[player] then RestoreOriginalSize(player) end
+    end
+    for player, data in pairs(shouldBeExpanded) do
+        ExpandPlayerHitbox(player, data.partToModify, data.dynamicSize)
+    end
+end
+
+local function CreateESP(player)
+    if ESPObjects[player] then return end
+    ESPObjects[player] = {Box=Drawing.new("Square"),Name=Drawing.new("Text"),Distance=Drawing.new("Text")}
+    local e = ESPObjects[player]
+    e.Box.Thickness=1 e.Box.Filled=false e.Box.Color=Color3.fromRGB(255,255,255) e.Box.Transparency=1 e.Box.Visible=false
+    e.Name.Size=13 e.Name.Center=true e.Name.Outline=true e.Name.Color=Color3.fromRGB(255,255,255) e.Name.Transparency=1 e.Name.Visible=false
+    e.Distance.Size=12 e.Distance.Center=true e.Distance.Outline=true e.Distance.Color=Color3.fromRGB(200,200,200) e.Distance.Transparency=1 e.Distance.Visible=false
+end
+
+local function UpdateESP()
+    if ModuleHandlesESP() then return end
+    if not Config.ESP.Enabled or not Config.ESP.Active then return end
+    local t = tick() if t - LastESPUpdate < 0.1 then return end LastESPUpdate = t
+    for player, esp in pairs(ESPObjects) do
+        if not player or not player.Parent then for _,d in pairs(esp) do d.Visible=false end continue end
+        if ShouldSkipPlayer(player, Config.ESP.TeamCheck) then for _,d in pairs(esp) do d.Visible=false end continue end
+        local c  = player.Character
+        local h  = c and c:FindFirstChildOfClass("Humanoid")
+        local rp = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso"))
+        if c and h and rp and h.Health > 0 and not c:FindFirstChildOfClass("ForceField") then
+            local dist = (Camera.CFrame.Position - rp.Position).Magnitude
+            if dist <= Config.ESP.MaxDistance then
+                local sp, on = Camera:WorldToViewportPoint(rp.Position)
+                if on then
+                    local bs = Vector2.new(2000/dist, 2500/dist)
+                    esp.Box.Size=bs esp.Box.Position=Vector2.new(sp.X-bs.X/2, sp.Y-bs.Y/2) esp.Box.Visible=Config.ESP.Boxes
+                    esp.Name.Text=player.DisplayName or player.Name esp.Name.Position=Vector2.new(sp.X, sp.Y-bs.Y/2-15) esp.Name.Visible=Config.ESP.Names
+                    esp.Distance.Text=math.floor(dist).."m" esp.Distance.Position=Vector2.new(sp.X, sp.Y+bs.Y/2+5) esp.Distance.Visible=Config.ESP.Distance
+                    continue
+                end
+            end
+        end
+        for _,d in pairs(esp) do d.Visible=false end
+    end
+end
+
+-- ================== HOOK UNIVERSAL (con _inHook guard) ==================
+task.delay(IS_RIVALS and 2 or 0.3, function()
+    if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT then
+        local _inHook = false
+        local oldNc
+        oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            if _inHook or checkcaller() then return oldNc(self, ...) end
+            local m = getnamecallmethod()
+            if m ~= "Raycast" and m ~= "FindPartOnRay"
+                and m ~= "FindPartOnRayWithIgnoreList"
+                and m ~= "FindPartOnRayWithWhitelist" then
+                return oldNc(self, ...)
+            end
+            if not (Config.Silent.Enabled and Config.Silent.Active
+                and CurrentTarget and CurrentTarget.Parent) then
+                return oldNc(self, ...)
+            end
+            if math.random(1,100) > Config.Silent.HitChance then
+                return oldNc(self, ...)
+            end
+            _inHook = true
+            local args = {...}
+            if self == Workspace or self == workspace then
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    if m == "Raycast" then
+                        local o, d = args[1], args[2]
+                        if typeof(o) == "Vector3" and typeof(d) == "Vector3" then
+                            local cp = cam.CFrame.Position
+                            local dx2,dy2,dz2 = o.X-cp.X, o.Y-cp.Y, o.Z-cp.Z
+                            if math.sqrt(dx2*dx2+dy2*dy2+dz2*dz2) <= 10 then
+                                local tp = CurrentTarget.Position
+                                local tx,ty,tz = tp.X-o.X, tp.Y-o.Y, tp.Z-o.Z
+                                local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                                local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                                if tM > 0 and dM > 0 then
+                                    local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
+                                    if math.deg(math.acos(math.clamp(dot,-1,1))) <= 20 then
+                                        args[2] = Vector3.new(tx/tM*dM, ty/tM*dM, tz/tM*dM)
+                                        _inHook = false
+                                        return oldNc(self, unpack(args))
+                                    end
+                                end
+                            end
+                        end
+                    elseif m == "FindPartOnRay" or m == "FindPartOnRayWithIgnoreList"
+                        or m == "FindPartOnRayWithWhitelist" then
+                        local ray = args[1]
+                        if typeof(ray) == "Ray" then
+                            local o, d = ray.Origin, ray.Direction
+                            local cp = cam.CFrame.Position
+                            local dx2,dy2,dz2 = o.X-cp.X, o.Y-cp.Y, o.Z-cp.Z
+                            if math.sqrt(dx2*dx2+dy2*dy2+dz2*dz2) <= 10 then
+                                local tp = CurrentTarget.Position
+                                local tx,ty,tz = tp.X-o.X, tp.Y-o.Y, tp.Z-o.Z
+                                local tM = math.sqrt(tx*tx+ty*ty+tz*tz)
+                                local dM = math.sqrt(d.X*d.X+d.Y*d.Y+d.Z*d.Z)
+                                if tM > 0 and dM > 0 then
+                                    local dot = (d.X/dM)*(tx/tM)+(d.Y/dM)*(ty/tM)+(d.Z/dM)*(tz/tM)
+                                    if math.deg(math.acos(math.clamp(dot,-1,1))) <= 20 then
+                                        args[1] = Ray.new(o, Vector3.new(tx/tM*dM,ty/tM*dM,tz/tM*dM))
+                                        _inHook = false
+                                        return oldNc(self, unpack(args))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            _inHook = false
+            return oldNc(self, ...)
+        end))
+    end
+end)
+
+-- ================== GUI ==================
+task.delay(3, function()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AX"..math.random(100000,999999)
+    ScreenGui.ResetOnSpawn = false
+    pcall(function() if syn then syn.protect_gui(ScreenGui) end end)
+    pcall(function() ScreenGui.Parent = gethui and gethui() or CoreGui end)
+    if not ScreenGui.Parent then ScreenGui.Parent = CoreGui end
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "M"..math.random(1000,9999) MainFrame.Parent = ScreenGui
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20,20,20) MainFrame.BorderSizePixel = 0
+    MainFrame.Position = UDim2.new(0.3,0,0.15,0) MainFrame.Size = UDim2.new(0,490,0,620)
+    MainFrame.Active = true MainFrame.Draggable = true
+    Instance.new("UICorner",MainFrame).CornerRadius = UDim.new(0,10)
+
+    local TitleBar = Instance.new("Frame",MainFrame)
+    TitleBar.BackgroundColor3=Color3.fromRGB(30,30,30) TitleBar.BorderSizePixel=0
+    TitleBar.Size=UDim2.new(1,0,0,40)
+    Instance.new("UICorner",TitleBar).CornerRadius=UDim.new(0,10)
+
+    local TitleText = Instance.new("TextLabel",TitleBar)
+    TitleText.BackgroundTransparency=1 TitleText.Position=UDim2.new(0,15,0,0)
+    TitleText.Size=UDim2.new(1,-80,1,0) TitleText.Font=Enum.Font.GothamBold
+    TitleText.Text="⚡ ANNOMALY X v17.7" TitleText.TextColor3=Color3.fromRGB(255,255,255) -- [CHANGED v4.0]
+    TitleText.TextSize=16 TitleText.TextXAlignment=Enum.TextXAlignment.Left
+
+    local CreatorText = Instance.new("TextLabel",TitleBar)
+    CreatorText.BackgroundTransparency=1 CreatorText.Position=UDim2.new(1,-200,0,0)
+    CreatorText.Size=UDim2.new(0,160,1,0) CreatorText.Font=Enum.Font.Gotham
+    CreatorText.Text="by ElSacaLeche" CreatorText.TextColor3=Color3.fromRGB(150,150,150)
+    CreatorText.TextSize=12 CreatorText.TextXAlignment=Enum.TextXAlignment.Right
+
+    local CloseBtn = Instance.new("TextButton",TitleBar)
+    CloseBtn.BackgroundColor3=Color3.fromRGB(220,50,50) CloseBtn.BorderSizePixel=0
+    CloseBtn.Position=UDim2.new(1,-35,0,7) CloseBtn.Size=UDim2.new(0,26,0,26)
+    CloseBtn.Font=Enum.Font.GothamBold CloseBtn.Text="✕"
+    CloseBtn.TextColor3=Color3.fromRGB(255,255,255) CloseBtn.TextSize=14
+    Instance.new("UICorner",CloseBtn).CornerRadius=UDim.new(0,6)
+
+    local TabHolder = Instance.new("Frame",MainFrame)
+    TabHolder.BackgroundColor3=Color3.fromRGB(25,25,25) TabHolder.BorderSizePixel=0
+    TabHolder.Position=UDim2.new(0,0,0,40) TabHolder.Size=UDim2.new(1,0,0,40)
+
+    local PagesContainer = Instance.new("Frame",MainFrame)
+    PagesContainer.BackgroundTransparency=1 PagesContainer.Position=UDim2.new(0,0,0,80)
+    PagesContainer.Size=UDim2.new(1,0,1,-80)
+
+    local Pages,TabButtons = {},{}
+    local function SelectTab(name)
+        for n,p in pairs(Pages) do p.Visible=(n==name) end
+        for n,b in pairs(TabButtons) do
+            b.BackgroundColor3=n==name and Color3.fromRGB(55,55,55) or Color3.fromRGB(25,25,25)
+            b.TextColor3=n==name and Color3.fromRGB(255,255,255) or Color3.fromRGB(140,140,140)
+        end
+    end
+
+    local totalTabs,tabCount=6,0
+    local function CreateTab(name,icon)
+        local idx=tabCount tabCount=tabCount+1
+        local btn=Instance.new("TextButton",TabHolder)
+        btn.BackgroundColor3=Color3.fromRGB(25,25,25) btn.BorderSizePixel=0
+        btn.Position=UDim2.new(idx/totalTabs,0,0,0) btn.Size=UDim2.new(1/totalTabs,0,1,0)
+        btn.Font=Enum.Font.GothamBold btn.Text=icon.." "..name
+        btn.TextColor3=Color3.fromRGB(140,140,140) btn.TextSize=9
+        TabButtons[name]=btn
+        local page=Instance.new("ScrollingFrame",PagesContainer)
+        page.BackgroundTransparency=1 page.Position=UDim2.new(0,8,0,8)
+        page.Size=UDim2.new(1,-16,1,-16) page.CanvasSize=UDim2.new(0,0,0,0)
+        page.ScrollBarThickness=5 page.ScrollBarImageColor3=Color3.fromRGB(80,80,80)
+        page.BorderSizePixel=0 page.Visible=false
+        local layout=Instance.new("UIListLayout",page) layout.Padding=UDim.new(0,8)
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            page.CanvasSize=UDim2.new(0,0,0,layout.AbsoluteContentSize.Y+10)
+        end)
+        Pages[name]=page
+        btn.MouseButton1Click:Connect(function() SelectTab(name) end)
+        if idx==0 then SelectTab(name) end
+        return page
+    end
+
+    local function Sec(p,t)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(35,35,35)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,28)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Size=UDim2.new(1,0,1,0) l.Font=Enum.Font.GothamBold
+        l.Text=t l.TextColor3=Color3.fromRGB(255,255,255) l.TextSize=13
+    end
+
+    local function Tog(p,t,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.68,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f)
+        b.BackgroundColor3=d and Color3.fromRGB(50,200,100) or Color3.fromRGB(200,60,60)
+        b.BorderSizePixel=0 b.Position=UDim2.new(1,-58,0.5,-11) b.Size=UDim2.new(0,48,0,22)
+        b.Font=Enum.Font.GothamBold b.Text=d and"ON"or"OFF"
+        b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=10
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local e=d b.MouseButton1Click:Connect(function()
+            e=not e b.Text=e and"ON"or"OFF"
+            b.BackgroundColor3=e and Color3.fromRGB(50,200,100) or Color3.fromRGB(200,60,60)
+            c(e)
+        end)
+    end
+
+    local function Sli(p,t,mi,ma,d,c,dec)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,52)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local function fmt(v) return dec and string.format("%."..dec.."f",v) or tostring(math.floor(v)) end
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,4) l.Size=UDim2.new(1,-24,0,18)
+        l.Font=Enum.Font.Gotham l.Text=t..": "..fmt(d)
+        l.TextColor3=Color3.fromRGB(240,240,240) l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local bg=Instance.new("Frame",f) bg.BackgroundColor3=Color3.fromRGB(45,45,45)
+        bg.BorderSizePixel=0 bg.Position=UDim2.new(0,12,0,30) bg.Size=UDim2.new(1,-24,0,10)
+        Instance.new("UICorner",bg).CornerRadius=UDim.new(1,0)
+        local fi=Instance.new("Frame",bg) fi.BackgroundColor3=Color3.fromRGB(100,150,255)
+        fi.BorderSizePixel=0 fi.Size=UDim2.new((d-mi)/(ma-mi),0,1,0)
+        Instance.new("UICorner",fi).CornerRadius=UDim.new(1,0)
+        local k=Instance.new("TextButton",bg) k.BackgroundColor3=Color3.fromRGB(255,255,255)
+        k.BorderSizePixel=0 k.Position=UDim2.new((d-mi)/(ma-mi),-7,0.5,-7)
+        k.Size=UDim2.new(0,14,0,14) k.Text=""
+        Instance.new("UICorner",k).CornerRadius=UDim.new(1,0)
+        local dr=false
+        k.MouseButton1Down:Connect(function() dr=true end)
+        local function onMove()
+            if not dr then return end
+            local m=UserInputService:GetMouseLocation()
+            local r=math.clamp((m.X-bg.AbsolutePosition.X)/bg.AbsoluteSize.X,0,1)
+            local v=dec and(math.floor((mi+(ma-mi)*r)*(10^dec))/(10^dec)) or math.floor(mi+(ma-mi)*r)
+            fi.Size=UDim2.new(r,0,1,0) k.Position=UDim2.new(r,-7,0.5,-7)
+            l.Text=t..": "..fmt(v) c(v)
+        end
+        UserInputService.InputChanged:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.MouseMovement then onMove() end
+        end)
+        UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.MouseButton1 then dr=false end
+        end)
+    end
+
+    local function Drop(p,t,o,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.42,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f) b.BackgroundColor3=Color3.fromRGB(40,40,40)
+        b.BorderSizePixel=0 b.Position=UDim2.new(0.46,0,0.5,-11) b.Size=UDim2.new(0.52,-12,0,22)
+        b.Font=Enum.Font.Gotham b.Text=d b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=10
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local i=table.find(o,d) or 1
+        b.MouseButton1Click:Connect(function() i=i%#o+1 b.Text=o[i] c(o[i]) end)
+    end
+
+    local function Key(p,t,d,c)
+        local f=Instance.new("Frame",p) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,34)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(0.5,0,1,0)
+        l.Font=Enum.Font.Gotham l.Text=t l.TextColor3=Color3.fromRGB(240,240,240)
+        l.TextSize=12 l.TextXAlignment=Enum.TextXAlignment.Left
+        local b=Instance.new("TextButton",f) b.BackgroundColor3=Color3.fromRGB(40,40,40)
+        b.BorderSizePixel=0 b.Position=UDim2.new(0.54,0,0.5,-11) b.Size=UDim2.new(0.44,-12,0,22)
+        b.Font=Enum.Font.GothamBold b.Text=d.Name
+        b.TextColor3=Color3.fromRGB(255,255,255) b.TextSize=9
+        Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+        local li=false
+        b.MouseButton1Click:Connect(function()
+            if li then return end li=true b.Text="..."
+            b.BackgroundColor3=Color3.fromRGB(100,150,255)
+            local co co=UserInputService.InputBegan:Connect(function(input,gp)
+                if not gp and input.UserInputType==Enum.UserInputType.Keyboard then
+                    li=false b.Text=input.KeyCode.Name
+                    b.BackgroundColor3=Color3.fromRGB(40,40,40)
+                    c(input.KeyCode) co:Disconnect()
+                end
+            end)
+        end)
+    end
+
+    local function AddBanner(page,color,text)
+        local f=Instance.new("Frame",page) f.BackgroundColor3=color
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,36)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text=text l.TextColor3=Color3.fromRGB(220,255,220)
+        l.TextSize=10 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    end
+
+    local SilentPage  = CreateTab("Silent","🎯")
+    local AimbotPage  = CreateTab("Aimbot","🔫")
+    local HitboxPage  = CreateTab("Hitbox","📦")
+    local ESPPage     = CreateTab("ESP","👁")
+    local TriggerPage = CreateTab("Trigger","🔥")
+    local InfoPage    = CreateTab("Info","ℹ")
+
+    -- ===== SILENT PAGE =====
+    if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+        Sec(SilentPage,"⚡ Silent Aim (Disabled)")
+        local msg=IS_BSX and"⚠ Silent DISABLED para BSX.\nUsa Aimbot (Q)!"
+            or IS_ARSENAL and"⚠ Silent no disponible en Arsenal.\nUsa DHE+Aimbot!"
+            or"⚠ Silent no disponible.\nUsa Aimbot (Q)!"
+        local f=Instance.new("Frame",SilentPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text=msg l.TextColor3=Color3.fromRGB(255,200,100)
+        l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    else
+        local tag=IS_FATETRIGGER and" (Fate Trigger)"
+            or IS_RIVALS and" (Rivals)" or IS_FLICK and" (Flick)"
+            or IS_PF and" (Phantom Forces)" or IS_HYPERSHOT and" (HyperShot)" or"" -- [CHANGED v4.0]
+        Sec(SilentPage,"⚡ Silent Aim"..tag)
+        if IS_FATETRIGGER then
+            AddBanner(SilentPage,Color3.fromRGB(40,20,20),"✅ FTX: Raycast + Mouse.Hit + FireServer hooks")
+        end
+        if IS_HYPERSHOT then
+            AddBanner(SilentPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported")
+        end
+        -- [ADDED v4.0] PF Silent Aim banner
+        if IS_PF then
+            AddBanner(SilentPage,Color3.fromRGB(25,30,45),"✅ PF v4.0: Credits to Wapus made by iRay")
+        end
+        Tog(SilentPage,"Enable Silent Aim",false,function(v) Config.Silent.Enabled=v if not v then Config.Silent.Active=false end end)
+        Drop(SilentPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Silent.KeybindMode=v end)
+        Key(SilentPage,"Keybind",Config.Silent.Keybind,function(v) Config.Silent.Keybind=v end)
+        Drop(SilentPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Silent.TargetPart=v end)
+        Sli(SilentPage,"Hit Chance %",0,100,100,function(v) Config.Silent.HitChance=v end)
+        Tog(SilentPage,"Team Check",false,function(v) Config.Silent.TeamCheck=v end)
+        Tog(SilentPage,"Visible Check",false,function(v) Config.Silent.VisibleCheck=v end)
+    end
+    Sec(SilentPage,"🎯 FOV")
+    Tog(SilentPage,"Enable FOV",true,function(v) Config.FOV.Enabled=v end)
+    Tog(SilentPage,"Show FOV Circle",true,function(v) Config.FOV.Visible=v end)
+    Sli(SilentPage,"FOV Radius",30,500,150,function(v) Config.FOV.Radius=v end)
+
+    -- ===== AIMBOT PAGE =====
+    Sec(AimbotPage,"🔫 Aimbot / Aimlock")
+    if IS_FATETRIGGER    then AddBanner(AimbotPage,Color3.fromRGB(40,20,20),"✅ FTX: Silent + Aimbot + ESP dedicado")
+    elseif IS_BSX        then AddBanner(AimbotPage,Color3.fromRGB(25,35,25),"✅ BSX: mousemoverel (AC safe)")
+    elseif IS_PF         then AddBanner(AimbotPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Trajectory prediction + cameraInterface angles + replicationInterface") -- [CHANGED v4.0]
+    elseif IS_RIVALS     then AddBanner(AimbotPage,Color3.fromRGB(40,25,35),"✅ Rivals: Custom aimbot + AC bypass")
+    elseif IS_FLICK      then AddBanner(AimbotPage,Color3.fromRGB(35,25,40),"✅ Flick: Custom aimbot + HeadHB")
+    elseif IS_ARSENAL    then AddBanner(AimbotPage,Color3.fromRGB(40,35,25),"✅ Arsenal: Custom aimbot")
+    elseif IS_CA         then AddBanner(AimbotPage,Color3.fromRGB(25,40,35),"✅ CA: Custom aimbot")
+    elseif IS_HYPERSHOT  then AddBanner(AimbotPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported")
+    end
+    Tog(AimbotPage,"Enable",false,function(v) Config.Aimbot.Enabled=v if not v then Config.Aimbot.Active=false AimbotLockedPlayer=nil AimbotCurrentTarget=nil end end)
+    Drop(AimbotPage,"Method",{"Aimbot","Aimlock"},"Aimbot",function(v) Config.Aimbot.Method=v AimbotLockedPlayer=nil end)
+    Drop(AimbotPage,"Keybind Mode",{"Toggle","Hold"},"Hold",function(v) Config.Aimbot.KeybindMode=v end)
+    Key(AimbotPage,"Keybind",Config.Aimbot.Keybind,function(v) Config.Aimbot.Keybind=v end)
+    Drop(AimbotPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Aimbot.TargetPart=v end)
+    Tog(AimbotPage,"Team Check",false,function(v) Config.Aimbot.TeamCheck=v end)
+    Tog(AimbotPage,"Visible Check",false,function(v) Config.Aimbot.VisibleCheck=v end)
+    Sec(AimbotPage,"⚙ Settings")
+    Sli(AimbotPage,"Smoothness",1,20,5,function(v) Config.Aimbot.Smoothness=v end)
+    Sli(AimbotPage,"Prediction",0,0.5,0,function(v) Config.Aimbot.Prediction=v end,2)
+    Sli(AimbotPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Aimbot.RandomInterval=v end,1)
+    Sec(AimbotPage,"🎯 Aimbot FOV")
+    Sli(AimbotPage,"FOV Radius",30,500,150,function(v) Config.Aimbot.FOVRadius=v end)
+    Tog(AimbotPage,"Show FOV Circle",true,function(v) Config.Aimbot.FOVVisible=v end)
+
+    -- ===== HITBOX PAGE =====
+    if BSX_NO_HITBOX then
+        Sec(HitboxPage,"📦 Hitbox (Disabled)")
+        local f=Instance.new("Frame",HitboxPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
+        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
+        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
+        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
+        l.Font=Enum.Font.Gotham l.Text="⚠ DHE/HE DISABLED para BSX."
+        l.TextColor3=Color3.fromRGB(255,200,100) l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    else
+        Sec(HitboxPage,"📦 Hitbox Expander")
+        if IS_FATETRIGGER then AddBanner(HitboxPage,Color3.fromRGB(40,20,20),"ℹ FTX: one-shot game, hitbox opcional") end
+        if IS_PF then AddBanner(HitboxPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Hitbox via replicationInterface") end -- [CHANGED v4.0]
+        if IS_HYPERSHOT then AddBanner(HitboxPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported") end
+        Tog(HitboxPage,"Enable Hitbox",false,function(v) Config.Hitbox.Enabled=v if not v then Config.Hitbox.Active=false CleanupAllHitboxes() end end)
+        Drop(HitboxPage,"Method",{"DHE (Dynamic)","HE (Static)"},"DHE (Dynamic)",function(v) Config.Hitbox.Method=v CleanupAllHitboxes() end)
+        Drop(HitboxPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Hitbox.KeybindMode=v end)
+        Key(HitboxPage,"Keybind",Config.Hitbox.Keybind,function(v) Config.Hitbox.Keybind=v end)
+        Tog(HitboxPage,"Team Check",false,function(v) Config.Hitbox.TeamCheck=v end)
+        Drop(HitboxPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Hitbox.TargetPart=v end)
+        Sli(HitboxPage,"Max Size",1,15,8,function(v) Config.Hitbox.MaxSize=v end)
+        Sec(HitboxPage,"🎨 Appearance")
+        Sli(HitboxPage,"Transparency",0,1,0.7,function(v) Config.Hitbox.Transparency=v end,1)
+        Sli(HitboxPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Hitbox.RandomInterval=v end,1)
+        Sec(HitboxPage,"🎯 DHE FOV")
+        Tog(HitboxPage,"Use Custom FOV",true,function(v) Config.Hitbox.FOVEnabled=v end)
+        Sli(HitboxPage,"DHE FOV Radius",30,500,150,function(v) Config.Hitbox.FOVRadius=v end)
+        Tog(HitboxPage,"Show DHE FOV Circle",false,function(v) Config.Hitbox.FOVVisible=v end)
+    end
+
+    -- ===== ESP PAGE =====
+    Sec(ESPPage,"👁 ESP")
+    if HAS_DEDICATED_MODULE then
+        local em=IS_FATETRIGGER and"FT: Custom+health bars"
+            or IS_PF and"PF v4.0: replicationInterface + health + weapon" -- [CHANGED v4.0]
+            or IS_BSX and"BSX: Custom+health"
+            or IS_RIVALS and"Rivals: Custom+health" or IS_FLICK and"Flick: Custom+HeadHB"
+            or IS_ARSENAL and"Arsenal: Custom" or IS_CA and"CA: Custom"
+            or IS_HYPERSHOT and"HyperShot: Custom+health" or""
+        if em~="" then AddBanner(ESPPage,Color3.fromRGB(30,30,40),"✅ "..em) end
+    end
+    Tog(ESPPage,"Enable ESP",false,function(v)
+        Config.ESP.Enabled=v
+        if not v then Config.ESP.Active=false for _,e in pairs(ESPObjects) do for _,d in pairs(e) do d.Visible=false end end end
+    end)
+    Drop(ESPPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.ESP.KeybindMode=v end)
+    Key(ESPPage,"Keybind",Config.ESP.Keybind,function(v) Config.ESP.Keybind=v end)
+    Tog(ESPPage,"Team Check",false,function(v) Config.ESP.TeamCheck=v end)
+    Tog(ESPPage,"Show Boxes",true,function(v) Config.ESP.Boxes=v end)
+    Tog(ESPPage,"Show Names",true,function(v) Config.ESP.Names=v end)
+    Tog(ESPPage,"Show Distance",true,function(v) Config.ESP.Distance=v end)
+    Sli(ESPPage,"Max Distance",100,2000,1000,function(v) Config.ESP.MaxDistance=v end)
+
+    -- ===== TRIGGER PAGE =====
+    Sec(TriggerPage,"🔥 Triggerbot")
+    Tog(TriggerPage,"Enable Triggerbot",false,function(v) Config.Triggerbot.Enabled=v if not v then Config.Triggerbot.Active=false end end)
+    Drop(TriggerPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Triggerbot.KeybindMode=v end)
+    Key(TriggerPage,"Keybind",Config.Triggerbot.Keybind,function(v) Config.Triggerbot.Keybind=v end)
+    Tog(TriggerPage,"Team Check",true,function(v) Config.Triggerbot.TeamCheck=v end)
+    Sec(TriggerPage,"⚙ Settings")
+    Tog(TriggerPage,"Screen Ray Detection",true,function(v) Config.Triggerbot.UseScreenRay=v end)
+    Tog(TriggerPage,"FOV Based Detection",true,function(v) Config.Triggerbot.FOVBased=v end)
+    Sli(TriggerPage,"Fire Delay (s)",0.01,0.5,0.05,function(v) Config.Triggerbot.Delay=v end,2)
+
+    -- ===== INFO PAGE =====
+    Sec(InfoPage,"🔒 Info & Settings")
+    Key(InfoPage,"Toggle GUI",Config.GUI.ToggleKey,function(v) Config.GUI.ToggleKey=v end)
+    local info=Instance.new("Frame",InfoPage) info.BackgroundColor3=Color3.fromRGB(30,30,30)
+    info.BorderSizePixel=0 info.Size=UDim2.new(1,0,0,200)
+    Instance.new("UICorner",info).CornerRadius=UDim.new(0,6)
+    local infoText=Instance.new("TextLabel",info) infoText.BackgroundTransparency=1
+    infoText.Position=UDim2.new(0,12,0,10) infoText.Size=UDim2.new(1,-24,1,-20)
+    infoText.Font=Enum.Font.Gotham infoText.TextColor3=Color3.fromRGB(200,200,200)
+    infoText.TextSize=10 infoText.TextWrapped=true infoText.TextYAlignment=Enum.TextYAlignment.Top
+    -- [CHANGED v4.0] Updated info text
+    infoText.Text="⚡ AX v17.7 OPT | by ElSacaLeche\n\n✅ "..GAME_MODE_NAME.." MODE\n\n"
+        .."[End]=GUI | [E]=Silent | [Q]=Aimbot\n[H]=Hitbox | [V]=ESP | [T]=Trigger\n\n"
+        .."✅ PF v4.0: Internal hooks method\n✅ _inHook guard anti-stack overflow\n✅ RaycastParams cacheados\n✅ GetPlayers cacheado cada 2s"
+
+    CloseBtn.MouseButton1Click:Connect(function()
+        CleanupAllHitboxes() ScreenGui:Destroy()
+        if FOVCircle       then FOVCircle:Remove()       end
+        if AimbotFOVCircle then AimbotFOVCircle:Remove() end
+        if HitboxFOVCircle then HitboxFOVCircle:Remove() end
+        for _,e in pairs(ESPObjects) do for _,d in pairs(e) do d:Remove() end end
+        -- [ADDED v4.0] Cleanup PF module if loaded
+        if getgenv().AX_PF_Cleanup then
+            pcall(getgenv().AX_PF_Cleanup)
+        end
+    end)
+end)
+
+-- ================== INPUT ==================
+UserInputService.InputBegan:Connect(function(input,gp)
+    if gp then return end
+    if input.KeyCode==Config.GUI.ToggleKey then
+        pcall(function()
+            for _,gui in ipairs(CoreGui:GetChildren()) do
+                if gui.Name:match("^AX") then gui.Enabled=not gui.Enabled end
+            end
+        end)
+    end
+    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+        if input.KeyCode==Config.Silent.Keybind and Config.Silent.Enabled then
+            if Config.Silent.KeybindMode=="Toggle" then Config.Silent.Active=not Config.Silent.Active
+            else Config.Silent.Active=true end
+        end
+    end
+    if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.Enabled then
+        if Config.Aimbot.KeybindMode=="Toggle" then
+            Config.Aimbot.Active=not Config.Aimbot.Active
+            if not Config.Aimbot.Active then AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
+        else Config.Aimbot.Active=true end
+    end
+    if not BSX_NO_HITBOX then
+        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.Enabled then
+            if Config.Hitbox.KeybindMode=="Toggle" then
+                Config.Hitbox.Active=not Config.Hitbox.Active
+                if not Config.Hitbox.Active then CleanupAllHitboxes() end
+            else Config.Hitbox.Active=true end
+        end
+    end
+    if input.KeyCode==Config.ESP.Keybind and Config.ESP.Enabled then
+        if Config.ESP.KeybindMode=="Toggle" then Config.ESP.Active=not Config.ESP.Active
+        else Config.ESP.Active=true end
+    end
+    if input.KeyCode==Config.Triggerbot.Keybind and Config.Triggerbot.Enabled then
+        if Config.Triggerbot.KeybindMode=="Toggle" then Config.Triggerbot.Active=not Config.Triggerbot.Active
+        else Config.Triggerbot.Active=true end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+        if input.KeyCode==Config.Silent.Keybind and Config.Silent.KeybindMode=="Hold" then
+            Config.Silent.Active=false end
+    end
+    if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.KeybindMode=="Hold" then
+        Config.Aimbot.Active=false AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
+    if not BSX_NO_HITBOX then
+        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.KeybindMode=="Hold" then
+            Config.Hitbox.Active=false CleanupAllHitboxes() end
+    end
+    if input.KeyCode==Config.ESP.Keybind and Config.ESP.KeybindMode=="Hold" then Config.ESP.Active=false end
+    if input.KeyCode==Config.Triggerbot.Keybind and Config.Triggerbot.KeybindMode=="Hold" then Config.Triggerbot.Active=false end
+end)
+
+if not IS_PF and not IS_BSX and not IS_RIVALS and not IS_FLICK
+    and not IS_ARSENAL and not IS_CA and not IS_HYPERSHOT and not IS_FATETRIGGER then
+    for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then CreateESP(p) end end
+    Players.PlayerAdded:Connect(function(p) if p~=LocalPlayer then CreateESP(p) end end)
+end
+
+Players.PlayerRemoving:Connect(function(p)
+    CleanupPlayerHitbox(p)
+    if AimbotLockedPlayer==p then AimbotLockedPlayer=nil end
+    if ESPObjects[p] then for _,d in pairs(ESPObjects[p]) do d:Remove() end ESPObjects[p]=nil end
+    for i,v in ipairs(_cachedPlayers) do if v==p then table.remove(_cachedPlayers,i) break end end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    CurrentTarget=nil AimbotCurrentTarget=nil AimbotLockedPlayer=nil
+    for player in pairs(ExpandedPlayers) do CleanupPlayerHitbox(player) end
+    task.wait(0.5) UpdateVisFilterCache()
+end)
+
+-- ================== MAIN LOOP ==================
+task.delay(IS_RIVALS and 8 or 1, function()
+    RunService.Heartbeat:Connect(function()
+        Camera=Workspace.CurrentCamera
+        local mp=GetMouseLocation()
+
+        if FOVCircle then
+            local showSilent=Config.Silent.Enabled and Config.Silent.Active
+                and not BSX_NO_SILENT and not CA_NO_SILENT
+            FOVCircle.Position=mp FOVCircle.Radius=Config.FOV.Radius
+            FOVCircle.Visible=Config.FOV.Visible and (showSilent or (Config.Triggerbot.Enabled and Config.Triggerbot.Active))
+        end
+        if AimbotFOVCircle then
+            AimbotFOVCircle.Position=Config.Aimbot.Method=="Aimbot" and GetViewportCenter() or mp
+            AimbotFOVCircle.Radius=Config.Aimbot.FOVRadius AimbotFOVCircle.Color=Config.Aimbot.FOVColor
+            AimbotFOVCircle.Visible=Config.Aimbot.FOVVisible and Config.Aimbot.Enabled and Config.Aimbot.Active
+        end
+        if HitboxFOVCircle then
+            local showH=not BSX_NO_HITBOX and not ModuleHandlesHitbox()
+                and Config.Hitbox.FOVVisible and Config.Hitbox.FOVEnabled
+                and Config.Hitbox.Enabled and Config.Hitbox.Active
+                and Config.Hitbox.Method=="DHE (Dynamic)"
+            HitboxFOVCircle.Position=mp HitboxFOVCircle.Radius=Config.Hitbox.FOVRadius
+            HitboxFOVCircle.Color=Config.Hitbox.FOVColor HitboxFOVCircle.Visible=showH
+        end
+
+        if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT
+            and not ModuleHandlesSilent() then
+            local now=tick()
+            if now-LastSilentUpdate>=SILENT_UPDATE_RATE then
+                LastSilentUpdate=now
+                CurrentTarget=(Config.Silent.Enabled and Config.Silent.Active) and GetClosestPlayer() or nil
+            end
+        end
+
+        UpdateAimbot()
+        UpdateTriggerbot()
+        UpdateDynamicHitboxes()
+        UpdateESP()
+    end)
+end)
+
+if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+    Config.Silent.Enabled=false Config.Silent.Active=false end
+if BSX_NO_HITBOX then
+    Config.Hitbox.Enabled=false Config.Hitbox.Active=false end
+
+task.delay(IS_RIVALS and 4 or 2, function()
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification",{
+            Title="⚡ AX v17.7 OPT", -- [CHANGED v4.0]
+            Text=GAME_MODE_NAME.." | [End]=GUI",
+            Duration=5
+        })
+    end)
+end)
