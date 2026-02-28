@@ -1,289 +1,186 @@
 --[[
-    ANNOMALY X - Blox Strike Module (BSX) v18.0
+    ANNOMALY X - Blox Strike Module (BSX) v19.0
     
-    FIXES APPLIED:
-    - TeamCheck now works properly using BloxStrike's actual team system
-    - Aimbot accuracy greatly improved with proper prediction & smoothing
-    - ESP respects TeamCheck correctly
+    Reconstruido desde cero basado en la arquitectura real de BloxStrike
     
-    Creator: ElSacaLeche
+    Cambios principales vs v18:
+    - Silent Aim implementado interceptando bullet_module._performRaycast
+    - Detección de equipos usando carpetas del workspace (método real de BloxStrike)
+    - ESP con todos los elementos (caja, vida, tracer, head dot, arma)
+    - Legit Aimbot con jitter humano y suavizado dinámico
+    - Sistema de wallbang con penetración por material
+    - Anti-detección básica
 ]]
+
+-- ============================================
+-- ESPERAR CONFIGURACIÓN Y CARGA DEL JUEGO
+-- ============================================
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
 if not getgenv().AX_Config then
     repeat task.wait() until getgenv().AX_Config
 end
 
+-- Intentar activar flag interna para efectos visuales
+pcall(function()
+    settings():GetService("RenderSettings").AdornShadingAPI = true
+end)
+
 local Config = getgenv().AX_Config
 
+-- ============================================
+-- SERVICIOS
+-- ============================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 local Workspace = workspace
-local LocalPlayer = Players.LocalPlayer
 
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Función de mover ratón (proporcionada por el executor)
 local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
 
 -- ============================================
--- BSX TEAM DETECTION SYSTEM
--- BloxStrike does NOT use Roblox's standard Team system
--- Teams are assigned via attributes, character folders,
--- or other game-specific methods
+-- TABLA DE DATOS INTERNOS
 -- ============================================
-
-local BSXTeamCache = {}
-local BSXTeamCacheTime = 0
-local BSX_TEAM_CACHE_INTERVAL = 0.5
-
--- Detect the team of a player using multiple fallback methods
-local function GetBSXTeam(player)
-    if not player then return nil end
-    
-    -- Method 1: Check player attributes (common in BSX)
-    local team = nil
-    pcall(function()
-        team = player:GetAttribute("Team")
-    end)
-    if team ~= nil then return tostring(team) end
-    
-    -- Method 2: Check for TeamColor (Roblox native, sometimes used)
-    pcall(function()
-        if player.TeamColor and player.TeamColor ~= BrickColor.new("White") then
-            team = tostring(player.TeamColor)
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 3: Check Roblox Team object
-    pcall(function()
-        if player.Team then
-            team = player.Team.Name
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 4: Check character for team indicators
-    pcall(function()
-        local char = player.Character
-        if char then
-            -- Check for team attribute on character
-            local charTeam = char:GetAttribute("Team")
-            if charTeam ~= nil then
-                team = tostring(charTeam)
-                return
-            end
-            
-            -- Check for a "Team" value object inside character
-            local teamVal = char:FindFirstChild("Team")
-            if teamVal and teamVal:IsA("StringValue") then
-                team = teamVal.Value
-                return
-            end
-            if teamVal and teamVal:IsA("IntValue") then
-                team = tostring(teamVal.Value)
-                return
-            end
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 5: Check player for team value objects
-    pcall(function()
-        local teamVal = player:FindFirstChild("Team")
-        if teamVal and (teamVal:IsA("StringValue") or teamVal:IsA("IntValue")) then
-            team = tostring(teamVal.Value)
-            return
-        end
-        
-        -- Check leaderstats for team
-        local ls = player:FindFirstChild("leaderstats")
-        if ls then
-            local teamStat = ls:FindFirstChild("Team")
-            if teamStat then
-                team = tostring(teamStat.Value)
-                return
-            end
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 6: Detect team by spawn location or character shirt/pants color
-    pcall(function()
-        local char = player.Character
-        if char then
-            local shirt = char:FindFirstChildOfClass("Shirt")
-            local bodyColors = char:FindFirstChildOfClass("BodyColors")
-            if bodyColors then
-                -- Use torso color as team identifier
-                team = tostring(bodyColors.TorsoColor)
-            end
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 7: Search ReplicatedStorage for team data
-    pcall(function()
-        local repStorage = game:GetService("ReplicatedStorage")
-        
-        -- Look for a teams module or folder
-        local teamsFolder = repStorage:FindFirstChild("Teams")
-            or repStorage:FindFirstChild("TeamData")
-            or repStorage:FindFirstChild("GameData")
-        
-        if teamsFolder then
-            for _, child in ipairs(teamsFolder:GetChildren()) do
-                if child:IsA("Folder") or child:IsA("Configuration") then
-                    -- Check if player is listed in this team
-                    for _, member in ipairs(child:GetChildren()) do
-                        if member:IsA("ObjectValue") and member.Value == player then
-                            team = child.Name
-                            return
-                        end
-                        if member:IsA("StringValue") and member.Value == player.Name then
-                            team = child.Name
-                            return
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    if team ~= nil then return team end
-    
-    -- Method 8: Check workspace for team-based character folders
-    pcall(function()
-        local char = player.Character
-        if char and char.Parent then
-            local parentName = char.Parent.Name
-            -- In some CS clones, characters are in folders like "CT" / "T" or "Team1" / "Team2"
-            if parentName ~= "Workspace" and parentName ~= workspace.Name then
-                team = parentName
-            end
-        end
-    end)
-    if team ~= nil then return team end
-    
-    return nil
-end
-
--- Check if two players are on the same team
-local function AreTeammates(player1, player2)
-    if not player1 or not player2 then return false end
-    
-    local team1 = GetBSXTeam(player1)
-    local team2 = GetBSXTeam(player2)
-    
-    -- If we can't determine either team, assume not teammates (safe default)
-    if team1 == nil or team2 == nil then return false end
-    
-    return team1 == team2
-end
-
--- Debug function to print team info (call once to diagnose)
-local function DebugTeams()
-    warn("=== BSX TEAM DEBUG ===")
-    
-    -- Check Teams service
-    local teamsService = game:GetService("Teams")
-    local teams = teamsService:GetTeams()
-    warn("Roblox Teams service has " .. #teams .. " teams:")
-    for _, t in ipairs(teams) do
-        warn("  Team: " .. t.Name .. " | Color: " .. tostring(t.TeamColor))
-    end
-    
-    -- Check each player
-    for _, player in ipairs(Players:GetPlayers()) do
-        local teamInfo = {}
-        
-        -- Standard Team
-        pcall(function()
-            table.insert(teamInfo, "Team=" .. tostring(player.Team and player.Team.Name or "nil"))
-        end)
-        
-        -- TeamColor
-        pcall(function()
-            table.insert(teamInfo, "TeamColor=" .. tostring(player.TeamColor))
-        end)
-        
-        -- Attributes
-        pcall(function()
-            local attrs = player:GetAttributes()
-            for k, v in pairs(attrs) do
-                table.insert(teamInfo, "Attr:" .. k .. "=" .. tostring(v))
-            end
-        end)
-        
-        -- Character parent
-        pcall(function()
-            if player.Character then
-                table.insert(teamInfo, "CharParent=" .. player.Character.Parent.Name)
-                
-                -- Character attributes
-                local attrs = player.Character:GetAttributes()
-                for k, v in pairs(attrs) do
-                    table.insert(teamInfo, "CharAttr:" .. k .. "=" .. tostring(v))
-                end
-                
-                -- Children that might be team-related
-                for _, child in ipairs(player.Character:GetChildren()) do
-                    if child:IsA("StringValue") or child:IsA("IntValue") or child:IsA("BoolValue") then
-                        table.insert(teamInfo, "CharVal:" .. child.Name .. "=" .. tostring(child.Value))
-                    end
-                end
-            end
-        end)
-        
-        -- Player value children
-        pcall(function()
-            for _, child in ipairs(player:GetChildren()) do
-                if child:IsA("StringValue") or child:IsA("IntValue") then
-                    table.insert(teamInfo, "PlayerVal:" .. child.Name .. "=" .. tostring(child.Value))
-                end
-            end
-        end)
-        
-        local bsxTeam = GetBSXTeam(player)
-        table.insert(teamInfo, "DETECTED=" .. tostring(bsxTeam))
-        
-        warn(player.Name .. ": " .. table.concat(teamInfo, " | "))
-    end
-    
-    -- Check ReplicatedStorage for team data
-    pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        warn("ReplicatedStorage children:")
-        for _, child in ipairs(rs:GetChildren()) do
-            if child.Name:lower():find("team") or child.Name:lower():find("game") 
-               or child.Name:lower():find("data") or child.Name:lower():find("round") then
-                warn("  " .. child.ClassName .. ": " .. child.Name)
-            end
-        end
-    end)
-    
-    warn("=== END DEBUG ===")
-end
-
--- Run debug once on load
-task.spawn(function()
-    task.wait(3)
-    DebugTeams()
-end)
-
--- ============================================
--- VARIABLES
--- ============================================
+local ESP_Table = {}
 local LockedPlayer = nil
 local RandomPart = "Head"
 local LastRandomSwitch = 0
-local BSXESPObjects = {}
-local LastESPUpdate = 0
-
--- Position history for velocity calculation (more accurate than AssemblyLinearVelocity)
 local PositionHistory = {}
 local HISTORY_SAMPLES = 5
 
+-- Para Silent Aim
+local OriginalPerformRaycast = nil
+local BulletModuleLoaded = false
+
+-- Para registrar disparos propios
+if not _G.LocalShots then
+    _G.LocalShots = {}
+end
+
 -- ============================================
--- VELOCITY TRACKING
--- More accurate than AssemblyLinearVelocity for characters
+-- LÍMITES DE PENETRACIÓN POR MATERIAL (WALLBANG)
+-- ============================================
+local MaterialLimits = {
+    [Enum.Material.Plastic] = 7,
+    [Enum.Material.Wood] = 5,
+    [Enum.Material.WoodPlanks] = 5,
+    [Enum.Material.Slate] = 3,
+    [Enum.Material.Concrete] = 0.25,
+    [Enum.Material.Brick] = 1.5,
+    [Enum.Material.Metal] = 0.5,
+    [Enum.Material.CorrodedMetal] = 1,
+    [Enum.Material.DiamondPlate] = 0.3,
+    [Enum.Material.SmoothPlastic] = 7,
+    [Enum.Material.Glass] = 9999,
+    [Enum.Material.Neon] = 9999,
+    [Enum.Material.ForceField] = 9999,
+    [Enum.Material.Fabric] = 8,
+    [Enum.Material.Sand] = 4,
+    [Enum.Material.Grass] = 6,
+    [Enum.Material.Ice] = 3,
+    [Enum.Material.Marble] = 1,
+    [Enum.Material.Granite] = 0.5,
+    [Enum.Material.Pebble] = 4,
+    [Enum.Material.Cobblestone] = 2,
+}
+
+-- ============================================
+-- DETECCIÓN DE EQUIPOS (MÉTODO REAL DE BLOXSTRIKE)
+-- BloxStrike usa carpetas en workspace para separar equipos
+-- Los personajes están dentro de carpetas como "CT", "T", 
+-- "Terrorists", "CounterTerrorists", etc.
+-- ============================================
+local function isEnemy(player)
+    -- Si TeamCheck está desactivado, todos son enemigos
+    local useTeamCheck = false
+    
+    if Config.Aimbot and Config.Aimbot.TeamCheck then
+        useTeamCheck = true
+    end
+    if Config.ESP and Config.ESP.TeamCheck then
+        useTeamCheck = true
+    end
+    
+    if not useTeamCheck then
+        return true
+    end
+    
+    local myChar = LocalPlayer.Character
+    local theirChar = player.Character
+    
+    if not myChar or not theirChar then return true end
+    
+    -- Método principal: comparar carpeta padre en workspace
+    local myParent = myChar.Parent
+    local theirParent = theirChar.Parent
+    
+    if myParent and theirParent then
+        local myParentName = myParent.Name
+        local theirParentName = theirParent.Name
+        
+        -- Si ambos están en la misma carpeta, son compañeros
+        if myParentName == theirParentName then
+            return false -- Mismo equipo, NO es enemigo
+        end
+        
+        -- Si están en carpetas diferentes (y no es workspace directo)
+        if myParentName ~= "Workspace" and theirParentName ~= "Workspace" 
+           and myParentName ~= workspace.Name and theirParentName ~= workspace.Name then
+            return true -- Diferente equipo, SÍ es enemigo
+        end
+    end
+    
+    -- Fallback: atributo Team en el jugador
+    local myTeam, theirTeam
+    pcall(function() myTeam = LocalPlayer:GetAttribute("Team") end)
+    pcall(function() theirTeam = player:GetAttribute("Team") end)
+    
+    if myTeam and theirTeam then
+        return tostring(myTeam) ~= tostring(theirTeam)
+    end
+    
+    -- Fallback: equipo de Roblox nativo
+    pcall(function()
+        if LocalPlayer.Team and player.Team then
+            if LocalPlayer.Team == player.Team then
+                return false
+            end
+        end
+    end)
+    
+    -- Si no podemos determinar, asumir enemigo
+    return true
+end
+
+-- ============================================
+-- VALIDACIÓN DE JUGADOR
+-- ============================================
+local function isValidTarget(player)
+    if not player or player == LocalPlayer then return false end
+    
+    local character = player.Character
+    if not character then return false end
+    
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChild("Humanoid")
+    local head = character:FindFirstChild("Head")
+    
+    if not root or not humanoid or not head then return false end
+    if humanoid.Health <= 0 then return false end
+    if not isEnemy(player) then return false end
+    
+    return true
+end
+
+-- ============================================
+-- TRACKING DE VELOCIDAD (más preciso que AssemblyLinearVelocity)
 -- ============================================
 local function UpdatePositionHistory(player, position)
     if not PositionHistory[player] then
@@ -293,7 +190,6 @@ local function UpdatePositionHistory(player, position)
     local history = PositionHistory[player]
     table.insert(history, {pos = position, time = tick()})
     
-    -- Keep only recent samples
     while #history > HISTORY_SAMPLES do
         table.remove(history, 1)
     end
@@ -302,7 +198,7 @@ end
 local function GetSmoothedVelocity(player)
     local history = PositionHistory[player]
     if not history or #history < 2 then
-        return Vector3.new(0, 0, 0)
+        return Vector3.zero
     end
     
     local newest = history[#history]
@@ -310,116 +206,39 @@ local function GetSmoothedVelocity(player)
     local dt = newest.time - oldest.time
     
     if dt <= 0.001 then
-        return Vector3.new(0, 0, 0)
+        return Vector3.zero
     end
     
     return (newest.pos - oldest.pos) / dt
 end
 
 -- ============================================
--- GET VALID ENEMIES
--- Now with proper team check support
+-- VERIFICACIÓN DE VISIBILIDAD (MULTI-RAYCAST)
 -- ============================================
-local function GetEnemies()
-    local enemies = {}
-    local useTeamCheck = Config.Aimbot.TeamCheck or Config.ESP.TeamCheck
+local function CanSee(targetPart, targetCharacter)
+    if not targetPart or not targetCharacter then return false end
     
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        
-        local char = player.Character
-        if not char then continue end
-        
-        local humanoid = char:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
-        
-        local head = char:FindFirstChild("Head")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-            or char:FindFirstChild("Torso")
-            or char:FindFirstChild("UpperTorso")
-        
-        if not head and not hrp then continue end
-        
-        -- Check teammate status
-        local isTeammate = false
-        if useTeamCheck then
-            isTeammate = AreTeammates(LocalPlayer, player)
-        end
-        
-        table.insert(enemies, {
-            Player = player,
-            Character = char,
-            Head = head,
-            Root = hrp or head,
-            Humanoid = humanoid,
-            IsTeammate = isTeammate
-        })
-    end
-    
-    return enemies
-end
-
--- ============================================
--- GET AIM PART
--- ============================================
-local function GetAimPart(char)
-    if not char then return nil end
-    local s = Config.Aimbot.TargetPart
-    
-    if s == "Random" then
-        local t = tick()
-        if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
-            local o = {}
-            for _, n in ipairs({"Head", "HumanoidRootPart", "Torso", "UpperTorso"}) do
-                local p = char:FindFirstChild(n)
-                if p and p:IsA("BasePart") then table.insert(o, n) end
-            end
-            if #o > 0 then RandomPart = o[math.random(#o)] end
-            LastRandomSwitch = t
-        end
-        local p = char:FindFirstChild(RandomPart)
-        if p and p:IsA("BasePart") then return p end
-    end
-    
-    if s == "Head" then
-        return char:FindFirstChild("Head")
-    end
-    
-    local p = char:FindFirstChild(s)
-    if p and p:IsA("BasePart") then return p end
-    
-    return char:FindFirstChild("Head")
-        or char:FindFirstChild("HumanoidRootPart")
-end
-
--- ============================================
--- VISIBILITY CHECK (IMPROVED)
--- Multiple raycasts for better accuracy
--- ============================================
-local function CanSee(part, targetChar)
-    if not part then return false end
     local myChar = LocalPlayer.Character
-    if not myChar then return true end
-    local cam = Workspace.CurrentCamera
-    if not cam then return true end
+    if not myChar then return false end
+    
+    local origin = Camera.CFrame.Position
+    local targetPos = targetPart.Position
+    local direction = targetPos - origin
+    local distance = direction.Magnitude
+    
+    if distance < 3 then return true end
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {myChar, cam}
+    params.FilterDescendantsInstances = {myChar, Camera}
     params.IgnoreWater = true
     
-    local origin = cam.CFrame.Position
-    local targetPos = part.Position
-    local dir = targetPos - origin
-    local dist = dir.Magnitude
-    if dist < 3 then return true end
-    
-    -- Primary raycast to center of part
-    local result = Workspace:Raycast(origin, dir.Unit * (dist - 0.3), params)
+    -- Raycast principal al centro
+    local result = Workspace:Raycast(origin, direction.Unit * (distance - 0.3), params)
     if not result then return true end
-    if result.Instance and result.Instance:IsDescendantOf(targetChar) then return true end
+    if result.Instance and result.Instance:IsDescendantOf(targetCharacter) then return true end
     
-    -- Secondary raycasts to edges of part (for partial visibility)
+    -- Raycasts secundarios a los bordes para visibilidad parcial
     local offsets = {
         Vector3.new(0, 0.3, 0),
         Vector3.new(0, -0.3, 0),
@@ -432,76 +251,489 @@ local function CanSee(part, targetChar)
         local offsetDir = offsetPos - origin
         local offsetResult = Workspace:Raycast(origin, offsetDir.Unit * (offsetDir.Magnitude - 0.3), params)
         if not offsetResult then return true end
-        if offsetResult.Instance and offsetResult.Instance:IsDescendantOf(targetChar) then return true end
+        if offsetResult.Instance and offsetResult.Instance:IsDescendantOf(targetCharacter) then return true end
     end
     
     return false
 end
 
 -- ============================================
--- FIND AIMBOT TARGET (IMPROVED)
--- With proper team check and better targeting
+-- SISTEMA DE WALLBANG
+-- Verifica si un disparo puede penetrar paredes
 -- ============================================
-local function FindAimTarget()
+local function GetPenetrationStats(origin, targetPos, weaponPenetration)
+    local direction = (targetPos - origin)
+    local distance = direction.Magnitude
+    local dirUnit = direction.Unit
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    params.IgnoreWater = true
+    
+    local totalThickness = 0
+    local hits = {}
+    local currentOrigin = origin
+    local maxIterations = 10
+    
+    for i = 1, maxIterations do
+        local result = Workspace:Raycast(currentOrigin, dirUnit * distance, params)
+        
+        if not result then
+            break -- Llegamos al objetivo sin más obstáculos
+        end
+        
+        -- Si impactamos al personaje objetivo, éxito
+        -- (esto se verifica fuera de esta función)
+        
+        local material = result.Material
+        local materialLimit = MaterialLimits[material] or 1
+        
+        -- Raycast inverso para encontrar el lado de salida
+        local reverseResult = Workspace:Raycast(targetPos, -dirUnit * distance, params)
+        
+        local wallThickness = 1 -- Default
+        if reverseResult then
+            wallThickness = (result.Position - reverseResult.Position).Magnitude
+        end
+        
+        totalThickness = totalThickness + wallThickness
+        
+        if totalThickness > weaponPenetration then
+            return false, hits, totalThickness -- Demasiado grueso
+        end
+        
+        table.insert(hits, {
+            Instance = result.Instance,
+            Position = result.Position,
+            Material = result.Material,
+            Normal = result.Normal,
+            Thickness = wallThickness
+        })
+        
+        -- Avanzar más allá del obstáculo
+        currentOrigin = result.Position + dirUnit * (wallThickness + 0.1)
+        distance = (targetPos - currentOrigin).Magnitude
+        
+        if distance < 0.5 then break end
+    end
+    
+    return true, hits, totalThickness
+end
+
+local function IsHitPossible(targetCharacter, origin, weaponPenetration, targetPos)
+    local canPenetrate, hits, thickness = GetPenetrationStats(origin, targetPos, weaponPenetration)
+    return canPenetrate
+end
+
+-- ============================================
+-- OBTENER PARTE DE APUNTADO
+-- ============================================
+local function GetAimPart(character, boneOverride)
+    if not character then return nil end
+    
+    local boneName = boneOverride or (Config.Aimbot and Config.Aimbot.TargetPart) or "Head"
+    
+    if boneName == "Random" then
+        local t = tick()
+        if t - LastRandomSwitch > (Config.Aimbot.RandomInterval or 0.5) then
+            local options = {}
+            for _, name in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso", "LeftUpperArm", "RightUpperArm"}) do
+                local part = character:FindFirstChild(name)
+                if part and part:IsA("BasePart") then
+                    table.insert(options, name)
+                end
+            end
+            if #options > 0 then
+                RandomPart = options[math.random(#options)]
+            end
+            LastRandomSwitch = t
+        end
+        boneName = RandomPart
+    end
+    
+    local part = character:FindFirstChild(boneName)
+    if part and part:IsA("BasePart") then return part end
+    
+    -- Fallbacks
+    return character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+end
+
+-- ============================================
+-- OBTENER NOMBRE DEL ARMA EQUIPADA
+-- ============================================
+local function GetWeaponName(player)
+    local weaponName = "Unknown"
+    pcall(function()
+        local attr = player:GetAttribute("CurrentEquipped")
+        if attr then
+            local s, decoded = pcall(function()
+                return HttpService:JSONDecode(attr)
+            end)
+            if s and decoded and decoded.Name then
+                weaponName = decoded.Name
+            end
+        end
+    end)
+    return weaponName
+end
+
+-- ============================================
+-- OBTENER PENETRACIÓN DEL ARMA ACTUAL
+-- ============================================
+local function GetCurrentWeaponPenetration()
+    local pen = 2 -- Default
+    pcall(function()
+        local attr = LocalPlayer:GetAttribute("CurrentEquipped")
+        if attr then
+            local s, decoded = pcall(function()
+                return HttpService:JSONDecode(attr)
+            end)
+            if s and decoded then
+                pen = decoded.Penetration or decoded.WallPen or 2
+            end
+        end
+    end)
+    return pen
+end
+
+-- ============================================
+-- ESP - CREAR OBJETOS DE DIBUJO
+-- ============================================
+local function CreateESP(player)
+    if ESP_Table[player] then return end
+    
+    local data = {}
+    
+    -- Caja exterior (outline)
+    data.BoxOutline = Drawing.new("Square")
+    data.BoxOutline.Thickness = 3
+    data.BoxOutline.Filled = false
+    data.BoxOutline.Color = Color3.fromRGB(0, 0, 0)
+    data.BoxOutline.Transparency = 0.5
+    data.BoxOutline.Visible = false
+    
+    -- Caja principal
+    data.Box = Drawing.new("Square")
+    data.Box.Thickness = 1
+    data.Box.Filled = false
+    data.Box.Color = Color3.fromRGB(255, 50, 50)
+    data.Box.Visible = false
+    
+    -- Nombre
+    data.Name = Drawing.new("Text")
+    data.Name.Size = 13
+    data.Name.Center = true
+    data.Name.Outline = true
+    data.Name.Color = Color3.fromRGB(255, 255, 255)
+    data.Name.Visible = false
+    
+    -- Barra de vida outline
+    data.HealthBarOutline = Drawing.new("Square")
+    data.HealthBarOutline.Thickness = 1
+    data.HealthBarOutline.Filled = true
+    data.HealthBarOutline.Color = Color3.fromRGB(0, 0, 0)
+    data.HealthBarOutline.Transparency = 0.5
+    data.HealthBarOutline.Visible = false
+    
+    -- Barra de vida
+    data.HealthBar = Drawing.new("Square")
+    data.HealthBar.Thickness = 1
+    data.HealthBar.Filled = true
+    data.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    data.HealthBar.Visible = false
+    
+    -- Distancia
+    data.DistanceText = Drawing.new("Text")
+    data.DistanceText.Size = 13
+    data.DistanceText.Center = true
+    data.DistanceText.Outline = true
+    data.DistanceText.Color = Color3.fromRGB(200, 200, 200)
+    data.DistanceText.Visible = false
+    
+    -- Tracer (línea hacia el enemigo)
+    data.Tracer = Drawing.new("Line")
+    data.Tracer.Thickness = 1
+    data.Tracer.Color = Color3.fromRGB(255, 255, 255)
+    data.Tracer.Visible = false
+    
+    -- Head dot (círculo en la cabeza)
+    data.HeadDot = Drawing.new("Circle")
+    data.HeadDot.Thickness = 1
+    data.HeadDot.Filled = true
+    data.HeadDot.Color = Color3.fromRGB(255, 255, 255)
+    data.HeadDot.Visible = false
+    
+    -- Arma equipada
+    data.Weapon = Drawing.new("Text")
+    data.Weapon.Size = 12
+    data.Weapon.Center = true
+    data.Weapon.Outline = true
+    data.Weapon.Color = Color3.fromRGB(180, 180, 255)
+    data.Weapon.Visible = false
+    
+    ESP_Table[player] = data
+end
+
+local function RemoveESP(player)
+    local data = ESP_Table[player]
+    if not data then return end
+    
+    for _, drawing in pairs(data) do
+        pcall(function() drawing:Remove() end)
+    end
+    
+    ESP_Table[player] = nil
+end
+
+local function HideESP(player)
+    local data = ESP_Table[player]
+    if not data then return end
+    
+    for _, drawing in pairs(data) do
+        pcall(function() drawing.Visible = false end)
+    end
+end
+
+-- ============================================
+-- ESP - ACTUALIZAR CADA FRAME
+-- ============================================
+local function UpdateESP()
+    if not Config.ESP or not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(ESP_Table) do
+            HideESP(p)
+        end
+        return
+    end
+    
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    
+    local currentFov = cam.FieldOfView or 70
+    local viewportSize = cam.ViewportSize
+    local activePlayers = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        activePlayers[player] = true
+        
+        -- Crear ESP si no existe
+        if not ESP_Table[player] then
+            CreateESP(player)
+        end
+        
+        local data = ESP_Table[player]
+        if not data then continue end
+        
+        -- Verificar si es objetivo válido
+        if not isValidTarget(player) then
+            HideESP(player)
+            continue
+        end
+        
+        -- Verificar TeamCheck específico de ESP
+        if Config.ESP.TeamCheck and not isEnemy(player) then
+            HideESP(player)
+            continue
+        end
+        
+        local character = player.Character
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local head = character:FindFirstChild("Head")
+        local humanoid = character:FindFirstChild("Humanoid")
+        
+        if not root or not head or not humanoid then
+            HideESP(player)
+            continue
+        end
+        
+        -- Proyectar posición 3D a pantalla 2D
+        local pos, vis = cam:WorldToViewportPoint(root.Position)
+        
+        if not vis or pos.Z <= 0 then
+            HideESP(player)
+            continue
+        end
+        
+        -- Calcular tamaño de la caja basado en distancia
+        local fovScale = 70 / currentFov
+        local size = math.max((2000 * fovScale) / math.max(pos.Z, 1), 10)
+        local boxWidth = size
+        local boxHeight = size * 1.5
+        
+        -- Posición centrada de la caja
+        local boxX = pos.X - boxWidth / 2
+        local boxY = pos.Y - boxHeight / 2
+        
+        -- Color según visibilidad
+        local isVisible = CanSee(head, character)
+        local espColor = isVisible 
+            and Color3.fromRGB(50, 255, 50)  -- Verde = visible
+            or Color3.fromRGB(255, 50, 50)   -- Rojo = detrás de pared
+        
+        -- === DIBUJAR CAJA ===
+        if Config.ESP.Boxes then
+            data.BoxOutline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
+            data.BoxOutline.Position = Vector2.new(boxX - 1, boxY - 1)
+            data.BoxOutline.Visible = true
+            
+            data.Box.Size = Vector2.new(boxWidth, boxHeight)
+            data.Box.Position = Vector2.new(boxX, boxY)
+            data.Box.Color = espColor
+            data.Box.Visible = true
+        else
+            data.Box.Visible = false
+            data.BoxOutline.Visible = false
+        end
+        
+        -- === DIBUJAR NOMBRE ===
+        if Config.ESP.Names then
+            data.Name.Text = player.DisplayName or player.Name
+            data.Name.Position = Vector2.new(pos.X, boxY - 16)
+            data.Name.Visible = true
+        else
+            data.Name.Visible = false
+        end
+        
+        -- === DIBUJAR BARRA DE VIDA ===
+        if Config.ESP.Boxes and humanoid then
+            local healthPer = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+            local barFullHeight = boxHeight
+            local barHeight = barFullHeight * healthPer
+            
+            -- Color: rojo -> verde según vida
+            local healthColor = Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(0, 255, 0), healthPer)
+            
+            -- Fondo de la barra (a la izquierda de la caja)
+            data.HealthBarOutline.Size = Vector2.new(4, barFullHeight)
+            data.HealthBarOutline.Position = Vector2.new(boxX - 7, boxY)
+            data.HealthBarOutline.Visible = true
+            
+            -- Barra de vida (crece de abajo hacia arriba)
+            data.HealthBar.Size = Vector2.new(2, barHeight)
+            data.HealthBar.Position = Vector2.new(boxX - 6, boxY + (barFullHeight - barHeight))
+            data.HealthBar.Color = healthColor
+            data.HealthBar.Visible = true
+        else
+            data.HealthBarOutline.Visible = false
+            data.HealthBar.Visible = false
+        end
+        
+        -- === DIBUJAR DISTANCIA ===
+        if Config.ESP.Distance then
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myRoot then
+                local dist = math.floor((myRoot.Position - root.Position).Magnitude)
+                data.DistanceText.Text = dist .. "m"
+                data.DistanceText.Position = Vector2.new(pos.X, boxY + boxHeight + 2)
+                data.DistanceText.Visible = true
+            else
+                data.DistanceText.Visible = false
+            end
+        else
+            data.DistanceText.Visible = false
+        end
+        
+        -- === DIBUJAR TRACER ===
+        if Config.ESP.Tracers then
+            data.Tracer.From = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+            data.Tracer.To = Vector2.new(pos.X, pos.Y)
+            data.Tracer.Color = espColor
+            data.Tracer.Visible = true
+        else
+            data.Tracer.Visible = false
+        end
+        
+        -- === DIBUJAR HEAD DOT ===
+        if Config.ESP.HeadDot then
+            local headPos = cam:WorldToViewportPoint(head.Position)
+            data.HeadDot.Position = Vector2.new(headPos.X, headPos.Y)
+            data.HeadDot.Radius = math.max(size / 8, 3)
+            data.HeadDot.Color = espColor
+            data.HeadDot.Visible = true
+        else
+            data.HeadDot.Visible = false
+        end
+        
+        -- === DIBUJAR ARMA ===
+        if Config.ESP.Weapon then
+            local weaponName = GetWeaponName(player)
+            data.Weapon.Text = weaponName
+            data.Weapon.Position = Vector2.new(pos.X, boxY + boxHeight + 16)
+            data.Weapon.Visible = true
+        else
+            data.Weapon.Visible = false
+        end
+    end
+    
+    -- Ocultar ESP de jugadores que ya no están activos
+    for player in pairs(ESP_Table) do
+        if not activePlayers[player] then
+            HideESP(player)
+        end
+    end
+end
+
+-- ============================================
+-- LEGIT AIMBOT - MOVER RATÓN SUAVEMENTE
+-- Con jitter humano y suavizado dinámico
+-- ============================================
+local function FindLegitTarget()
     local cam = Workspace.CurrentCamera
     if not cam then return nil, nil end
     
     local mousePos = UserInputService:GetMouseLocation()
-    local vp = cam.ViewportSize
-    local center = Vector2.new(vp.X / 2, vp.Y / 2)
-    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
-    local fov = Config.Aimbot.FOVRadius or 150
+    local fov = (Config.Aimbot and Config.Aimbot.FOVRadius) or 150
     
-    -- Aimlock: keep locked target
+    -- Aimlock: mantener objetivo bloqueado
     if Config.Aimbot.Method == "Aimlock" and LockedPlayer then
-        local char = LockedPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                -- Re-check team status if TeamCheck is enabled
-                if Config.Aimbot.TeamCheck and AreTeammates(LocalPlayer, LockedPlayer) then
-                    LockedPlayer = nil
-                else
-                    local aimPart = GetAimPart(char)
-                    if aimPart then
-                        if not Config.Aimbot.VisibleCheck or CanSee(aimPart, char) then
-                            local sp, on = cam:WorldToViewportPoint(aimPart.Position)
-                            if on then return aimPart, LockedPlayer end
-                        end
+        if isValidTarget(LockedPlayer) then
+            if Config.Aimbot.TeamCheck and not isEnemy(LockedPlayer) then
+                LockedPlayer = nil
+            else
+                local aimPart = GetAimPart(LockedPlayer.Character)
+                if aimPart then
+                    if not Config.Aimbot.VisibleCheck or CanSee(aimPart, LockedPlayer.Character) then
+                        local sp, on = cam:WorldToViewportPoint(aimPart.Position)
+                        if on then return aimPart, LockedPlayer end
                     end
                 end
-            else
-                LockedPlayer = nil
             end
         else
             LockedPlayer = nil
         end
     end
     
-    local enemies = GetEnemies()
     local bestPart, bestDist, bestPlayer = nil, fov, nil
     
-    for _, data in ipairs(enemies) do
-        -- Skip teammates when TeamCheck is enabled
-        if Config.Aimbot.TeamCheck and data.IsTeammate then
-            continue
-        end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not isValidTarget(player) then continue end
+        if Config.Aimbot.TeamCheck and not isEnemy(player) then continue end
         
-        local aimPart = GetAimPart(data.Character)
+        local character = player.Character
+        local boneName = (Config.Aimbot and Config.Aimbot.LegitBone) or "Head"
+        local aimPart = GetAimPart(character, boneName)
         if not aimPart then continue end
         
-        if Config.Aimbot.VisibleCheck and not CanSee(aimPart, data.Character) then
+        if Config.Aimbot.VisibleCheck and not CanSee(aimPart, character) then
             continue
         end
         
         local sp, on = cam:WorldToViewportPoint(aimPart.Position)
         if not on then continue end
         
-        local d = (ref - Vector2.new(sp.X, sp.Y)).Magnitude
-        if d < bestDist then
+        -- Distancia en píxeles desde el cursor al enemigo
+        local mag = (Vector2.new(sp.X, sp.Y) - mousePos).Magnitude
+        
+        if mag < bestDist then
             bestPart = aimPart
-            bestDist = d
-            bestPlayer = data.Player
+            bestDist = mag
+            bestPlayer = player
         end
     end
     
@@ -512,249 +744,18 @@ local function FindAimTarget()
     return bestPart, bestPlayer
 end
 
--- ============================================
--- ESP CREATE / REMOVE / HIDE
--- ============================================
-local function CreateESP(player)
-    if BSXESPObjects[player] then return end
-    
-    local e = {}
-    e.Box = Drawing.new("Square")
-    e.Box.Thickness = 1
-    e.Box.Filled = false
-    e.Box.Color = Color3.fromRGB(255, 50, 50)
-    e.Box.Visible = false
-    
-    e.Outline = Drawing.new("Square")
-    e.Outline.Thickness = 3
-    e.Outline.Filled = false
-    e.Outline.Color = Color3.fromRGB(0, 0, 0)
-    e.Outline.Transparency = 0.5
-    e.Outline.Visible = false
-    
-    e.Name = Drawing.new("Text")
-    e.Name.Size = 13
-    e.Name.Center = true
-    e.Name.Outline = true
-    e.Name.Color = Color3.fromRGB(255, 255, 255)
-    e.Name.Visible = false
-    
-    e.Dist = Drawing.new("Text")
-    e.Dist.Size = 13
-    e.Dist.Center = true
-    e.Dist.Outline = true
-    e.Dist.Color = Color3.fromRGB(200, 200, 200)
-    e.Dist.Visible = false
-    
-    -- Health bar
-    e.HealthBG = Drawing.new("Square")
-    e.HealthBG.Thickness = 1
-    e.HealthBG.Filled = true
-    e.HealthBG.Color = Color3.fromRGB(0, 0, 0)
-    e.HealthBG.Transparency = 0.5
-    e.HealthBG.Visible = false
-    
-    e.HealthBar = Drawing.new("Square")
-    e.HealthBar.Thickness = 1
-    e.HealthBar.Filled = true
-    e.HealthBar.Color = Color3.fromRGB(0, 255, 0)
-    e.HealthBar.Visible = false
-    
-    BSXESPObjects[player] = e
-end
-
-local function RemoveESP(player)
-    local e = BSXESPObjects[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d:Remove() end) end
-    BSXESPObjects[player] = nil
-end
-
-local function HideESP(player)
-    local e = BSXESPObjects[player]
-    if not e then return end
-    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
-end
-
--- ============================================
--- ESP UPDATE (WITH TEAM CHECK)
--- ============================================
-local function UpdateBSXESP()
-    if not Config.ESP.Enabled or not Config.ESP.Active then
-        for p in pairs(BSXESPObjects) do HideESP(p) end
-        return
-    end
-    
-    local now = tick()
-    if now - LastESPUpdate < 0.08 then return end
-    LastESPUpdate = now
-    
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
-    
-    local enemies = GetEnemies()
-    local activePlayers = {}
-    
-    for _, data in ipairs(enemies) do
-        local player = data.Player
-        activePlayers[player] = true
-        
-        -- Skip teammates when TeamCheck is enabled
-        if Config.ESP.TeamCheck and data.IsTeammate then
-            HideESP(player)
-            continue
-        end
-        
-        if not BSXESPObjects[player] then
-            CreateESP(player)
-        end
-        
-        local esp = BSXESPObjects[player]
-        if not esp then continue end
-        
-        local head = data.Head
-        local root = data.Root
-        local humanoid = data.Humanoid
-        
-        if root then
-            local rootPos = root.Position
-            local sp, on = cam:WorldToViewportPoint(rootPos)
-            
-            if on and sp.Z > 0 then
-                local headScreenPos = sp
-                local footScreenPos = sp
-                
-                if head then
-                    local hsp = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                    headScreenPos = hsp
-                end
-                local fsp = cam:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
-                footScreenPos = fsp
-                
-                local height = math.abs(headScreenPos.Y - footScreenPos.Y)
-                if height < 10 then height = 10 end
-                local width = height / 2
-                
-                local minX = sp.X - width / 2
-                local minY = headScreenPos.Y
-                local boxWidth = width
-                local boxHeight = height
-                
-                -- Color: green for visible, red for behind walls
-                local espColor = Color3.fromRGB(255, 50, 50)
-                if head then
-                    local isVisible = CanSee(head, data.Character)
-                    espColor = isVisible and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
-                end
-                
-                -- Boxes
-                if Config.ESP.Boxes then
-                    esp.Outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
-                    esp.Outline.Position = Vector2.new(minX - 1, minY - 1)
-                    esp.Outline.Visible = true
-                    
-                    esp.Box.Size = Vector2.new(boxWidth, boxHeight)
-                    esp.Box.Position = Vector2.new(minX, minY)
-                    esp.Box.Color = espColor
-                    esp.Box.Visible = true
-                else
-                    esp.Box.Visible = false
-                    esp.Outline.Visible = false
-                end
-                
-                -- Name
-                if Config.ESP.Names then
-                    esp.Name.Text = player.DisplayName or player.Name
-                    esp.Name.Position = Vector2.new(minX + boxWidth / 2, minY - 16)
-                    esp.Name.Visible = true
-                else
-                    esp.Name.Visible = false
-                end
-                
-                -- Distance
-                if Config.ESP.Distance then
-                    local myChar = LocalPlayer.Character
-                    local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head"))
-                    if myRoot then
-                        local dist = (myRoot.Position - rootPos).Magnitude
-                        esp.Dist.Text = math.floor(dist) .. "m"
-                        esp.Dist.Position = Vector2.new(minX + boxWidth / 2, minY + boxHeight + 2)
-                        esp.Dist.Visible = true
-                    else
-                        esp.Dist.Visible = false
-                    end
-                else
-                    esp.Dist.Visible = false
-                end
-                
-                -- Health bar (left side of box)
-                if Config.ESP.Boxes and humanoid then
-                    local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
-                    local barHeight = boxHeight * healthPct
-                    
-                    -- Color gradient: green -> yellow -> red
-                    local healthColor
-                    if healthPct > 0.5 then
-                        healthColor = Color3.fromRGB(
-                            math.floor(255 * (1 - healthPct) * 2),
-                            255,
-                            0
-                        )
-                    else
-                        healthColor = Color3.fromRGB(
-                            255,
-                            math.floor(255 * healthPct * 2),
-                            0
-                        )
-                    end
-                    
-                    esp.HealthBG.Size = Vector2.new(3, boxHeight)
-                    esp.HealthBG.Position = Vector2.new(minX - 6, minY)
-                    esp.HealthBG.Visible = true
-                    
-                    esp.HealthBar.Size = Vector2.new(3, barHeight)
-                    esp.HealthBar.Position = Vector2.new(minX - 6, minY + (boxHeight - barHeight))
-                    esp.HealthBar.Color = healthColor
-                    esp.HealthBar.Visible = true
-                else
-                    esp.HealthBG.Visible = false
-                    esp.HealthBar.Visible = false
-                end
-            else
-                HideESP(player)
-            end
-        else
-            HideESP(player)
-        end
-    end
-    
-    -- Hide ESP for players not in enemies list
-    for player in pairs(BSXESPObjects) do
-        if not activePlayers[player] then
-            HideESP(player)
-        end
-    end
-end
-
--- ============================================
--- IMPROVED AIMBOT MOVEMENT
--- Better smoothing, prediction, and accuracy
--- ============================================
-local function PerformAimMovement(targetPart, targetPlayer)
+local function PerformLegitAim(targetPart, targetPlayer)
     local cam = Workspace.CurrentCamera
     if not cam or not targetPart then return end
     
-    local pos = targetPart.Position
+    local targetPos = targetPart.Position
     
-    -- Prediction using custom velocity tracking (more accurate)
+    -- Predicción de movimiento
     if Config.Aimbot.Prediction and Config.Aimbot.Prediction > 0 and targetPlayer then
-        -- Update position history
-        UpdatePositionHistory(targetPlayer, pos)
-        
-        -- Get smoothed velocity
+        UpdatePositionHistory(targetPlayer, targetPos)
         local velocity = GetSmoothedVelocity(targetPlayer)
         
-        -- Also try AssemblyLinearVelocity as fallback
+        -- Fallback a AssemblyLinearVelocity
         if velocity.Magnitude < 0.5 then
             pcall(function()
                 local v = targetPart.AssemblyLinearVelocity
@@ -765,60 +766,43 @@ local function PerformAimMovement(targetPart, targetPlayer)
         end
         
         if velocity.Magnitude > 0.5 then
-            -- Account for distance - further targets need more prediction
-            local myChar = LocalPlayer.Character
-            local myPos = cam.CFrame.Position
-            local dist = (pos - myPos).Magnitude
-            
-            -- Scale prediction with distance
-            local predScale = Config.Aimbot.Prediction * (1 + dist / 500)
-            pos = pos + velocity * predScale
+            targetPos = targetPos + velocity * Config.Aimbot.Prediction
         end
     end
     
-    local targetScreenPos, onScreen = cam:WorldToViewportPoint(pos)
+    local tPos, onScreen = cam:WorldToViewportPoint(targetPos)
     if not onScreen then return end
     
-    local mousePos = UserInputService:GetMouseLocation()
-    local smoothFactor = math.max(Config.Aimbot.Smoothness or 5, 1)
+    local mPos = UserInputService:GetMouseLocation()
     
-    local deltaX = targetScreenPos.X - mousePos.X
-    local deltaY = targetScreenPos.Y - mousePos.Y
-    local distance = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    local targetX = tPos.X - mPos.X
+    local targetY = tPos.Y - mPos.Y
+    local dist = math.sqrt(targetX * targetX + targetY * targetY)
     
-    -- Don't move if already very close (prevents jittering)
-    if distance < 1 then return end
+    -- No mover si ya estamos muy cerca (previene jittering)
+    if dist < 0.5 then return end
     
-    -- Dynamic smoothing: faster when far, more precise when close
-    local dynamicSmooth
-    if distance > 200 then
-        -- Far away: move faster (less smooth)
-        dynamicSmooth = 1 / (smoothFactor * 0.5)
-    elseif distance > 50 then
-        -- Medium range: normal smoothing
-        dynamicSmooth = 1 / smoothFactor
-    elseif distance > 10 then
-        -- Close: more precise
-        dynamicSmooth = 1 / (smoothFactor * 1.2)
-    else
-        -- Very close: snap precisely
-        dynamicSmooth = 1 / (smoothFactor * 0.8)
+    -- Suavizado base
+    local baseSmooth = math.max((Config.Aimbot and Config.Aimbot.Smoothness) or 10, 1)
+    
+    -- Suavizado dinámico: más rápido lejos, más preciso cerca
+    local dynamicFactor = 1
+    if dist > 100 then
+        dynamicFactor = 0.5  -- Más rápido cuando lejos
+    elseif dist < 30 then
+        dynamicFactor = 1.5  -- Más lento cuando cerca (preciso)
     end
     
-    dynamicSmooth = math.clamp(dynamicSmooth, 0.05, 0.95)
+    local finalSmooth = baseSmooth * dynamicFactor
     
-    local moveX = deltaX * dynamicSmooth
-    local moveY = deltaY * dynamicSmooth
+    -- Jitter humano para parecer natural
+    local jitterX = math.random(-10, 10) / 10  -- -1.0 a 1.0
+    local jitterY = math.random(-10, 10) / 10
     
-    -- Ensure minimum movement to avoid getting stuck
-    if math.abs(moveX) < 0.3 and math.abs(deltaX) > 0.5 then
-        moveX = deltaX > 0 and 0.5 or -0.5
-    end
-    if math.abs(moveY) < 0.3 and math.abs(deltaY) > 0.5 then
-        moveY = deltaY > 0 and 0.5 or -0.5
-    end
+    local moveX = (targetX / finalSmooth) + jitterX
+    local moveY = (targetY / finalSmooth) + jitterY
     
-    -- Clamp maximum movement per frame
+    -- Clamp para evitar movimientos extremos
     moveX = math.clamp(moveX, -200, 200)
     moveY = math.clamp(moveY, -200, 200)
     
@@ -828,42 +812,414 @@ local function PerformAimMovement(targetPart, targetPlayer)
 end
 
 -- ============================================
--- MAIN LOOP
+-- SILENT AIM - INTERCEPTAR SISTEMA DE DISPAROS
+-- Esta es la parte más crítica y la que faltaba
 -- ============================================
-RunService.RenderStepped:Connect(function()
-    -- DO NOT force TeamCheck off - let user control it
-    -- The team detection system now handles it properly
+
+-- Función para encontrar el mejor objetivo para silent aim
+local function getClosestSilentTarget()
+    local mouseLocation = UserInputService:GetMouseLocation()
+    local origin = Camera.CFrame.Position
+    local fov = (Config.Aimbot and Config.Aimbot.SilentFOV) or (Config.Aimbot and Config.Aimbot.FOVRadius) or 150
+    local targetMode = (Config.Aimbot and Config.Aimbot.SilentMode) or "Near Crosshair"
     
-    -- AIMBOT
-    if Config.Aimbot.Enabled and Config.Aimbot.Active then
-        local target, targetPlayer = FindAimTarget()
+    local candidates = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not isValidTarget(player) then continue end
+        if Config.Aimbot.TeamCheck and not isEnemy(player) then continue end
         
-        if target and targetPlayer then
-            PerformAimMovement(target, targetPlayer)
-        end
-    else
-        if not Config.Aimbot.Active then LockedPlayer = nil end
+        table.insert(candidates, player)
     end
     
-    -- ESP
-    UpdateBSXESP()
+    if #candidates == 0 then return nil, nil, nil end
+    
+    -- Ordenar según el modo
+    if targetMode == "Highest Damage" then
+        table.sort(candidates, function(a, b)
+            local ha = a.Character and a.Character:FindFirstChild("Humanoid")
+            local hb = b.Character and b.Character:FindFirstChild("Humanoid")
+            local healthA = ha and ha.Health or 999
+            local healthB = hb and hb.Health or 999
+            return healthA < healthB -- Menos vida primero
+        end)
+    else
+        -- Near Crosshair: ordenar por distancia en píxeles
+        table.sort(candidates, function(a, b)
+            local charA = a.Character
+            local charB = b.Character
+            if not charA or not charB then return false end
+            
+            local rootA = charA:FindFirstChild("HumanoidRootPart")
+            local rootB = charB:FindFirstChild("HumanoidRootPart")
+            if not rootA or not rootB then return false end
+            
+            local posA = Camera:WorldToViewportPoint(rootA.Position)
+            local posB = Camera:WorldToViewportPoint(rootB.Position)
+            
+            local distA = (Vector2.new(posA.X, posA.Y) - mouseLocation).Magnitude
+            local distB = (Vector2.new(posB.X, posB.Y) - mouseLocation).Magnitude
+            
+            return distA < distB
+        end)
+    end
+    
+    -- Parámetros de raycast para verificar impacto
+    local hitParams = RaycastParams.new()
+    hitParams.FilterType = Enum.RaycastFilterType.Exclude
+    hitParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    hitParams.IgnoreWater = true
+    
+    local weaponPen = GetCurrentWeaponPenetration()
+    
+    -- Función para verificar si podemos impactar a un objetivo
+    local function checkHitStatus(targetPos, targetCharacter)
+        local dir = targetPos - origin
+        local result = Workspace:Raycast(origin, dir, hitParams)
+        
+        if not result then
+            return 2 -- Camino libre
+        end
+        
+        if result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+            return 2 -- Visible directamente, impacto confirmado
+        end
+        
+        -- Verificar wallbang
+        if Config.Aimbot.WallBang then
+            if IsHitPossible(targetCharacter, origin, weaponPen, targetPos) then
+                return 1 -- Posible con wallbang
+            end
+        end
+        
+        return 0 -- No es posible impactar
+    end
+    
+    -- Buscar el mejor candidato
+    for _, player in ipairs(candidates) do
+        local character = player.Character
+        local boneName = (Config.Aimbot and Config.Aimbot.SilentBone) 
+            or (Config.Aimbot and Config.Aimbot.TargetPart) 
+            or "Head"
+        local targetPart = GetAimPart(character, boneName)
+        if not targetPart then continue end
+        
+        -- Verificar que está dentro del FOV
+        local sp, on = Camera:WorldToViewportPoint(targetPart.Position)
+        if not on then continue end
+        
+        local screenDist = (Vector2.new(sp.X, sp.Y) - mouseLocation).Magnitude
+        if screenDist > fov then continue end
+        
+        -- Verificar si podemos impactar
+        local hitStatus = checkHitStatus(targetPart.Position, character)
+        
+        if hitStatus >= 1 then
+            -- Multipoint: verificar múltiples puntos del cuerpo
+            local bestPoint = targetPart.Position
+            local bestHitStatus = hitStatus
+            
+            if Config.Aimbot.Multipoint then
+                local partsToCheck = {"Head", "HumanoidRootPart", "UpperTorso", "Torso"}
+                for _, partName in ipairs(partsToCheck) do
+                    local part = character:FindFirstChild(partName)
+                    if part then
+                        local status = checkHitStatus(part.Position, character)
+                        if status > bestHitStatus then
+                            bestHitStatus = status
+                            bestPoint = part.Position
+                            targetPart = part
+                        end
+                    end
+                end
+            end
+            
+            return targetPart, bestPoint, player
+        end
+        
+        -- Si VisibleCheck está activado y no es visible, saltar
+        if Config.Aimbot.VisibleCheck and hitStatus == 0 then
+            continue
+        end
+    end
+    
+    return nil, nil, nil
+end
+
+-- Interceptar el módulo de balas del juego
+local function SetupSilentAim()
+    local success, bullet_module = pcall(function()
+        return require(game.ReplicatedStorage.Components.Weapon.Classes.Bullet)
+    end)
+    
+    if not success or not bullet_module then
+        warn("[BSX] No se pudo cargar el módulo de balas. Intentando ruta alternativa...")
+        
+        -- Intentar rutas alternativas
+        local alternativePaths = {
+            game.ReplicatedStorage:FindFirstChild("Components"),
+            game.ReplicatedStorage:FindFirstChild("Modules"),
+            game.ReplicatedStorage:FindFirstChild("Shared"),
+        }
+        
+        for _, path in ipairs(alternativePaths) do
+            if path then
+                pcall(function()
+                    for _, descendant in ipairs(path:GetDescendants()) do
+                        if descendant:IsA("ModuleScript") and 
+                           (descendant.Name:lower():find("bullet") or descendant.Name:lower():find("weapon")) then
+                            bullet_module = require(descendant)
+                            if bullet_module and bullet_module._performRaycast then
+                                success = true
+                            end
+                        end
+                    end
+                end)
+            end
+            if success then break end
+        end
+    end
+    
+    if not success or not bullet_module then
+        warn("[BSX] No se pudo interceptar el sistema de disparos. Silent Aim no disponible.")
+        return false
+    end
+    
+    if not bullet_module._performRaycast then
+        warn("[BSX] Módulo encontrado pero sin _performRaycast. Silent Aim no disponible.")
+        return false
+    end
+    
+    -- Guardar la función original
+    OriginalPerformRaycast = bullet_module._performRaycast
+    
+    -- Reemplazar con nuestra versión
+    bullet_module._performRaycast = function(self, spreadAmount, ...)
+        -- Si Silent Aim está desactivado, usar función original
+        if not Config.Aimbot or not Config.Aimbot.SilentAim then
+            return OriginalPerformRaycast(self, spreadAmount, ...)
+        end
+        
+        -- Buscar objetivo
+        local targetPart, targetPoint, targetPlayer = getClosestSilentTarget()
+        
+        if not targetPart or not targetPoint then
+            -- Sin objetivo, disparo normal
+            return OriginalPerformRaycast(self, spreadAmount, ...)
+        end
+        
+        -- Obtener posición de origen del disparo
+        local startPos = Camera.CFrame.Position
+        pcall(function()
+            if self and self.Origin then
+                startPos = self.Origin
+            end
+        end)
+        
+        local targetPos = targetPoint or targetPart.Position
+        
+        -- Guardar CFrame original de la cámara
+        local originalCamCFrame = Camera.CFrame
+        
+        -- Rotar temporalmente la cámara hacia el objetivo
+        -- Necesario para que el juego calcule la dirección correcta
+        Camera.CFrame = CFrame.new(startPos, targetPos)
+        
+        local direction = (targetPos - startPos).Unit
+        
+        -- Verificar si necesitamos wallbang hits
+        local wbHits = {}
+        if Config.Aimbot.WallBang then
+            local canPen, hits = GetPenetrationStats(startPos, targetPos, GetCurrentWeaponPenetration())
+            if canPen and hits then
+                wbHits = hits
+            end
+        end
+        
+        -- Construir resultado falso de raycast
+        local fakeResult = {
+            Hits = wbHits,
+            Ray = Ray.new(startPos, direction),
+            Instance = targetPart,
+            Position = targetPos,
+            Material = targetPart.Material,
+            Normal = Vector3.new(0, 1, 0),
+            Distance = (targetPos - startPos).Magnitude,
+            Direction = direction,
+            Origin = startPos
+        }
+        
+        -- Restaurar la cámara a su posición real
+        Camera.CFrame = originalCamCFrame
+        
+        -- Registrar el disparo para otros sistemas
+        table.insert(_G.LocalShots, {
+            Position = targetPos,
+            Time = tick()
+        })
+        
+        -- Limpiar disparos viejos (más de 5 segundos)
+        local currentTime = tick()
+        local i = 1
+        while i <= #_G.LocalShots do
+            if currentTime - _G.LocalShots[i].Time > 5 then
+                table.remove(_G.LocalShots, i)
+            else
+                i = i + 1
+            end
+        end
+        
+        -- Monitorear si el daño fue aplicado
+        task.spawn(function()
+            local targetHumanoid = targetPart.Parent and targetPart.Parent:FindFirstChild("Humanoid")
+            if targetHumanoid then
+                local initialHealth = targetHumanoid.Health
+                local damageDetected = false
+                local connectionHC
+                
+                connectionHC = targetHumanoid.HealthChanged:Connect(function(newHp)
+                    if newHp < initialHealth then
+                        local diff = initialHealth - newHp
+                        damageDetected = true
+                        
+                        -- Log de daño
+                        local isHeadshot = targetPart.Name == "Head"
+                        -- Aquí puedes añadir hitmarker, damage text, etc.
+                        
+                        if connectionHC then
+                            connectionHC:Disconnect()
+                            connectionHC = nil
+                        end
+                    end
+                end)
+                
+                -- Timeout: si después de 1.2s no se detectó daño, fue rechazado
+                task.delay(1.2, function()
+                    if connectionHC then
+                        connectionHC:Disconnect()
+                        connectionHC = nil
+                    end
+                    if not damageDetected then
+                        -- Disparo rechazado por el servidor
+                    end
+                end)
+            end
+        end)
+        
+        return fakeResult
+    end
+    
+    BulletModuleLoaded = true
+    return true
+end
+
+-- ============================================
+-- FOV CIRCLE (Círculo visual del FOV)
+-- ============================================
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1
+FOVCircle.Filled = false
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+FOVCircle.Transparency = 0.5
+FOVCircle.Visible = false
+FOVCircle.NumSides = 64
+
+local function UpdateFOVCircle()
+    if Config.Aimbot and Config.Aimbot.ShowFOV and Config.Aimbot.Active then
+        local mousePos = UserInputService:GetMouseLocation()
+        local vp = Camera.ViewportSize
+        
+        if Config.Aimbot.Method == "Aimbot" then
+            FOVCircle.Position = Vector2.new(vp.X / 2, vp.Y / 2)
+        else
+            FOVCircle.Position = mousePos
+        end
+        
+        FOVCircle.Radius = Config.Aimbot.FOVRadius or 150
+        FOVCircle.Visible = true
+    else
+        FOVCircle.Visible = false
+    end
+end
+
+-- ============================================
+-- LOOP PRINCIPAL (RenderStepped)
+-- ============================================
+RunService.RenderStepped:Connect(function()
+    Camera = Workspace.CurrentCamera
+    
+    -- Actualizar ESP
+    UpdateESP()
+    
+    -- Actualizar FOV Circle
+    UpdateFOVCircle()
+    
+    -- Legit Aimbot (solo si Silent Aim está desactivado o como complemento)
+    if Config.Aimbot and Config.Aimbot.Enabled and Config.Aimbot.Active then
+        -- Solo activar con botón del ratón presionado
+        local mousePressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        
+        if mousePressed then
+            local target, targetPlayer = FindLegitTarget()
+            if target and targetPlayer then
+                PerformLegitAim(target, targetPlayer)
+            end
+        else
+            -- Si no se presiona el botón, desbloquear objetivo en modo Aimlock
+            if Config.Aimbot.Method ~= "Aimlock" then
+                -- En modo no-aimlock, no mantener target
+            end
+        end
+    else
+        if not (Config.Aimbot and Config.Aimbot.Active) then
+            LockedPlayer = nil
+        end
+    end
+    
+    -- Actualizar historial de posiciones para todos los enemigos
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local char = player.Character
+        if char then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                UpdatePositionHistory(player, root.Position)
+            end
+        end
+    end
 end)
 
 -- ============================================
--- INIT ESP for existing players
+-- INICIALIZACIÓN
 -- ============================================
+
+-- Crear ESP para jugadores existentes
 for _, p in ipairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then
         CreateESP(p)
     end
 end
 
+-- Nuevos jugadores
 Players.PlayerAdded:Connect(function(p)
     CreateESP(p)
 end)
 
+-- Intentar configurar Silent Aim
+task.spawn(function()
+    task.wait(2) -- Esperar a que el juego cargue los módulos
+    
+    local silentSuccess = SetupSilentAim()
+    if silentSuccess then
+        print("[BSX] Silent Aim configurado exitosamente")
+    else
+        warn("[BSX] Silent Aim no disponible - solo Legit Aimbot funcionará")
+    end
+end)
+
 -- ============================================
--- CLEANUP
+-- LIMPIEZA
 -- ============================================
 Players.PlayerRemoving:Connect(function(p)
     if LockedPlayer == p then LockedPlayer = nil end
@@ -877,8 +1233,13 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 
 -- ============================================
--- SIGNAL
+-- SEÑALES DE CARGA
 -- ============================================
 getgenv().AX_BSXLoaded = true
 getgenv().AX_BSX_HandlesAimbot = true
 getgenv().AX_PF_HandlesESP = true
+
+print("[BSX v19.0] Módulo cargado correctamente")
+print("[BSX] ESP: Activo")
+print("[BSX] Legit Aimbot: Activo")
+print("[BSX] Silent Aim: " .. (BulletModuleLoaded and "Activo" or "Pendiente..."))
