@@ -1,6 +1,7 @@
 --[[
-    ANNOMALY X v17.7 OPTIMIZED
+    ANNOMALY X v17.8 OPTIMIZED
     Compatible: PF Module v4.0 (internal hooks)
+    Fix: BSX Silent Aim, Hitbox y opciones habilitadas
     Fix: GameId correcto para Fate Trigger (122291041295001)
     Fix: _inHook guard en hook universal
     Soporte: Universal, Flick, PF, Rivals, CA, Arsenal, BSX, HyperShot, Fate Trigger
@@ -71,9 +72,17 @@ local HAS_DEDICATED_MODULE = IS_FLICK or IS_PF or IS_RIVALS or IS_CA
     or IS_ARSENAL or IS_BSX or IS_HYPERSHOT or IS_FATETRIGGER
 local NO_METAMETHOD     = IS_CA or IS_BSX
 local NO_PROTECTION     = IS_CA or IS_BSX
-local BSX_NO_SILENT     = IS_BSX
-local BSX_NO_HITBOX     = IS_BSX
-local BSX_CUSTOM_AIMBOT = IS_BSX
+
+-- [BSX FIX] Removidas las restricciones que bloqueaban funcionalidades en BSX
+-- ANTES:
+--   local BSX_NO_SILENT     = IS_BSX
+--   local BSX_NO_HITBOX     = IS_BSX
+--   local BSX_CUSTOM_AIMBOT = IS_BSX
+-- AHORA: BSX maneja Silent Aim via su módulo, Hitbox habilitado, Aimbot delegado
+local BSX_NO_SILENT     = false  -- [BSX FIX] Silent Aim ahora lo maneja BSX v20 internamente
+local BSX_NO_HITBOX     = false  -- [BSX FIX] Hitbox habilitado para BSX
+local BSX_CUSTOM_AIMBOT = IS_BSX -- [BSX FIX] Aimbot sigue delegado al módulo BSX (tiene legit aimbot propio)
+
 local CA_NO_SILENT      = IS_CA
 
 local GAME_MODE_NAME = "Universal"
@@ -114,7 +123,14 @@ local Config = {
         Enabled = false, Active = false,
         Keybind = Enum.KeyCode.E, KeybindMode = "Toggle",
         TargetPart = "Head", HitChance = 100,
-        TeamCheck = false, VisibleCheck = false
+        TeamCheck = false, VisibleCheck = false,
+        -- [BSX FIX] Nuevas opciones que el módulo BSX v20 lee
+        SilentAim = true,           -- Flag que BSX v20 usa para activar silent aim
+        SilentFOV = 150,            -- FOV específico para silent aim
+        SilentBone = "Head",        -- Parte objetivo para silent aim
+        SilentMode = "Near Crosshair",  -- "Near Crosshair" o "Highest Damage"
+        WallBang = false,           -- Permitir disparar a través de paredes
+        Multipoint = false,         -- Verificar múltiples puntos del cuerpo
     },
     Aimbot = {
         Enabled = false, Active = false,
@@ -123,7 +139,17 @@ local Config = {
         TeamCheck = false, VisibleCheck = false,
         Smoothness = 5, FOVRadius = 150, FOVVisible = true,
         FOVColor = Color3.fromRGB(255, 200, 0),
-        RandomInterval = 0.5, Prediction = 0
+        RandomInterval = 0.5, Prediction = 0,
+        -- [BSX FIX] Opciones adicionales para BSX v20
+        SilentAim = false,          -- Se sincroniza con Config.Silent cuando BSX está activo
+        SilentFOV = 150,
+        SilentBone = "Head",
+        SilentMode = "Near Crosshair",
+        WallBang = false,
+        Multipoint = false,
+        LegitBone = "Head",
+        MaxDistance = 500,
+        ShowFOV = true,
     },
     Hitbox = {
         Enabled = false, Active = false,
@@ -142,7 +168,11 @@ local Config = {
         Enabled = false, Active = false,
         Keybind = Enum.KeyCode.V, KeybindMode = "Toggle",
         Boxes = true, Names = true, Distance = true,
-        MaxDistance = 1000, TeamCheck = false
+        MaxDistance = 1000, TeamCheck = false,
+        -- [BSX FIX] Opciones adicionales para BSX ESP
+        Tracers = false,
+        HeadDot = false,
+        Weapon = false,
     },
     Triggerbot = {
         Enabled = false, Active = false,
@@ -153,6 +183,18 @@ local Config = {
     GUI = { ToggleKey = Enum.KeyCode.End }
 }
 getgenv().AX_Config = Config
+
+-- [BSX FIX] Sincronizar Silent Aim config con Aimbot config para BSX
+-- BSX v20 lee de Config.Aimbot.SilentAim
+local function SyncBSXSilentConfig()
+    if not IS_BSX then return end
+    Config.Aimbot.SilentAim = Config.Silent.Enabled and Config.Silent.Active
+    Config.Aimbot.SilentFOV = Config.Silent.SilentFOV or Config.FOV.Radius
+    Config.Aimbot.SilentBone = Config.Silent.SilentBone or Config.Silent.TargetPart
+    Config.Aimbot.SilentMode = Config.Silent.SilentMode or "Near Crosshair"
+    Config.Aimbot.WallBang = Config.Silent.WallBang
+    Config.Aimbot.Multipoint = Config.Silent.Multipoint
+end
 
 local _visRayParams = RaycastParams.new()
 _visRayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -244,9 +286,9 @@ task.spawn(function()
     elseif IS_FLICK then
         pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/FlickX"))() end)
     elseif IS_PF then
-        warn("[AX] Cargando modulo Phantom Forces v4.0...") -- [CHANGED v4.0]
+        warn("[AX] Cargando modulo Phantom Forces v4.0...")
         local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/PFX"))() end)
-        if not ok then warn("[AX] ❌ Error cargando PFX: " .. tostring(err)) end -- [CHANGED v4.0]
+        if not ok then warn("[AX] ❌ Error cargando PFX: " .. tostring(err)) end
     elseif IS_RIVALS then
         pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/RivalsX"))() end)
     elseif IS_CA then
@@ -254,7 +296,9 @@ task.spawn(function()
     elseif IS_ARSENAL then
         pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/ArsenalX"))() end)
     elseif IS_BSX then
-        pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/BSX"))() end)
+        warn("[AX] Cargando modulo Blox Strike v20.0...")  -- [BSX FIX]
+        local ok, err = pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/Claude231/AnnomalyX/refs/heads/main/BSX"))() end)
+        if not ok then warn("[AX] ❌ Error cargando BSX: " .. tostring(err)) end
     end
 end)
 
@@ -297,13 +341,16 @@ local function ModuleHandlesESP()
         or getgenv().AX_FateTriggerHandlesESP
 end
 local function ModuleHandlesSilent()
-    return getgenv().AX_RivalsHandlesSilent or getgenv().AX_FlickHandlesSilent
+    -- [BSX FIX] BSX v20 maneja Silent Aim internamente, añadir su flag
+    return getgenv().AX_BSX_HandlesSilent
+        or getgenv().AX_RivalsHandlesSilent or getgenv().AX_FlickHandlesSilent
         or getgenv().AX_PF_HandlesSilent or getgenv().AX_ArsenalHandlesSilent
         or getgenv().AX_CAHandlesSilent or getgenv().AX_HyperShotHandlesSilent
         or getgenv().AX_FateTriggerHandlesSilent
 end
 local function ModuleHandlesHitbox()
-    return getgenv().AX_PF_HandlesHitbox or BSX_NO_HITBOX
+    return getgenv().AX_PF_HandlesHitbox
+    -- [BSX FIX] Removido BSX_NO_HITBOX de aquí, ahora hitbox funciona en BSX
 end
 
 local function ShouldSkipPlayer(player, teamCheckEnabled)
@@ -595,7 +642,7 @@ local function CleanupAllHitboxes()
 end
 
 local function ExpandPlayerHitbox(player, partToModify, size)
-    if BSX_NO_HITBOX then return end
+    -- [BSX FIX] Removido BSX_NO_HITBOX check, ahora funciona en BSX
     local character = player.Character if not character then return end
     local partsToCheck = {"Head","HeadHB","HumanoidRootPart"}
     if IS_ARSENAL then partsToCheck = {"Head","HeadHB","HumanoidRootPart","Hitbox","RightUpperLeg","LeftUpperLeg"} end
@@ -702,7 +749,11 @@ end
 
 -- ================== HOOK UNIVERSAL (con _inHook guard) ==================
 task.delay(IS_RIVALS and 2 or 0.3, function()
-    if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT then
+    -- [BSX FIX] BSX ahora puede usar el hook universal como fallback
+    -- si su módulo no logra interceptar el bullet_module
+    local skipHook = HAS_DEDICATED_MODULE and not IS_BSX
+    
+    if not skipHook and not NO_METAMETHOD and not CA_NO_SILENT then
         local _inHook = false
         local oldNc
         oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -800,7 +851,8 @@ task.delay(3, function()
     local TitleText = Instance.new("TextLabel",TitleBar)
     TitleText.BackgroundTransparency=1 TitleText.Position=UDim2.new(0,15,0,0)
     TitleText.Size=UDim2.new(1,-80,1,0) TitleText.Font=Enum.Font.GothamBold
-    TitleText.Text="⚡ ANNOMALY X v17.7" TitleText.TextColor3=Color3.fromRGB(255,255,255) -- [CHANGED v4.0]
+    TitleText.Text="⚡ ANNOMALY X v17.8" -- [BSX FIX] version bump
+    TitleText.TextColor3=Color3.fromRGB(255,255,255)
     TitleText.TextSize=16 TitleText.TextXAlignment=Enum.TextXAlignment.Left
 
     local CreatorText = Instance.new("TextLabel",TitleBar)
@@ -985,11 +1037,11 @@ task.delay(3, function()
     local InfoPage    = CreateTab("Info","ℹ")
 
     -- ===== SILENT PAGE =====
-    if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+    -- [BSX FIX] BSX ya NO está bloqueado, tiene su propia sección con opciones extra
+    if IS_ARSENAL or CA_NO_SILENT then
         Sec(SilentPage,"⚡ Silent Aim (Disabled)")
-        local msg=IS_BSX and"⚠ Silent DISABLED para BSX.\nUsa Aimbot (Q)!"
-            or IS_ARSENAL and"⚠ Silent no disponible en Arsenal.\nUsa DHE+Aimbot!"
-            or"⚠ Silent no disponible.\nUsa Aimbot (Q)!"
+        local msg = IS_ARSENAL and "⚠ Silent no disponible en Arsenal.\nUsa DHE+Aimbot!"
+            or "⚠ Silent no disponible.\nUsa Aimbot (Q)!"
         local f=Instance.new("Frame",SilentPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
         f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
         Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
@@ -997,10 +1049,57 @@ task.delay(3, function()
         l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
         l.Font=Enum.Font.Gotham l.Text=msg l.TextColor3=Color3.fromRGB(255,200,100)
         l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
+    elseif IS_BSX then
+        -- [BSX FIX] Sección completa de Silent Aim para BSX
+        Sec(SilentPage,"⚡ Silent Aim (Blox Strike)")
+        AddBanner(SilentPage, Color3.fromRGB(25,40,25),
+            "✅ BSX v20: Silent Aim via BulletModule + Namecall + WeaponHook (3 métodos)")
+        
+        Tog(SilentPage,"Enable Silent Aim",false,function(v)
+            Config.Silent.Enabled = v
+            if not v then Config.Silent.Active = false end
+            SyncBSXSilentConfig()
+        end)
+        Drop(SilentPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Silent.KeybindMode=v end)
+        Key(SilentPage,"Keybind",Config.Silent.Keybind,function(v) Config.Silent.Keybind=v end)
+        Drop(SilentPage,"Target Part",{"Head","HumanoidRootPart","UpperTorso","Random"},"Head",function(v)
+            Config.Silent.TargetPart = v
+            Config.Silent.SilentBone = v
+            SyncBSXSilentConfig()
+        end)
+        Sli(SilentPage,"Hit Chance %",0,100,100,function(v) Config.Silent.HitChance=v end)
+        Tog(SilentPage,"Team Check",false,function(v)
+            Config.Silent.TeamCheck = v
+            SyncBSXSilentConfig()
+        end)
+        Tog(SilentPage,"Visible Check",false,function(v)
+            Config.Silent.VisibleCheck = v
+            Config.Aimbot.VisibleCheck = v
+            SyncBSXSilentConfig()
+        end)
+        
+        -- [BSX FIX] Opciones exclusivas de BSX Silent Aim
+        Sec(SilentPage,"🔧 BSX Silent Options")
+        Drop(SilentPage,"Silent Mode",{"Near Crosshair","Highest Damage"},"Near Crosshair",function(v)
+            Config.Silent.SilentMode = v
+            SyncBSXSilentConfig()
+        end)
+        Tog(SilentPage,"WallBang",false,function(v)
+            Config.Silent.WallBang = v
+            SyncBSXSilentConfig()
+        end)
+        Tog(SilentPage,"Multipoint",false,function(v)
+            Config.Silent.Multipoint = v
+            SyncBSXSilentConfig()
+        end)
+        Sli(SilentPage,"Silent FOV",30,500,150,function(v)
+            Config.Silent.SilentFOV = v
+            SyncBSXSilentConfig()
+        end)
     else
         local tag=IS_FATETRIGGER and" (Fate Trigger)"
             or IS_RIVALS and" (Rivals)" or IS_FLICK and" (Flick)"
-            or IS_PF and" (Phantom Forces)" or IS_HYPERSHOT and" (HyperShot)" or"" -- [CHANGED v4.0]
+            or IS_PF and" (Phantom Forces)" or IS_HYPERSHOT and" (HyperShot)" or""
         Sec(SilentPage,"⚡ Silent Aim"..tag)
         if IS_FATETRIGGER then
             AddBanner(SilentPage,Color3.fromRGB(40,20,20),"✅ FTX: Raycast + Mouse.Hit + FireServer hooks")
@@ -1008,7 +1107,6 @@ task.delay(3, function()
         if IS_HYPERSHOT then
             AddBanner(SilentPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported")
         end
-        -- [ADDED v4.0] PF Silent Aim banner
         if IS_PF then
             AddBanner(SilentPage,Color3.fromRGB(25,30,45),"✅ PF v4.0: Credits to Wapus made by iRay")
         end
@@ -1028,8 +1126,8 @@ task.delay(3, function()
     -- ===== AIMBOT PAGE =====
     Sec(AimbotPage,"🔫 Aimbot / Aimlock")
     if IS_FATETRIGGER    then AddBanner(AimbotPage,Color3.fromRGB(40,20,20),"✅ FTX: Silent + Aimbot + ESP dedicado")
-    elseif IS_BSX        then AddBanner(AimbotPage,Color3.fromRGB(25,35,25),"✅ BSX: mousemoverel (AC safe)")
-    elseif IS_PF         then AddBanner(AimbotPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Trajectory prediction + cameraInterface angles + replicationInterface") -- [CHANGED v4.0]
+    elseif IS_BSX        then AddBanner(AimbotPage,Color3.fromRGB(25,35,25),"✅ BSX v20: Legit Aimbot + Gaussian jitter + Ping compensation")  -- [BSX FIX]
+    elseif IS_PF         then AddBanner(AimbotPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Trajectory prediction + cameraInterface angles + replicationInterface")
     elseif IS_RIVALS     then AddBanner(AimbotPage,Color3.fromRGB(40,25,35),"✅ Rivals: Custom aimbot + AC bypass")
     elseif IS_FLICK      then AddBanner(AimbotPage,Color3.fromRGB(35,25,40),"✅ Flick: Custom aimbot + HeadHB")
     elseif IS_ARSENAL    then AddBanner(AimbotPage,Color3.fromRGB(40,35,25),"✅ Arsenal: Custom aimbot")
@@ -1040,54 +1138,55 @@ task.delay(3, function()
     Drop(AimbotPage,"Method",{"Aimbot","Aimlock"},"Aimbot",function(v) Config.Aimbot.Method=v AimbotLockedPlayer=nil end)
     Drop(AimbotPage,"Keybind Mode",{"Toggle","Hold"},"Hold",function(v) Config.Aimbot.KeybindMode=v end)
     Key(AimbotPage,"Keybind",Config.Aimbot.Keybind,function(v) Config.Aimbot.Keybind=v end)
-    Drop(AimbotPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Aimbot.TargetPart=v end)
+    Drop(AimbotPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v)
+        Config.Aimbot.TargetPart=v
+        if IS_BSX then Config.Aimbot.LegitBone = v end  -- [BSX FIX]
+    end)
     Tog(AimbotPage,"Team Check",false,function(v) Config.Aimbot.TeamCheck=v end)
     Tog(AimbotPage,"Visible Check",false,function(v) Config.Aimbot.VisibleCheck=v end)
     Sec(AimbotPage,"⚙ Settings")
     Sli(AimbotPage,"Smoothness",1,20,5,function(v) Config.Aimbot.Smoothness=v end)
     Sli(AimbotPage,"Prediction",0,0.5,0,function(v) Config.Aimbot.Prediction=v end,2)
     Sli(AimbotPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Aimbot.RandomInterval=v end,1)
+    
+    -- [BSX FIX] Opciones adicionales de aimbot para BSX
+    if IS_BSX then
+        Sec(AimbotPage,"🔧 BSX Aimbot Options")
+        Sli(AimbotPage,"Max Distance",50,500,500,function(v) Config.Aimbot.MaxDistance=v end)
+    end
+    
     Sec(AimbotPage,"🎯 Aimbot FOV")
     Sli(AimbotPage,"FOV Radius",30,500,150,function(v) Config.Aimbot.FOVRadius=v end)
     Tog(AimbotPage,"Show FOV Circle",true,function(v) Config.Aimbot.FOVVisible=v end)
 
     -- ===== HITBOX PAGE =====
-    if BSX_NO_HITBOX then
-        Sec(HitboxPage,"📦 Hitbox (Disabled)")
-        local f=Instance.new("Frame",HitboxPage) f.BackgroundColor3=Color3.fromRGB(30,30,30)
-        f.BorderSizePixel=0 f.Size=UDim2.new(1,0,0,60)
-        Instance.new("UICorner",f).CornerRadius=UDim.new(0,6)
-        local l=Instance.new("TextLabel",f) l.BackgroundTransparency=1
-        l.Position=UDim2.new(0,12,0,0) l.Size=UDim2.new(1,-24,1,0)
-        l.Font=Enum.Font.Gotham l.Text="⚠ DHE/HE DISABLED para BSX."
-        l.TextColor3=Color3.fromRGB(255,200,100) l.TextSize=12 l.TextWrapped=true l.TextYAlignment=Enum.TextYAlignment.Center
-    else
-        Sec(HitboxPage,"📦 Hitbox Expander")
-        if IS_FATETRIGGER then AddBanner(HitboxPage,Color3.fromRGB(40,20,20),"ℹ FTX: one-shot game, hitbox opcional") end
-        if IS_PF then AddBanner(HitboxPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Hitbox via replicationInterface") end -- [CHANGED v4.0]
-        if IS_HYPERSHOT then AddBanner(HitboxPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported") end
-        Tog(HitboxPage,"Enable Hitbox",false,function(v) Config.Hitbox.Enabled=v if not v then Config.Hitbox.Active=false CleanupAllHitboxes() end end)
-        Drop(HitboxPage,"Method",{"DHE (Dynamic)","HE (Static)"},"DHE (Dynamic)",function(v) Config.Hitbox.Method=v CleanupAllHitboxes() end)
-        Drop(HitboxPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Hitbox.KeybindMode=v end)
-        Key(HitboxPage,"Keybind",Config.Hitbox.Keybind,function(v) Config.Hitbox.Keybind=v end)
-        Tog(HitboxPage,"Team Check",false,function(v) Config.Hitbox.TeamCheck=v end)
-        Drop(HitboxPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Hitbox.TargetPart=v end)
-        Sli(HitboxPage,"Max Size",1,15,8,function(v) Config.Hitbox.MaxSize=v end)
-        Sec(HitboxPage,"🎨 Appearance")
-        Sli(HitboxPage,"Transparency",0,1,0.7,function(v) Config.Hitbox.Transparency=v end,1)
-        Sli(HitboxPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Hitbox.RandomInterval=v end,1)
-        Sec(HitboxPage,"🎯 DHE FOV")
-        Tog(HitboxPage,"Use Custom FOV",true,function(v) Config.Hitbox.FOVEnabled=v end)
-        Sli(HitboxPage,"DHE FOV Radius",30,500,150,function(v) Config.Hitbox.FOVRadius=v end)
-        Tog(HitboxPage,"Show DHE FOV Circle",false,function(v) Config.Hitbox.FOVVisible=v end)
-    end
+    -- [BSX FIX] Hitbox ya NO está bloqueado para BSX
+    Sec(HitboxPage,"📦 Hitbox Expander")
+    if IS_FATETRIGGER then AddBanner(HitboxPage,Color3.fromRGB(40,20,20),"ℹ FTX: one-shot game, hitbox opcional") end
+    if IS_PF then AddBanner(HitboxPage,Color3.fromRGB(25,30,40),"✅ PF v4.0: Hitbox via replicationInterface") end
+    if IS_HYPERSHOT then AddBanner(HitboxPage,Color3.fromRGB(40,25,25),"⚠️ ONLY WORKING ON BOTS — Player PvP not supported") end
+    if IS_BSX then AddBanner(HitboxPage,Color3.fromRGB(25,35,25),"⚠ BSX: Hitbox expander habilitado — puede ser detectado server-side") end  -- [BSX FIX]
+    Tog(HitboxPage,"Enable Hitbox",false,function(v) Config.Hitbox.Enabled=v if not v then Config.Hitbox.Active=false CleanupAllHitboxes() end end)
+    Drop(HitboxPage,"Method",{"DHE (Dynamic)","HE (Static)"},"DHE (Dynamic)",function(v) Config.Hitbox.Method=v CleanupAllHitboxes() end)
+    Drop(HitboxPage,"Keybind Mode",{"Toggle","Hold"},"Toggle",function(v) Config.Hitbox.KeybindMode=v end)
+    Key(HitboxPage,"Keybind",Config.Hitbox.Keybind,function(v) Config.Hitbox.Keybind=v end)
+    Tog(HitboxPage,"Team Check",false,function(v) Config.Hitbox.TeamCheck=v end)
+    Drop(HitboxPage,"Target Part",{"Head","HumanoidRootPart","Random"},"Head",function(v) Config.Hitbox.TargetPart=v end)
+    Sli(HitboxPage,"Max Size",1,15,8,function(v) Config.Hitbox.MaxSize=v end)
+    Sec(HitboxPage,"🎨 Appearance")
+    Sli(HitboxPage,"Transparency",0,1,0.7,function(v) Config.Hitbox.Transparency=v end,1)
+    Sli(HitboxPage,"Random Switch (s)",0.1,2,0.5,function(v) Config.Hitbox.RandomInterval=v end,1)
+    Sec(HitboxPage,"🎯 DHE FOV")
+    Tog(HitboxPage,"Use Custom FOV",true,function(v) Config.Hitbox.FOVEnabled=v end)
+    Sli(HitboxPage,"DHE FOV Radius",30,500,150,function(v) Config.Hitbox.FOVRadius=v end)
+    Tog(HitboxPage,"Show DHE FOV Circle",false,function(v) Config.Hitbox.FOVVisible=v end)
 
     -- ===== ESP PAGE =====
     Sec(ESPPage,"👁 ESP")
     if HAS_DEDICATED_MODULE then
         local em=IS_FATETRIGGER and"FT: Custom+health bars"
-            or IS_PF and"PF v4.0: replicationInterface + health + weapon" -- [CHANGED v4.0]
-            or IS_BSX and"BSX: Custom+health"
+            or IS_PF and"PF v4.0: replicationInterface + health + weapon"
+            or IS_BSX and"BSX v20: Custom+health+tracers+weapon+headdot"  -- [BSX FIX]
             or IS_RIVALS and"Rivals: Custom+health" or IS_FLICK and"Flick: Custom+HeadHB"
             or IS_ARSENAL and"Arsenal: Custom" or IS_CA and"CA: Custom"
             or IS_HYPERSHOT and"HyperShot: Custom+health" or""
@@ -1104,6 +1203,14 @@ task.delay(3, function()
     Tog(ESPPage,"Show Names",true,function(v) Config.ESP.Names=v end)
     Tog(ESPPage,"Show Distance",true,function(v) Config.ESP.Distance=v end)
     Sli(ESPPage,"Max Distance",100,2000,1000,function(v) Config.ESP.MaxDistance=v end)
+    
+    -- [BSX FIX] Opciones ESP adicionales para BSX
+    if IS_BSX then
+        Sec(ESPPage,"🔧 BSX ESP Options")
+        Tog(ESPPage,"Show Tracers",false,function(v) Config.ESP.Tracers=v end)
+        Tog(ESPPage,"Show Head Dot",false,function(v) Config.ESP.HeadDot=v end)
+        Tog(ESPPage,"Show Weapon",false,function(v) Config.ESP.Weapon=v end)
+    end
 
     -- ===== TRIGGER PAGE =====
     Sec(TriggerPage,"🔥 Triggerbot")
@@ -1120,15 +1227,16 @@ task.delay(3, function()
     Sec(InfoPage,"🔒 Info & Settings")
     Key(InfoPage,"Toggle GUI",Config.GUI.ToggleKey,function(v) Config.GUI.ToggleKey=v end)
     local info=Instance.new("Frame",InfoPage) info.BackgroundColor3=Color3.fromRGB(30,30,30)
-    info.BorderSizePixel=0 info.Size=UDim2.new(1,0,0,200)
+    info.BorderSizePixel=0 info.Size=UDim2.new(1,0,0,220)  -- [BSX FIX] slightly taller
     Instance.new("UICorner",info).CornerRadius=UDim.new(0,6)
     local infoText=Instance.new("TextLabel",info) infoText.BackgroundTransparency=1
     infoText.Position=UDim2.new(0,12,0,10) infoText.Size=UDim2.new(1,-24,1,-20)
     infoText.Font=Enum.Font.Gotham infoText.TextColor3=Color3.fromRGB(200,200,200)
     infoText.TextSize=10 infoText.TextWrapped=true infoText.TextYAlignment=Enum.TextYAlignment.Top
-    -- [CHANGED v4.0] Updated info text
-    infoText.Text="⚡ AX v17.7 OPT | by ElSacaLeche\n\n✅ "..GAME_MODE_NAME.." MODE\n\n"
+    -- [BSX FIX] Updated info text
+    infoText.Text="⚡ AX v17.8 OPT | by ElSacaLeche\n\n✅ "..GAME_MODE_NAME.." MODE\n\n"
         .."[End]=GUI | [E]=Silent | [Q]=Aimbot\n[H]=Hitbox | [V]=ESP | [T]=Trigger\n\n"
+        .."✅ BSX v20: Silent Aim (3 fallback methods)\n✅ BSX v20: Hitbox + ESP habilitados\n"
         .."✅ PF v4.0: Internal hooks method\n✅ _inHook guard anti-stack overflow\n✅ RaycastParams cacheados\n✅ GetPlayers cacheado cada 2s"
 
     CloseBtn.MouseButton1Click:Connect(function()
@@ -1137,9 +1245,12 @@ task.delay(3, function()
         if AimbotFOVCircle then AimbotFOVCircle:Remove() end
         if HitboxFOVCircle then HitboxFOVCircle:Remove() end
         for _,e in pairs(ESPObjects) do for _,d in pairs(e) do d:Remove() end end
-        -- [ADDED v4.0] Cleanup PF module if loaded
         if getgenv().AX_PF_Cleanup then
             pcall(getgenv().AX_PF_Cleanup)
+        end
+        -- [BSX FIX] Cleanup BSX module
+        if getgenv().AX_BSX_Cleanup then
+            pcall(getgenv().AX_BSX_Cleanup)
         end
     end)
 end)
@@ -1154,10 +1265,13 @@ UserInputService.InputBegan:Connect(function(input,gp)
             end
         end)
     end
-    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+    -- [BSX FIX] BSX ya puede usar Silent Aim keybind (removido BSX_NO_SILENT check)
+    if not IS_ARSENAL and not CA_NO_SILENT then
         if input.KeyCode==Config.Silent.Keybind and Config.Silent.Enabled then
             if Config.Silent.KeybindMode=="Toggle" then Config.Silent.Active=not Config.Silent.Active
             else Config.Silent.Active=true end
+            -- [BSX FIX] Sincronizar con módulo BSX
+            if IS_BSX then SyncBSXSilentConfig() end
         end
     end
     if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.Enabled then
@@ -1166,13 +1280,12 @@ UserInputService.InputBegan:Connect(function(input,gp)
             if not Config.Aimbot.Active then AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
         else Config.Aimbot.Active=true end
     end
-    if not BSX_NO_HITBOX then
-        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.Enabled then
-            if Config.Hitbox.KeybindMode=="Toggle" then
-                Config.Hitbox.Active=not Config.Hitbox.Active
-                if not Config.Hitbox.Active then CleanupAllHitboxes() end
-            else Config.Hitbox.Active=true end
-        end
+    -- [BSX FIX] Hitbox keybind ya funciona en BSX (removido BSX_NO_HITBOX check)
+    if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.Enabled then
+        if Config.Hitbox.KeybindMode=="Toggle" then
+            Config.Hitbox.Active=not Config.Hitbox.Active
+            if not Config.Hitbox.Active then CleanupAllHitboxes() end
+        else Config.Hitbox.Active=true end
     end
     if input.KeyCode==Config.ESP.Keybind and Config.ESP.Enabled then
         if Config.ESP.KeybindMode=="Toggle" then Config.ESP.Active=not Config.ESP.Active
@@ -1185,16 +1298,18 @@ UserInputService.InputBegan:Connect(function(input,gp)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if not IS_ARSENAL and not BSX_NO_SILENT and not CA_NO_SILENT then
+    -- [BSX FIX] Removido BSX_NO_SILENT check
+    if not IS_ARSENAL and not CA_NO_SILENT then
         if input.KeyCode==Config.Silent.Keybind and Config.Silent.KeybindMode=="Hold" then
-            Config.Silent.Active=false end
+            Config.Silent.Active=false
+            if IS_BSX then SyncBSXSilentConfig() end
+        end
     end
     if input.KeyCode==Config.Aimbot.Keybind and Config.Aimbot.KeybindMode=="Hold" then
         Config.Aimbot.Active=false AimbotLockedPlayer=nil AimbotCurrentTarget=nil end
-    if not BSX_NO_HITBOX then
-        if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.KeybindMode=="Hold" then
-            Config.Hitbox.Active=false CleanupAllHitboxes() end
-    end
+    -- [BSX FIX] Removido BSX_NO_HITBOX check
+    if input.KeyCode==Config.Hitbox.Keybind and Config.Hitbox.KeybindMode=="Hold" then
+        Config.Hitbox.Active=false CleanupAllHitboxes() end
     if input.KeyCode==Config.ESP.Keybind and Config.ESP.KeybindMode=="Hold" then Config.ESP.Active=false end
     if input.KeyCode==Config.Triggerbot.Keybind and Config.Triggerbot.KeybindMode=="Hold" then Config.Triggerbot.Active=false end
 end)
@@ -1226,8 +1341,9 @@ task.delay(IS_RIVALS and 8 or 1, function()
         local mp=GetMouseLocation()
 
         if FOVCircle then
+            -- [BSX FIX] BSX Silent Aim ahora muestra FOV circle
             local showSilent=Config.Silent.Enabled and Config.Silent.Active
-                and not BSX_NO_SILENT and not CA_NO_SILENT
+                and not CA_NO_SILENT
             FOVCircle.Position=mp FOVCircle.Radius=Config.FOV.Radius
             FOVCircle.Visible=Config.FOV.Visible and (showSilent or (Config.Triggerbot.Enabled and Config.Triggerbot.Active))
         end
@@ -1237,7 +1353,8 @@ task.delay(IS_RIVALS and 8 or 1, function()
             AimbotFOVCircle.Visible=Config.Aimbot.FOVVisible and Config.Aimbot.Enabled and Config.Aimbot.Active
         end
         if HitboxFOVCircle then
-            local showH=not BSX_NO_HITBOX and not ModuleHandlesHitbox()
+            -- [BSX FIX] Removido BSX_NO_HITBOX check
+            local showH=not ModuleHandlesHitbox()
                 and Config.Hitbox.FOVVisible and Config.Hitbox.FOVEnabled
                 and Config.Hitbox.Enabled and Config.Hitbox.Active
                 and Config.Hitbox.Method=="DHE (Dynamic)"
@@ -1245,12 +1362,23 @@ task.delay(IS_RIVALS and 8 or 1, function()
             HitboxFOVCircle.Color=Config.Hitbox.FOVColor HitboxFOVCircle.Visible=showH
         end
 
+        -- [BSX FIX] BSX silent aim es manejado por el módulo BSX,
+        -- pero el hook universal puede servir como fallback
         if not HAS_DEDICATED_MODULE and not NO_METAMETHOD and not CA_NO_SILENT
             and not ModuleHandlesSilent() then
             local now=tick()
             if now-LastSilentUpdate>=SILENT_UPDATE_RATE then
                 LastSilentUpdate=now
                 CurrentTarget=(Config.Silent.Enabled and Config.Silent.Active) and GetClosestPlayer() or nil
+            end
+        end
+        
+        -- [BSX FIX] Para BSX, si el módulo no cargó su silent, usar el universal como fallback
+        if IS_BSX and not getgenv().AX_BSX_HandlesSilent and not ModuleHandlesSilent() then
+            local now = tick()
+            if now - LastSilentUpdate >= SILENT_UPDATE_RATE then
+                LastSilentUpdate = now
+                CurrentTarget = (Config.Silent.Enabled and Config.Silent.Active) and GetClosestPlayer() or nil
             end
         end
 
@@ -1261,15 +1389,15 @@ task.delay(IS_RIVALS and 8 or 1, function()
     end)
 end)
 
-if IS_ARSENAL or BSX_NO_SILENT or CA_NO_SILENT then
+-- [BSX FIX] Ya NO se fuerza desactivar Silent/Hitbox para BSX
+if IS_ARSENAL or CA_NO_SILENT then
     Config.Silent.Enabled=false Config.Silent.Active=false end
-if BSX_NO_HITBOX then
-    Config.Hitbox.Enabled=false Config.Hitbox.Active=false end
+-- BSX_NO_HITBOX ya no existe, así que no se fuerza desactivar hitbox
 
 task.delay(IS_RIVALS and 4 or 2, function()
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification",{
-            Title="⚡ AX v17.7 OPT", -- [CHANGED v4.0]
+            Title="⚡ AX v17.8 OPT",  -- [BSX FIX]
             Text=GAME_MODE_NAME.." | [End]=GUI",
             Duration=5
         })
