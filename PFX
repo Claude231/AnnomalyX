@@ -1,1 +1,954 @@
-if not getgenv().AX_Config then repeat task.wait()until getgenv().AX_Config end;local _a0=getgenv().AX_Config;local _b1=cloneref or function(_c2)return _c2 end;local _d3=newcclosure or function(_e4)return _e4 end;local _f5=hookfunction or replaceclosure or detour_function;local _g6=mousemoverel or(Input and Input.MouseMove)or function()end;local _h7=_b1(game:GetService("\80\108\97\121\101\114\115"));local _i8=_b1(game:GetService("\82\117\110\83\101\114\118\105\99\101"));local _j9=_b1(game:GetService("\85\115\101\114\73\110\112\117\116\83\101\114\118\105\99\101"));local _kA=_b1(game:GetService("\87\111\114\107\115\112\97\99\101"));local _lB=_b1(game:GetService("\83\116\97\114\116\101\114\71\117\105"));local _mC=_kA.CurrentCamera;local _nD=_h7.LocalPlayer;local _oE=_b1(game:GetService("\84\101\108\101\112\111\114\116\83\101\114\118\105\99\101"));local _pF=game.PlaceId;local _qG=game.JobId;local _rH=queue_on_teleport or queueonteleport;local _sI=setfflag or function()end;local _tJ="\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\67\108\97\117\100\101\50\51\49\47\65\110\110\111\109\97\108\121\88\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\65\88";local function _uK()if not _rH then warn("\91\65\88\45\80\70\93\32\226\157\140\32\113\117\101\117\101\95\111\110\95\116\101\108\101\112\111\114\116\32\110\111\116\32\97\118\97\105\108\97\98\108\101");return false end;pcall(function()_sI("\68\101\98\117\103\82\117\110\80\97\114\97\108\108\101\108\76\117\97\79\110\77\97\105\110\84\104\114\101\97\100","\84\114\117\101")end);_rH("\108\111\97\100\115\116\114\105\110\103\40\103\97\109\101\58\72\116\116\112\71\101\116\40\34".._tJ.."\34\41\41\40\41");task.wait(0.5);pcall(function()_oE:TeleportToPlaceInstance(_pF,_qG)end);return true end;pcall(function()local _vL=_nD.Kick;if typeof(_vL)=="\102\117\110\99\116\105\111\110"then _f5(_vL,_d3(function(_wM,...)if _wM==_nD then return end;return _vL(_wM,...)end))end end);pcall(function()local _xN=_b1(game:GetService("\83\99\114\105\112\116\67\111\110\116\101\120\116"));if getconnections then for _,_yO in ipairs(getconnections(_xN.Error))do pcall(function()_yO:Disable()end)end end end);local _zP;for _,_AQ in getgc(true)do if type(_AQ)=="\116\97\98\108\101"and rawget(_AQ,"\83\99\114\101\101\110\67\117\108\108")and rawget(_AQ,"\78\101\116\119\111\114\107\67\108\105\101\110\116")then _zP=_AQ;break end end;if not _zP then warn("\91\65\88\45\80\70\93\32\226\157\140\32\67\111\117\108\100\32\110\111\116\32\102\105\110\100\32\80\70\32\109\111\100\117\108\101\32\99\97\99\104\101");return end;local _BR={};for _CS,_DT in _zP do if _DT then if type(_DT)=="\116\97\98\108\101"and _DT.module then _BR[_CS]=_DT.module else _BR[_CS]=_DT end end end;local _EU=_BR.NetworkClient;local _FV=_BR.ReplicationInterface;local _GW=_BR.CharacterInterface;local _HX=_BR.WeaponControllerInterface;local _IY=_BR.CameraInterface;local _JZ=_BR.PublicSettings;local _K0=_BR.ContentInterface;local _L1=_BR.BulletObject;local _M2=_BR.DesktopHitBox;local _N3=_BR.RoundSystemClientInterface;if not _EU or not _FV or not _L1 then warn("\91\65\88\45\80\70\93\32\226\157\140\32\67\114\105\116\105\99\97\108\32\109\111\100\117\108\101\115\32\109\105\115\115\105\110\103");return end;local function _O4(_P5,_Q6,_R7,_S8,_T9)if not _P5 then return end;if _P5>-1e-10 and _P5<1e-10 then return _O4(_Q6,_R7,_S8,_T9)end;if _T9 then local _U0=-_Q6/(4*_P5);local _V1=(_R7+_U0*(3*_Q6+6*_P5*_U0))/_P5;local _W2=(_S8+_U0*(2*_R7+_U0*(3*_Q6+4*_P5*_U0)))/_P5;local _X3=(_T9+_U0*(_S8+_U0*(_R7+_U0*(_Q6+_P5*_U0))))/_P5;if _W2>-1e-10 and _W2<1e-10 then local _Y4,_Z5=_O4(1,_V1,_X3);if not _Z5 or _Z5<0 then return end;local _a6=math.sqrt(_Y4);local _b7=math.sqrt(_Z5);return _U0-_b7,_U0-_a6,_U0+_a6,_U0+_b7 else local _c8,_,_d9=_O4(1,2*_V1,_V1*_V1-4*_X3,-_W2*_W2);local _eA=_d9 or _c8;if not _eA then return end;local _fB=math.sqrt(math.abs(_eA));local _gC,_hD=_O4(1,_fB,(_eA+_V1-_W2/_fB)/2);local _iE,_jF=_O4(1,-_fB,(_eA+_V1+_W2/_fB)/2);if _gC and _iE then return _U0+_gC,_U0+_hD,_U0+_iE,_U0+_jF elseif _gC then return _U0+_gC,_U0+_hD elseif _iE then return _U0+_iE,_U0+_jF end end elseif _S8 then local _kG=-_Q6/(3*_P5);local _lH=-(_R7+_kG*(2*_Q6+3*_P5*_kG))/(3*_P5);local _mI=-(_S8+_kG*(_R7+_kG*(_Q6+_P5*_kG)))/(2*_P5);local _nJ=_mI*_mI-_lH*_lH*_lH;local _oK=math.sqrt(math.abs(_nJ));if _nJ>0 then local _pL=_mI+_oK;local _qM=_mI-_oK;_pL=_pL<0 and-(-_pL)^(1/3)or _pL^(1/3);local _rN=_qM<0 and-(-_qM)^(1/3)or _qM^(1/3);return _kG+_pL+_rN else local _sO=math.atan2(_oK,_mI)/3;local _tP=2*math.sqrt(math.abs(_lH));return _kG-_tP*math.sin(_sO+0.5236),_kG+_tP*math.sin(_sO-0.5236),_kG+_tP*math.cos(_sO)end elseif _R7 then local _uQ=-_Q6/(2*_P5);local _vR=_uQ*_uQ-_R7/_P5;if _vR<0 then return end;local _wS=math.sqrt(_vR);return _uQ-_wS,_uQ+_wS elseif _Q6 then return-_Q6/_P5 end end;local function _xT(_yU,_zV,_AW,_BX,_CY)local _DZ=_AW-_yU;_zV=-_zV;_CY=_CY or Vector3.zero;local _E0,_F1,_G2,_H3=_O4(_zV:Dot(_zV)*0.25,_zV:Dot(_CY),_zV:Dot(_DZ)+_CY:Dot(_CY)-_BX^2,_DZ:Dot(_CY)*2,_DZ:Dot(_DZ));local _I4=(_E0 and _E0>0 and _E0)or(_F1 and _F1>0 and _F1)or(_G2 and _G2>0 and _G2)or _H3;if not _I4 or _I4<=0 then return _DZ.Unit*_BX,1 end;return(_DZ+_CY*_I4+0.5*_zV*_I4^2)/_I4,_I4 end;local function _J5(_K6)local _L7,_M8,_N9=_K6.X,_K6.Y,_K6.Z;return math.asin(_M8/math.sqrt(_L7*_L7+_M8*_M8+_N9*_N9)),math.atan2(-_L7,-_N9),0 end;local _OA={time={},position={}};local function _PB(_QC)local _RD=_OA.position[_QC];local _SE=_OA.time;if _RD and _RD[15]and _RD[1]and _SE[15]and _SE[1]then local _TF=_SE[15]-_SE[1];if _TF>0 then return(_RD[15]-_RD[1])/_TF end end;return Vector3.zero end;local _UG={_kA.Terrain,_kA.Ignore,_kA.Players,_mC};local _VH=RaycastParams.new();_VH.FilterType=Enum.RaycastFilterType.Exclude;_VH.IgnoreWater=true;_VH.FilterDescendantsInstances=_UG;local function _WI(_XJ,_YK)local _ZL=_kA:Raycast(_XJ,_YK-_XJ,_VH);return _ZL==nil end;local function _AM(_BN,_CO,_DP,_EQ,_FR)local _GS=_BN or math.huge;local _HT,_IU,_JV;_FV.operateOnAllEntries(function(_KW,_LX)if _KW==_nD then return end;if _FR and not _LX._isEnemy then return end;local _MY=_LX._thirdPersonObject and _LX._thirdPersonObject._characterModelHash;if not _MY then return end;local _NZ=_DP;if _NZ=="\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116"then _NZ="\84\111\114\115\111"end;if _NZ=="\82\97\110\100\111\109"then _NZ=math.random(1,2)==1 and"\72\101\97\100"or"\84\111\114\115\111"end;local _O0=_MY[_NZ]or _MY.Head;if not _O0 then return end;local _P1=_O0.Position;local _Q2=_mC.CFrame.Position;if _CO and not _WI(_Q2,_P1)then return end;local _R3,_S4=_mC:WorldToViewportPoint(_P1);if _R3.Z<=0 then return end;local _T5=(Vector2.new(_R3.X,_R3.Y)-_EQ).Magnitude;if _T5<_GS then _GS=_T5;_HT=_P1;_IU=_LX;_JV=_O0 end end);return _HT,_IU,_JV end;local _U6=_L1.new;function _L1.new(_V7)if _V7.onplayerhit and _a0.Silent.Enabled and _a0.Silent.Active then local _W8=math.random(1,100);if _W8<=_a0.Silent.HitChance then local _X9=_mC.ViewportSize*0.5;local _YA=_a0.Silent.TargetPart;local _ZB,_aC=_AM(_a0.FOV.Enabled and _a0.FOV.Radius or 800,_a0.Silent.VisibleCheck,_YA,Vector2.new(_X9.X,_X9.Y),_a0.Silent.TeamCheck);if _ZB and _aC then local _bD=_PB(_aC._player);local _cE=_xT(_V7.position,_V7.acceleration or _JZ.bulletAcceleration,_ZB,_V7.velocity.Magnitude,_bD);_V7.velocity=_cE end end end;return _U6(_V7)end;local _dF=_EU.send;function _EU:send(_eG,...)if _eG=="\110\101\119\98\117\108\108\101\116\115"and _a0.Silent.Enabled and _a0.Silent.Active then local _fH,_gI,_hJ=...;local _iK=math.random(1,100);if _iK<=_a0.Silent.HitChance then local _jL=_mC.ViewportSize*0.5;local _kM=_a0.Silent.TargetPart;local _lN,_mO=_AM(_a0.FOV.Enabled and _a0.FOV.Radius or 800,_a0.Silent.VisibleCheck,_kM,Vector2.new(_jL.X,_jL.Y),_a0.Silent.TeamCheck);if _lN and _mO then local _nP=_PB(_mO._player);local _oQ=_HX.getActiveWeaponController();local _pR=_oQ and _oQ:getActiveWeapon();local _qS=_pR and _pR._weaponData and _pR._weaponData.bulletspeed or 2000;local _rT=_xT(_gI.firepos or _gI.camerapos,_JZ.bulletAcceleration,_lN,_qS,_nP);for _,_sU in _gI.bullets do _sU[1]=_rT.Unit end end end end;if _eG=="\102\108\97\103\117\115\101\114"or _eG=="\100\101\98\117\103"or _eG=="\108\111\103\109\101\115\115\97\103\101"then return end;return _dF(self,_eG,...)end;local _tV={};local _uW=0;local function _vX(_wY)if _tV[_wY]then return end;local _xZ={};_xZ.BoxOutline=Drawing.new("\83\113\117\97\114\101");_xZ.BoxOutline.Thickness=3;_xZ.BoxOutline.Filled=false;_xZ.BoxOutline.Color=Color3.fromRGB(0,0,0);_xZ.BoxOutline.Transparency=0.5;_xZ.BoxOutline.Visible=false;_xZ.Box=Drawing.new("\83\113\117\97\114\101");_xZ.Box.Thickness=1;_xZ.Box.Filled=false;_xZ.Box.Visible=false;_xZ.Name=Drawing.new("\84\101\120\116");_xZ.Name.Size=13;_xZ.Name.Center=true;_xZ.Name.Outline=true;_xZ.Name.Color=Color3.fromRGB(255,255,255);_xZ.Name.Visible=false;_xZ.Weapon=Drawing.new("\84\101\120\116");_xZ.Weapon.Size=11;_xZ.Weapon.Center=true;_xZ.Weapon.Outline=true;_xZ.Weapon.Color=Color3.fromRGB(200,200,200);_xZ.Weapon.Visible=false;_xZ.Distance=Drawing.new("\84\101\120\116");_xZ.Distance.Size=12;_xZ.Distance.Center=true;_xZ.Distance.Outline=true;_xZ.Distance.Color=Color3.fromRGB(200,200,200);_xZ.Distance.Visible=false;_xZ.HealthBG=Drawing.new("\83\113\117\97\114\101");_xZ.HealthBG.Filled=true;_xZ.HealthBG.Color=Color3.fromRGB(0,0,0);_xZ.HealthBG.Transparency=0.5;_xZ.HealthBG.Visible=false;_xZ.HealthBar=Drawing.new("\83\113\117\97\114\101");_xZ.HealthBar.Filled=true;_xZ.HealthBar.Color=Color3.fromRGB(0,255,0);_xZ.HealthBar.Visible=false;_tV[_wY]=_xZ end;local function _A0(_B1)local _C2=_tV[_B1];if not _C2 then return end;for _,_D3 in pairs(_C2)do pcall(function()_D3:Remove()end)end;_tV[_B1]=nil end;local function _E4(_F5)local _G6=_tV[_F5];if not _G6 then return end;for _,_H7 in pairs(_G6)do pcall(function()_H7.Visible=false end)end end;local function _I8(_J9,_KA)local _LB,_MC=math.huge,math.huge;local _ND2,_OE2=-math.huge,-math.huge;local _PF2=false;for _QG2,_RH2 in _J9 do if typeof(_RH2)=="\73\110\115\116\97\110\99\101"and _RH2:IsA("\66\97\115\101\80\97\114\116")then local _SI2=_RH2.Size.Y/2;local _TJ2=_RH2.Position+Vector3.new(0,_SI2,0);local _UK2=_RH2.Position-Vector3.new(0,_SI2,0);local _VL2=_mC:WorldToViewportPoint(_TJ2);local _WM2=_mC:WorldToViewportPoint(_UK2);if _VL2.Z>0 then _PF2=true;_LB=math.min(_LB,_VL2.X);_ND2=math.max(_ND2,_VL2.X);_MC=math.min(_MC,_VL2.Y);_OE2=math.max(_OE2,_VL2.Y)end;if _WM2.Z>0 then _PF2=true;_LB=math.min(_LB,_WM2.X);_ND2=math.max(_ND2,_WM2.X);_MC=math.min(_MC,_WM2.Y);_OE2=math.max(_OE2,_WM2.Y)end end end;if not _PF2 then return nil end;local _XN2=4;_LB=_LB-_XN2;_ND2=_ND2+_XN2;_MC=_MC-_XN2;_OE2=_OE2+_XN2;local _YO2=_ND2-_LB;local _ZP2=_OE2-_MC;local _AQ2=_mC.ViewportSize;if _YO2>_AQ2.X*0.4 or _ZP2>_AQ2.Y*0.6 or _YO2<5 or _ZP2<8 then local _BR2=(_mC.CFrame.Position-_KA).Magnitude;local _CS2=1/(_BR2*math.tan(math.rad(_mC.FieldOfView/2))*2/_AQ2.Y);_ZP2=math.clamp(5.5*_CS2,15,_AQ2.Y*0.5);_YO2=_ZP2*0.55;local _DT2=_mC:WorldToViewportPoint(_KA);if _DT2.Z<=0 then return nil end;_LB=_DT2.X-_YO2/2;_MC=_DT2.Y-_ZP2/2;_ND2=_DT2.X+_YO2/2;_OE2=_DT2.Y+_ZP2/2 end;return{minX=_LB,minY=_MC,maxX=_ND2,maxY=_OE2,width=_ND2-_LB,height=_OE2-_MC,centerX=(_LB+_ND2)/2}end;local function _EU2()if not _a0.ESP.Enabled or not _a0.ESP.Active then for _FV2 in pairs(_tV)do _E4(_FV2)end;return end;local _GW2=tick();if _GW2-_uW<0.08 then return end;_uW=_GW2;_mC=_kA.CurrentCamera;if not _mC then return end;local _HX2={};_FV.operateOnAllEntries(function(_IY2,_JZ2)if _IY2==_nD then return end;_HX2[_IY2]=true;if _a0.ESP.TeamCheck and not _JZ2._isEnemy then _E4(_IY2);return end;local _K02=_JZ2._thirdPersonObject;local _L12=_K02 and _K02._characterModelHash;if not _L12 or not _L12.Head then _E4(_IY2);return end;if not _tV[_IY2]then _vX(_IY2)end;local _M22=_tV[_IY2];if not _M22 then return end;local _N32=_JZ2._receivedPosition or _L12.Head.Position;local _O42=(_mC.CFrame.Position-_N32).Magnitude;if _O42>_a0.ESP.MaxDistance then _E4(_IY2);return end;local _P52=_I8(_L12,_N32);if not _P52 then _E4(_IY2);return end;local _Q62=100;pcall(function()_Q62=_JZ2:getHealth()end);local _R72=math.clamp(_Q62/100,0,1);local _S82=_WI(_mC.CFrame.Position,_L12.Head.Position);local _T92=_S82 and Color3.fromRGB(50,255,50)or Color3.fromRGB(255,50,50);if not _JZ2._isEnemy then _T92=Color3.fromRGB(80,150,255)end;if _a0.ESP.Boxes then _M22.BoxOutline.Position=Vector2.new(_P52.minX-1,_P52.minY-1);_M22.BoxOutline.Size=Vector2.new(_P52.width+2,_P52.height+2);_M22.BoxOutline.Visible=true;_M22.Box.Position=Vector2.new(_P52.minX,_P52.minY);_M22.Box.Size=Vector2.new(_P52.width,_P52.height);_M22.Box.Color=_T92;_M22.Box.Visible=true else _M22.BoxOutline.Visible=false;_M22.Box.Visible=false end;if _a0.ESP.Names then _M22.Name.Position=Vector2.new(_P52.centerX,_P52.minY-16);_M22.Name.Text=_IY2.Name;_M22.Name.Color=_T92;_M22.Name.Visible=true else _M22.Name.Visible=false end;local _U02="\85\110\107\110\111\119\110";pcall(function()local _V12=_JZ2:getWeaponObject();if _V12 and _V12.weaponName then _U02=_V12.weaponName end end);_M22.Weapon.Position=Vector2.new(_P52.centerX,_P52.maxY+2);_M22.Weapon.Text=_U02;_M22.Weapon.Visible=_a0.ESP.Distance;if _a0.ESP.Distance then _M22.Distance.Position=Vector2.new(_P52.centerX,_P52.maxY+14);_M22.Distance.Text=math.floor(_O42).."\109";_M22.Distance.Visible=true else _M22.Distance.Visible=false end;if _a0.ESP.Boxes then local _W22=_P52.minX-6;local _X32=_P52.height;_M22.HealthBG.Position=Vector2.new(_W22-1,_P52.minY-1);_M22.HealthBG.Size=Vector2.new(5,_X32+2);_M22.HealthBG.Visible=true;local _Y42=_X32*_R72;local _Z52=_R72>0.5 and Color3.fromRGB(math.floor(255*(1-_R72)*2),255,0)or Color3.fromRGB(255,math.floor(255*_R72*2),0);_M22.HealthBar.Position=Vector2.new(_W22,_P52.minY+(_X32-_Y42));_M22.HealthBar.Size=Vector2.new(3,_Y42);_M22.HealthBar.Color=_Z52;_M22.HealthBar.Visible=true else _M22.HealthBG.Visible=false;_M22.HealthBar.Visible=false end end);for _a62 in pairs(_tV)do if not _HX2[_a62]then if not _a62.Parent then _A0(_a62)else _E4(_a62)end end end end;local _b72=false;local _c82=nil;local _d92=nil;local _eA2=math.pi;local _fB2=2*_eA2;local function _gC2(_hD2)if not _a0.Aimbot.Enabled or not _a0.Aimbot.Active then _b72=false;_c82=nil;if not _a0.Aimbot.Active then _d92=nil end;return end;_mC=_kA.CurrentCamera;if not _mC then return end;local _iE2=os.clock();local _jF2=_mC.ViewportSize;local _kG2=Vector2.new(_jF2.X/2,_jF2.Y/2);local _lH2=_j9:GetMouseLocation();local _mI2=_a0.Aimbot.Method=="\65\105\109\98\111\116"and _kG2 or _lH2;if _a0.Aimbot.Method=="\65\105\109\108\111\99\107"and _d92 then local _nJ2=false;pcall(function()if _d92.Parent then local _oK2=_FV.getEntry(_d92);if _oK2 and _oK2._isEnemy then local _pL2=_oK2._thirdPersonObject and _oK2._thirdPersonObject._characterModelHash;if _pL2 and _pL2.Head then _nJ2=true end end end end);if not _nJ2 then _d92=nil end end;local _qM2,_rN2;local _sO2=_a0.Aimbot.FOVRadius;_FV.operateOnAllEntries(function(_tP2,_uQ2)if _tP2==_nD then return end;if _a0.Aimbot.TeamCheck and not _uQ2._isEnemy then return end;if _a0.Aimbot.Method=="\65\105\109\108\111\99\107"and _d92 and _tP2~=_d92 then return end;local _vR2=_uQ2._thirdPersonObject and _uQ2._thirdPersonObject._characterModelHash;if not _vR2 then return end;local _wS2=_a0.Aimbot.TargetPart;if _wS2=="\72\117\109\97\110\111\105\100\82\111\111\116\80\97\114\116"then _wS2="\84\111\114\115\111"end;if _wS2=="\82\97\110\100\111\109"then _wS2=math.random(1,2)==1 and"\72\101\97\100"or"\84\111\114\115\111"end;local _xT2=_vR2[_wS2]or _vR2.Head;if not _xT2 then return end;if _a0.Aimbot.VisibleCheck and not _WI(_mC.CFrame.Position,_xT2.Position)then return end;local _yU2,_zV2=_mC:WorldToViewportPoint(_xT2.Position);if not _zV2 or _yU2.Z<=0 then return end;local _AW2=(Vector2.new(_yU2.X,_yU2.Y)-_mI2).Magnitude;if _AW2<_sO2 then _sO2=_AW2;_qM2=_xT2.Position;_rN2=_uQ2 end end);if not _qM2 or not _rN2 then _b72=false;_c82=nil;return end;if _a0.Aimbot.Method=="\65\105\109\108\111\99\107"then _d92=_rN2._player end;_b72=true;_c82=_c82 or _iE2;local _BX2=_HX.getActiveWeaponController();local _CY2=_BX2 and _BX2:getActiveWeapon();local _DZ2=_CY2 and _CY2._weaponData and _CY2._weaponData.bulletspeed or 10000;local _E02=_PB(_rN2._player);if _a0.Aimbot.Prediction>0 then _qM2=_qM2+_E02*_a0.Aimbot.Prediction end;local _F12=math.max(_a0.Aimbot.Smoothness or 5,1);if _a0.Aimbot.Method=="\65\105\109\98\111\116"then local _G22=nil;pcall(function()_G22=_IY:getActiveCamera()end);if _G22 and _G22._angles then local _H32=_xT(_mC.CFrame.Position,_JZ.bulletAcceleration,_qM2,_DZ2,_E02);local _I42,_J52=_J5(_H32);local _K62=_G22._angles.Y;local _L72=math.clamp(_I42,_G22._minAngle or-1.4,_G22._maxAngle or 1.4);local _M82=(_J52+_eA2-_K62)%_fB2-_eA2+_K62;local _N92=Vector3.new(_L72,_M82,0);local _OA2=math.clamp(1/_F12,0.05,1);if _F12>1 then _N92=_G22._angles:Lerp(_N92,_OA2)end;_G22._delta=(_N92-_G22._angles)/(_hD2 or 0.016);_G22._angles=_N92 else local _PB2=_mC.CFrame;local _QC2=CFrame.lookAt(_PB2.Position,_qM2);_mC.CFrame=_F12<=1 and _QC2 or _PB2:Lerp(_QC2,1/_F12)end elseif _a0.Aimbot.Method=="\65\105\109\108\111\99\107"then local _RD2,_SE2=_mC:WorldToViewportPoint(_qM2);if _SE2 then local _TF2=_j9:GetMouseLocation();local _UG2,_VH2=_RD2.X-_TF2.X,_RD2.Y-_TF2.Y;local _WI2=math.sqrt(_UG2*_UG2+_VH2*_VH2);if _WI2>1 then local _XJ2=math.clamp(1/_F12,0.05,0.8);local _YK2=math.clamp(_UG2*_XJ2,-150,150);local _ZL2=math.clamp(_VH2*_XJ2,-150,150);if math.abs(_YK2)>0.3 or math.abs(_ZL2)>0.3 then _g6(_YK2,_ZL2)end end end end end;local _AM2=Instance.new("\70\111\108\100\101\114",_kA);_AM2.Name="\65\88\95\80\70\95\72\105\116\98\111\120\101\115";local function _BN2()if not _a0.Hitbox.Enabled or not _a0.Hitbox.Active then _AM2:ClearAllChildren();return end;local _CO2=_j9:GetMouseLocation();local _DP2=_a0.Hitbox.FOVEnabled and _a0.Hitbox.FOVRadius or _a0.FOV.Radius;_FV.operateOnAllEntries(function(_EQ2,_FR2)if not _FR2._isEnemy then return end;if _a0.Hitbox.TeamCheck and not _FR2._isEnemy then return end;local _GS2=_AM2:FindFirstChild(_EQ2.Name);if _FR2._receivedPosition then local _HT2=true;if _a0.Hitbox.Method=="\68\72\69\32\40\68\121\110\97\109\105\99\41"then local _IU2,_JV2=_mC:WorldToViewportPoint(_FR2._receivedPosition);if _JV2 then local _KW2=(_CO2-Vector2.new(_IU2.X,_IU2.Y)).Magnitude;if _KW2>_DP2 then _HT2=false end else _HT2=false end end;if _HT2 then if not _GS2 then local _LX2=_a0.Hitbox.MaxSize;_GS2=Instance.new("\80\97\114\116");_GS2.Name=_EQ2.Name;_GS2.Shape=Enum.PartType.Ball;_GS2.Size=Vector3.new(_LX2,_LX2,_LX2);_GS2.CanCollide=false;_GS2.Anchored=true;_GS2.Material=Enum.Material.ForceField;_GS2.Transparency=_a0.Hitbox.Transparency;_GS2.Color=Color3.fromRGB(0,100,255);_GS2.Parent=_AM2 end;if _a0.Hitbox.Method=="\68\72\69\32\40\68\121\110\97\109\105\99\41"then local _MY2,_NZ2=_mC:WorldToViewportPoint(_FR2._receivedPosition);if _NZ2 then local _O02=(_CO2-Vector2.new(_MY2.X,_MY2.Y)).Magnitude;local _P12=1-(_O02/_DP2);local _Q22=1+(_a0.Hitbox.MaxSize-1)*_P12;_GS2.Size=Vector3.new(_Q22,_Q22,_Q22)end else local _R32=_a0.Hitbox.MaxSize;_GS2.Size=Vector3.new(_R32,_R32,_R32)end;_GS2.Position=_FR2._receivedPosition;_GS2.Transparency=_a0.Hitbox.Transparency elseif _GS2 then _GS2:Destroy()end elseif _GS2 then _GS2:Destroy()end end);for _,_S42 in _AM2:GetChildren()do local _T52=_h7:FindFirstChild(_S42.Name);if not _T52 then _S42:Destroy()end end end;local _U62={};table.insert(_U62,_i8.Stepped:Connect(function()local _V72=os.clock();_FV.operateOnAllEntries(function(_W82,_X92)if _X92._isEnemy then local _YA2=_X92._thirdPersonObject and _X92._thirdPersonObject._characterModelHash;_OA.position[_W82]=_OA.position[_W82]or{};if _YA2 and _YA2.Head then table.insert(_OA.position[_W82],1,_YA2.Head.Position);table.remove(_OA.position[_W82],16)end end end);table.insert(_OA.time,1,_V72);table.remove(_OA.time,16)end));table.insert(_U62,_i8.RenderStepped:Connect(function(_ZB2)_mC=_kA.CurrentCamera;_gC2(_ZB2)end));table.insert(_U62,_i8.Heartbeat:Connect(function()_mC=_kA.CurrentCamera;_EU2();_BN2()end));local function _aC2()if _U6 then _L1.new=_U6 end;if _dF then _EU.send=_dF end;for _,_bD2 in _U62 do pcall(function()_bD2:Disconnect()end)end;for _cE2 in pairs(_tV)do _A0(_cE2)end;pcall(function()_AM2:Destroy()end);getgenv().AX_PF_HandlesAimbot=nil;getgenv().AX_PF_HandlesESP=nil;getgenv().AX_PF_HandlesSilent=nil;getgenv().AX_PF_HandlesHitbox=nil;getgenv().AX_PF_Cleanup=nil;getgenv().AX_PF_Rejoin=nil end;_h7.PlayerRemoving:Connect(function(_dF2)if _d92==_dF2 then _d92=nil end;_A0(_dF2);_OA.position[_dF2]=nil;local _eG2=_AM2:FindFirstChild(_dF2.Name);if _eG2 then _eG2:Destroy()end end);_nD.CharacterAdded:Connect(function()task.wait(1);_mC=_kA.CurrentCamera;_d92=nil;_c82=nil;_AM2:ClearAllChildren()end);getgenv().AX_PF_HandlesAimbot=true;getgenv().AX_PF_HandlesESP=true;getgenv().AX_PF_HandlesSilent=true;getgenv().AX_PF_HandlesHitbox=true;getgenv().AX_PF_Cleanup=_aC2;getgenv().AX_PF_Rejoin=_uK;task.delay(3,function()pcall(function()_lB:SetCore("\83\101\110\100\78\111\116\105\102\105\99\97\116\105\111\110",{Title="\226\154\161\32\65\88\32\45\32\80\70\32\118\52\46\49",Text="\73\110\116\101\114\110\97\108\32\104\111\111\107\115\32\43\32\82\101\106\111\105\110\32\114\101\97\100\121\33",Duration=6})end)end)
+--[[
+    ╔═══════════════════════════════════════════════════════════╗
+    ║          ANNOMALY X - Phantom Forces Module v4.0          ║
+    ║                                                           ║
+    ║  Silent Aim: Internal hooks (network.send + bulletObject) ║
+    ║  Aimbot: cameraInterface angles + trajectory prediction   ║
+    ║  ESP: replicationInterface + health + weapon display      ║
+    ║  Hitbox: replicationInterface sphere hitboxes              ║
+    ║                                                           ║
+    ║  Creator: ElSacaLeche                                     ║
+    ╚═══════════════════════════════════════════════════════════╝
+    
+    PF ARCHITECTURE:
+    - Internal module system accessed via getgc()
+    - NetworkClient for packet interception
+    - ReplicationInterface for player iteration
+    - BulletObject.new for bullet creation hooks
+    - CameraInterface for aimbot angle manipulation
+    - PublicSettings.bulletAcceleration for trajectory calc
+    - Custom hitbox parts per desktopHitBox module
+    
+    CHANGES v4.0:
+    - Full internal hook system (no metamethod needed)
+    - Trajectory prediction with bullet drop + enemy velocity
+    - Silent aim via bulletObject.new + network.send hooks
+    - Aimbot via cameraInterface angle manipulation
+    - ESP via replicationInterface with health/weapon/distance
+    - Hitbox via replicationInterface sphere parts
+    - Proper cleanup function via AX_PF_Cleanup
+]]
+
+-- ═══════════════════════════════════════════
+-- WAIT FOR MAIN SCRIPT CONFIG
+-- ═══════════════════════════════════════════
+
+if not getgenv().AX_Config then
+    repeat task.wait() until getgenv().AX_Config
+end
+
+local Config = getgenv().AX_Config
+
+-- ═══════════════════════════════════════════
+-- SERVICES & REFERENCES
+-- ═══════════════════════════════════════════
+
+local cloneref = cloneref or function(o) return o end
+local newcclosure = newcclosure or function(f) return f end
+local hookfunction = hookfunction or replaceclosure or detour_function
+local mousemoverel = mousemoverel or (Input and Input.MouseMove) or function() end
+
+local Players = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local Workspace = cloneref(game:GetService("Workspace"))
+local StarterGui = cloneref(game:GetService("StarterGui"))
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- ═══════════════════════════════════════════
+-- PROTECTION
+-- ═══════════════════════════════════════════
+
+pcall(function()
+    local oldKick = LocalPlayer.Kick
+    if typeof(oldKick) == "function" then
+        hookfunction(oldKick, newcclosure(function(self, ...)
+            if self == LocalPlayer then return end
+            return oldKick(self, ...)
+        end))
+    end
+end)
+
+pcall(function()
+    local SC = cloneref(game:GetService("ScriptContext"))
+    if getconnections then
+        for _, conn in ipairs(getconnections(SC.Error)) do
+            pcall(function() conn:Disable() end)
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════
+-- GET PF INTERNAL MODULES
+-- ═══════════════════════════════════════════
+
+local moduleCache
+for _, v in getgc(true) do
+    if type(v) == "table" and rawget(v, "ScreenCull") and rawget(v, "NetworkClient") then
+        moduleCache = v
+        break
+    end
+end
+
+if not moduleCache then
+    warn("[AX-PF] ❌ Could not find PF module cache")
+    return
+end
+
+local modules = {}
+for name, data in moduleCache do
+    if data then
+        if type(data) == "table" and data.module then
+            modules[name] = data.module
+        else
+            modules[name] = data
+        end
+    end
+end
+
+local network = modules.NetworkClient
+local replicationInterface = modules.ReplicationInterface
+local charInterface = modules.CharacterInterface
+local weaponInterface = modules.WeaponControllerInterface
+local cameraInterface = modules.CameraInterface
+local publicSettings = modules.PublicSettings
+local contentInterface = modules.ContentInterface
+local bulletObject = modules.BulletObject
+local desktopHitBox = modules.DesktopHitBox
+local roundSystem = modules.RoundSystemClientInterface
+
+if not network or not replicationInterface or not bulletObject then
+    warn("[AX-PF] ❌ Critical modules missing")
+    return
+end
+
+-- ═══════════════════════════════════════════
+-- TRAJECTORY SOLVER (from Wapus)
+-- ═══════════════════════════════════════════
+
+local function solve(v44, v45, v46, v47, v48)
+    if not v44 then return end
+    if v44 > -1e-10 and v44 < 1e-10 then return solve(v45, v46, v47, v48) end
+    if v48 then
+        local v49 = -v45 / (4 * v44)
+        local v50 = (v46 + v49 * (3 * v45 + 6 * v44 * v49)) / v44
+        local v51 = (v47 + v49 * (2 * v46 + v49 * (3 * v45 + 4 * v44 * v49))) / v44
+        local v52 = (v48 + v49 * (v47 + v49 * (v46 + v49 * (v45 + v44 * v49)))) / v44
+        if v51 > -1e-10 and v51 < 1e-10 then
+            local v53, v54 = solve(1, v50, v52)
+            if not v54 or v54 < 0 then return end
+            local v55 = math.sqrt(v53)
+            local v56 = math.sqrt(v54)
+            return v49 - v56, v49 - v55, v49 + v55, v49 + v56
+        else
+            local v57, _, v59 = solve(1, 2 * v50, v50 * v50 - 4 * v52, -v51 * v51)
+            local v60 = v59 or v57
+            if not v60 then return end
+            local v61 = math.sqrt(math.abs(v60))
+            local v62, v63 = solve(1, v61, (v60 + v50 - v51 / v61) / 2)
+            local v64, v65 = solve(1, -v61, (v60 + v50 + v51 / v61) / 2)
+            if v62 and v64 then return v49+v62, v49+v63, v49+v64, v49+v65
+            elseif v62 then return v49+v62, v49+v63
+            elseif v64 then return v49+v64, v49+v65 end
+        end
+    elseif v47 then
+        local v66 = -v45 / (3 * v44)
+        local v67 = -(v46 + v66 * (2 * v45 + 3 * v44 * v66)) / (3 * v44)
+        local v68 = -(v47 + v66 * (v46 + v66 * (v45 + v44 * v66))) / (2 * v44)
+        local v69 = v68*v68 - v67*v67*v67
+        local v70 = math.sqrt(math.abs(v69))
+        if v69 > 0 then
+            local v71 = v68 + v70
+            local v72 = v68 - v70
+            v71 = v71 < 0 and -(-v71)^(1/3) or v71^(1/3)
+            local v73 = v72 < 0 and -(-v72)^(1/3) or v72^(1/3)
+            return v66 + v71 + v73
+        else
+            local v74 = math.atan2(v70, v68) / 3
+            local v75 = 2 * math.sqrt(math.abs(v67))
+            return v66 - v75*math.sin(v74+0.5236), v66 + v75*math.sin(v74-0.5236), v66 + v75*math.cos(v74)
+        end
+    elseif v46 then
+        local v76 = -v45 / (2 * v44)
+        local v77 = v76*v76 - v46/v44
+        if v77 < 0 then return end
+        local v78 = math.sqrt(v77)
+        return v76 - v78, v76 + v78
+    elseif v45 then
+        return -v45 / v44
+    end
+end
+
+local function complexTrajectory(origin, accel, target, speed, enemyVel)
+    local ld = target - origin
+    accel = -accel
+    enemyVel = enemyVel or Vector3.zero
+    local r1, r2, r3, r4 = solve(
+        accel:Dot(accel) * 0.25,
+        accel:Dot(enemyVel),
+        accel:Dot(ld) + enemyVel:Dot(enemyVel) - speed^2,
+        ld:Dot(enemyVel) * 2,
+        ld:Dot(ld)
+    )
+    local x = (r1 and r1>0 and r1) or (r2 and r2>0 and r2) or (r3 and r3>0 and r3) or r4
+    if not x or x <= 0 then return ld.Unit * speed, 1 end
+    return (ld + enemyVel*x + 0.5*accel*x^2) / x, x
+end
+
+local function toAnglesYX(v)
+    local x, y, z = v.X, v.Y, v.Z
+    return math.asin(y / math.sqrt(x*x + y*y + z*z)), math.atan2(-x, -z), 0
+end
+
+-- ═══════════════════════════════════════════
+-- MOVEMENT CACHE (for prediction)
+-- ═══════════════════════════════════════════
+
+local movementCache = { time = {}, position = {} }
+
+local function getEnemyVelocity(player)
+    local p = movementCache.position[player]
+    local t = movementCache.time
+    if p and p[15] and p[1] and t[15] and t[1] then
+        local dt = t[15] - t[1]
+        if dt > 0 then return (p[15] - p[1]) / dt end
+    end
+    return Vector3.zero
+end
+
+-- ═══════════════════════════════════════════
+-- VISIBILITY CHECK (PF internal)
+-- ═══════════════════════════════════════════
+
+local physicsIgnore = {Workspace.Terrain, Workspace.Ignore, Workspace.Players, Camera}
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+rayParams.FilterDescendantsInstances = physicsIgnore
+
+local function isPFVisible(origin, target)
+    local result = Workspace:Raycast(origin, target - origin, rayParams)
+    return result == nil
+end
+
+-- ═══════════════════════════════════════════
+-- GET CLOSEST ENEMY (PF internal)
+-- ═══════════════════════════════════════════
+
+local function getPFClosestEnemy(fovRadius, visCheck, partName, screenCenter, teamCheck)
+    local bestDist = fovRadius or math.huge
+    local bestPos, bestEntry, bestPart
+
+    replicationInterface.operateOnAllEntries(function(player, entry)
+        if player == LocalPlayer then return end
+        if teamCheck and not entry._isEnemy then return end
+
+        local character = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
+        if not character then return end
+
+        local targetPartName = partName
+        if targetPartName == "HumanoidRootPart" then targetPartName = "Torso" end
+        if targetPartName == "Random" then
+            targetPartName = math.random(1,2) == 1 and "Head" or "Torso"
+        end
+
+        local part = character[targetPartName] or character.Head
+        if not part then return end
+
+        local targetPos = part.Position
+        local camPos = Camera.CFrame.Position
+
+        if visCheck and not isPFVisible(camPos, targetPos) then return end
+
+        local sp, onScreen = Camera:WorldToViewportPoint(targetPos)
+        if sp.Z <= 0 then return end
+
+        local dist2D = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
+        if dist2D < bestDist then
+            bestDist = dist2D
+            bestPos = targetPos
+            bestEntry = entry
+            bestPart = part
+        end
+    end)
+
+    return bestPos, bestEntry, bestPart
+end
+
+-- ═══════════════════════════════════════════
+-- HOOKS: SILENT AIM
+-- ═══════════════════════════════════════════
+
+local originalBulletNew = bulletObject.new
+function bulletObject.new(bulletData)
+    if bulletData.onplayerhit and Config.Silent.Enabled and Config.Silent.Active then
+        local chance = math.random(1, 100)
+        if chance <= Config.Silent.HitChance then
+            local screenCenter = Camera.ViewportSize * 0.5
+            local partName = Config.Silent.TargetPart
+            local target, entry = getPFClosestEnemy(
+                Config.FOV.Enabled and Config.FOV.Radius or 800,
+                Config.Silent.VisibleCheck,
+                partName,
+                Vector2.new(screenCenter.X, screenCenter.Y),
+                Config.Silent.TeamCheck
+            )
+
+            if target and entry then
+                local enemyVel = getEnemyVelocity(entry._player)
+                local velocity = complexTrajectory(
+                    bulletData.position,
+                    bulletData.acceleration or publicSettings.bulletAcceleration,
+                    target,
+                    bulletData.velocity.Magnitude,
+                    enemyVel
+                )
+                bulletData.velocity = velocity
+            end
+        end
+    end
+    return originalBulletNew(bulletData)
+end
+
+local originalSend = network.send
+function network:send(name, ...)
+    if name == "newbullets" and Config.Silent.Enabled and Config.Silent.Active then
+        local uniqueId, bulletData, time = ...
+        local chance = math.random(1, 100)
+
+        if chance <= Config.Silent.HitChance then
+            local screenCenter = Camera.ViewportSize * 0.5
+            local partName = Config.Silent.TargetPart
+            local target, entry = getPFClosestEnemy(
+                Config.FOV.Enabled and Config.FOV.Radius or 800,
+                Config.Silent.VisibleCheck,
+                partName,
+                Vector2.new(screenCenter.X, screenCenter.Y),
+                Config.Silent.TeamCheck
+            )
+
+            if target and entry then
+                local enemyVel = getEnemyVelocity(entry._player)
+                local controller = weaponInterface.getActiveWeaponController()
+                local weapon = controller and controller:getActiveWeapon()
+                local bulletSpeed = weapon and weapon._weaponData and weapon._weaponData.bulletspeed or 2000
+
+                local velocity = complexTrajectory(
+                    bulletData.firepos or bulletData.camerapos,
+                    publicSettings.bulletAcceleration,
+                    target,
+                    bulletSpeed,
+                    enemyVel
+                )
+
+                for _, bullet in bulletData.bullets do
+                    bullet[1] = velocity.Unit
+                end
+            end
+        end
+    end
+
+    -- Block anticheat reports
+    if name == "flaguser" or name == "debug" or name == "logmessage" then
+        return
+    end
+
+    return originalSend(self, name, ...)
+end
+
+-- ═══════════════════════════════════════════
+-- ESP SYSTEM (PF internal)
+-- ═══════════════════════════════════════════
+
+local PFESP = {}
+local PFLastESP = 0
+
+local function CreatePFESP(player)
+    if PFESP[player] then return end
+    local e = {}
+    e.BoxOutline = Drawing.new("Square")
+    e.BoxOutline.Thickness = 3; e.BoxOutline.Filled = false
+    e.BoxOutline.Color = Color3.fromRGB(0,0,0); e.BoxOutline.Transparency = 0.5; e.BoxOutline.Visible = false
+
+    e.Box = Drawing.new("Square")
+    e.Box.Thickness = 1; e.Box.Filled = false; e.Box.Visible = false
+
+    e.Name = Drawing.new("Text")
+    e.Name.Size = 13; e.Name.Center = true; e.Name.Outline = true
+    e.Name.Color = Color3.fromRGB(255,255,255); e.Name.Visible = false
+
+    e.Weapon = Drawing.new("Text")
+    e.Weapon.Size = 11; e.Weapon.Center = true; e.Weapon.Outline = true
+    e.Weapon.Color = Color3.fromRGB(200,200,200); e.Weapon.Visible = false
+
+    e.Distance = Drawing.new("Text")
+    e.Distance.Size = 12; e.Distance.Center = true; e.Distance.Outline = true
+    e.Distance.Color = Color3.fromRGB(200,200,200); e.Distance.Visible = false
+
+    e.HealthBG = Drawing.new("Square")
+    e.HealthBG.Filled = true; e.HealthBG.Color = Color3.fromRGB(0,0,0)
+    e.HealthBG.Transparency = 0.5; e.HealthBG.Visible = false
+
+    e.HealthBar = Drawing.new("Square")
+    e.HealthBar.Filled = true; e.HealthBar.Color = Color3.fromRGB(0,255,0)
+    e.HealthBar.Visible = false
+
+    PFESP[player] = e
+end
+
+local function RemovePFESP(player)
+    local e = PFESP[player]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d:Remove() end) end
+    PFESP[player] = nil
+end
+
+local function HidePFESP(player)
+    local e = PFESP[player]
+    if not e then return end
+    for _, d in pairs(e) do pcall(function() d.Visible = false end) end
+end
+
+local function getCharacterScreenBounds(character, rootPos)
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local anyOn = false
+
+    for partName, part in character do
+        if typeof(part) == "Instance" and part:IsA("BasePart") then
+            local halfY = part.Size.Y / 2
+            local topW = part.Position + Vector3.new(0, halfY, 0)
+            local botW = part.Position - Vector3.new(0, halfY, 0)
+
+            local ts = Camera:WorldToViewportPoint(topW)
+            local bs = Camera:WorldToViewportPoint(botW)
+
+            if ts.Z > 0 then
+                anyOn = true
+                minX = math.min(minX, ts.X); maxX = math.max(maxX, ts.X)
+                minY = math.min(minY, ts.Y); maxY = math.max(maxY, ts.Y)
+            end
+            if bs.Z > 0 then
+                anyOn = true
+                minX = math.min(minX, bs.X); maxX = math.max(maxX, bs.X)
+                minY = math.min(minY, bs.Y); maxY = math.max(maxY, bs.Y)
+            end
+        end
+    end
+
+    if not anyOn then return nil end
+
+    local pad = 4
+    minX = minX - pad; maxX = maxX + pad
+    minY = minY - pad; maxY = maxY + pad
+
+    local w = maxX - minX
+    local h = maxY - minY
+    local vp = Camera.ViewportSize
+
+    -- Clamp oversized boxes
+    if w > vp.X * 0.4 or h > vp.Y * 0.6 or w < 5 or h < 8 then
+        local dist = (Camera.CFrame.Position - rootPos).Magnitude
+        local sf = 1 / (dist * math.tan(math.rad(Camera.FieldOfView/2)) * 2 / vp.Y)
+        h = math.clamp(5.5 * sf, 15, vp.Y * 0.5)
+        w = h * 0.55
+        local cs = Camera:WorldToViewportPoint(rootPos)
+        if cs.Z <= 0 then return nil end
+        minX = cs.X - w/2; minY = cs.Y - h/2
+        maxX = cs.X + w/2; maxY = cs.Y + h/2
+    end
+
+    return {
+        minX = minX, minY = minY, maxX = maxX, maxY = maxY,
+        width = maxX - minX, height = maxY - minY,
+        centerX = (minX + maxX) / 2
+    }
+end
+
+local function UpdatePFESP()
+    if not Config.ESP.Enabled or not Config.ESP.Active then
+        for p in pairs(PFESP) do HidePFESP(p) end
+        return
+    end
+
+    local now = tick()
+    if now - PFLastESP < 0.08 then return end
+    PFLastESP = now
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local activePlayers = {}
+
+    replicationInterface.operateOnAllEntries(function(player, entry)
+        if player == LocalPlayer then return end
+        activePlayers[player] = true
+
+        if Config.ESP.TeamCheck and not entry._isEnemy then
+            HidePFESP(player)
+            return
+        end
+
+        local thirdPerson = entry._thirdPersonObject
+        local character = thirdPerson and thirdPerson._characterModelHash
+        if not character or not character.Head then
+            HidePFESP(player)
+            return
+        end
+
+        if not PFESP[player] then CreatePFESP(player) end
+        local esp = PFESP[player]
+        if not esp then return end
+
+        local rootPos = entry._receivedPosition or character.Head.Position
+        local dist = (Camera.CFrame.Position - rootPos).Magnitude
+
+        if dist > Config.ESP.MaxDistance then
+            HidePFESP(player)
+            return
+        end
+
+        local bounds = getCharacterScreenBounds(character, rootPos)
+        if not bounds then
+            HidePFESP(player)
+            return
+        end
+
+        -- Health
+        local health = 100
+        pcall(function() health = entry:getHealth() end)
+        local healthRatio = math.clamp(health / 100, 0, 1)
+
+        -- Visibility color
+        local isVis = isPFVisible(Camera.CFrame.Position, character.Head.Position)
+        local boxCol = isVis and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+        if not entry._isEnemy then boxCol = Color3.fromRGB(80, 150, 255) end
+
+        -- Box
+        if Config.ESP.Boxes then
+            esp.BoxOutline.Position = Vector2.new(bounds.minX - 1, bounds.minY - 1)
+            esp.BoxOutline.Size = Vector2.new(bounds.width + 2, bounds.height + 2)
+            esp.BoxOutline.Visible = true
+
+            esp.Box.Position = Vector2.new(bounds.minX, bounds.minY)
+            esp.Box.Size = Vector2.new(bounds.width, bounds.height)
+            esp.Box.Color = boxCol
+            esp.Box.Visible = true
+        else
+            esp.BoxOutline.Visible = false
+            esp.Box.Visible = false
+        end
+
+        -- Name
+        if Config.ESP.Names then
+            esp.Name.Position = Vector2.new(bounds.centerX, bounds.minY - 16)
+            esp.Name.Text = player.Name
+            esp.Name.Color = boxCol
+            esp.Name.Visible = true
+        else
+            esp.Name.Visible = false
+        end
+
+        -- Weapon name
+        local weaponName = "Unknown"
+        pcall(function()
+            local wObj = entry:getWeaponObject()
+            if wObj and wObj.weaponName then weaponName = wObj.weaponName end
+        end)
+        esp.Weapon.Position = Vector2.new(bounds.centerX, bounds.maxY + 2)
+        esp.Weapon.Text = weaponName
+        esp.Weapon.Visible = Config.ESP.Distance -- reuse distance toggle for weapon
+
+        -- Distance
+        if Config.ESP.Distance then
+            esp.Distance.Position = Vector2.new(bounds.centerX, bounds.maxY + 14)
+            esp.Distance.Text = math.floor(dist) .. "m"
+            esp.Distance.Visible = true
+        else
+            esp.Distance.Visible = false
+        end
+
+        -- Health Bar
+        if Config.ESP.Boxes then
+            local barX = bounds.minX - 6
+            local h = bounds.height
+
+            esp.HealthBG.Position = Vector2.new(barX - 1, bounds.minY - 1)
+            esp.HealthBG.Size = Vector2.new(5, h + 2)
+            esp.HealthBG.Visible = true
+
+            local fillH = h * healthRatio
+            local hc = healthRatio > 0.5
+                and Color3.fromRGB(math.floor(255*(1-healthRatio)*2), 255, 0)
+                or Color3.fromRGB(255, math.floor(255*healthRatio*2), 0)
+
+            esp.HealthBar.Position = Vector2.new(barX, bounds.minY + (h - fillH))
+            esp.HealthBar.Size = Vector2.new(3, fillH)
+            esp.HealthBar.Color = hc
+            esp.HealthBar.Visible = true
+        else
+            esp.HealthBG.Visible = false
+            esp.HealthBar.Visible = false
+        end
+    end)
+
+    -- Cleanup removed players
+    for p in pairs(PFESP) do
+        if not activePlayers[p] then
+            if not p.Parent then RemovePFESP(p) else HidePFESP(p) end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- AIMBOT (PF internal - camera angles)
+-- ═══════════════════════════════════════════
+
+local pfAimbotting = false
+local pfAimTime = nil
+local pfLockedPlayer = nil
+local pi = math.pi
+local tau = 2 * pi
+
+local function UpdatePFAimbot(dt)
+    if not Config.Aimbot.Enabled or not Config.Aimbot.Active then
+        pfAimbotting = false
+        pfAimTime = nil
+        if not Config.Aimbot.Active then pfLockedPlayer = nil end
+        return
+    end
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return end
+
+    local clockTime = os.clock()
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X/2, vp.Y/2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local ref = Config.Aimbot.Method == "Aimbot" and center or mousePos
+
+    -- Aimlock: try locked player first
+    if Config.Aimbot.Method == "Aimlock" and pfLockedPlayer then
+        local valid = false
+        pcall(function()
+            if pfLockedPlayer.Parent then
+                local entry = replicationInterface.getEntry(pfLockedPlayer)
+                if entry and entry._isEnemy then
+                    local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
+                    if ch and ch.Head then valid = true end
+                end
+            end
+        end)
+        if not valid then pfLockedPlayer = nil end
+    end
+
+    local targetPos, targetEntry
+    local bestDist = Config.Aimbot.FOVRadius
+
+    replicationInterface.operateOnAllEntries(function(player, entry)
+        if player == LocalPlayer then return end
+        if Config.Aimbot.TeamCheck and not entry._isEnemy then return end
+
+        -- Aimlock: skip if we have a locked player and this isn't them
+        if Config.Aimbot.Method == "Aimlock" and pfLockedPlayer and player ~= pfLockedPlayer then return end
+
+        local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
+        if not ch then return end
+
+        local partName = Config.Aimbot.TargetPart
+        if partName == "HumanoidRootPart" then partName = "Torso" end
+        if partName == "Random" then partName = math.random(1,2) == 1 and "Head" or "Torso" end
+        local part = ch[partName] or ch.Head
+        if not part then return end
+
+        if Config.Aimbot.VisibleCheck and not isPFVisible(Camera.CFrame.Position, part.Position) then return end
+
+        local sp, on = Camera:WorldToViewportPoint(part.Position)
+        if not on or sp.Z <= 0 then return end
+
+        local d = (Vector2.new(sp.X, sp.Y) - ref).Magnitude
+        if d < bestDist then
+            bestDist = d
+            targetPos = part.Position
+            targetEntry = entry
+        end
+    end)
+
+    if not targetPos or not targetEntry then
+        pfAimbotting = false
+        pfAimTime = nil
+        return
+    end
+
+    -- Lock the player for Aimlock mode
+    if Config.Aimbot.Method == "Aimlock" then
+        pfLockedPlayer = targetEntry._player
+    end
+
+    pfAimbotting = true
+    pfAimTime = pfAimTime or clockTime
+
+    -- Get weapon data for trajectory
+    local controller = weaponInterface.getActiveWeaponController()
+    local weapon = controller and controller:getActiveWeapon()
+    local bulletSpeed = weapon and weapon._weaponData and weapon._weaponData.bulletspeed or 10000
+    local enemyVel = getEnemyVelocity(targetEntry._player)
+
+    -- Add basic prediction from config
+    if Config.Aimbot.Prediction > 0 then
+        targetPos = targetPos + enemyVel * Config.Aimbot.Prediction
+    end
+
+    local sm = math.max(Config.Aimbot.Smoothness or 5, 1)
+
+    if Config.Aimbot.Method == "Aimbot" then
+        -- Internal camera angle method (PF specific)
+        local cameraObj = nil
+        pcall(function() cameraObj = cameraInterface:getActiveCamera() end)
+
+        if cameraObj and cameraObj._angles then
+            local velocity = complexTrajectory(
+                Camera.CFrame.Position,
+                publicSettings.bulletAcceleration,
+                targetPos,
+                bulletSpeed,
+                enemyVel
+            )
+
+            local vx, vy = toAnglesYX(velocity)
+            local cy = cameraObj._angles.Y
+            local x = math.clamp(vx, cameraObj._minAngle or -1.4, cameraObj._maxAngle or 1.4)
+            local y = (vy + pi - cy) % tau - pi + cy
+            local newAngles = Vector3.new(x, y, 0)
+
+            -- Apply smoothing
+            local factor = math.clamp(1/sm, 0.05, 1)
+            if sm > 1 then
+                newAngles = cameraObj._angles:Lerp(newAngles, factor)
+            end
+
+            cameraObj._delta = (newAngles - cameraObj._angles) / (dt or 0.016)
+            cameraObj._angles = newAngles
+        else
+            -- Fallback: CFrame method
+            local cur = Camera.CFrame
+            local tgt = CFrame.lookAt(cur.Position, targetPos)
+            Camera.CFrame = sm <= 1 and tgt or cur:Lerp(tgt, 1/sm)
+        end
+
+    elseif Config.Aimbot.Method == "Aimlock" then
+        -- Mouse move method
+        local sp, on = Camera:WorldToViewportPoint(targetPos)
+        if on then
+            local mp = UserInputService:GetMouseLocation()
+            local dx, dy = sp.X - mp.X, sp.Y - mp.Y
+            local d = math.sqrt(dx*dx + dy*dy)
+            if d > 1 then
+                local spd = math.clamp(1/sm, 0.05, 0.8)
+                local mx = math.clamp(dx*spd, -150, 150)
+                local my = math.clamp(dy*spd, -150, 150)
+                if math.abs(mx) > 0.3 or math.abs(my) > 0.3 then
+                    mousemoverel(mx, my)
+                end
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- HITBOX SYSTEM (PF internal)
+-- ═══════════════════════════════════════════
+
+local hitboxFolder = Instance.new("Folder", Workspace)
+hitboxFolder.Name = "AX_PF_Hitboxes"
+
+local function UpdatePFHitboxes()
+    if not Config.Hitbox.Enabled or not Config.Hitbox.Active then
+        hitboxFolder:ClearAllChildren()
+        return
+    end
+
+    local mousePos = UserInputService:GetMouseLocation()
+    local fov = Config.Hitbox.FOVEnabled and Config.Hitbox.FOVRadius or Config.FOV.Radius
+
+    replicationInterface.operateOnAllEntries(function(player, entry)
+        if not entry._isEnemy then return end
+        if Config.Hitbox.TeamCheck and not entry._isEnemy then return end
+
+        local sphere = hitboxFolder:FindFirstChild(player.Name)
+
+        if entry._receivedPosition then
+            -- FOV check for dynamic
+            local shouldExpand = true
+            if Config.Hitbox.Method == "DHE (Dynamic)" then
+                local sp, on = Camera:WorldToViewportPoint(entry._receivedPosition)
+                if on then
+                    local sd = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+                    if sd > fov then shouldExpand = false end
+                else
+                    shouldExpand = false
+                end
+            end
+
+            if shouldExpand then
+                if not sphere then
+                    local size = Config.Hitbox.MaxSize
+                    sphere = Instance.new("Part")
+                    sphere.Name = player.Name
+                    sphere.Shape = Enum.PartType.Ball
+                    sphere.Size = Vector3.new(size, size, size)
+                    sphere.CanCollide = false
+                    sphere.Anchored = true
+                    sphere.Material = Enum.Material.ForceField
+                    sphere.Transparency = Config.Hitbox.Transparency
+                    sphere.Color = Color3.fromRGB(0, 100, 255)
+                    sphere.Parent = hitboxFolder
+                end
+
+                -- Dynamic sizing
+                if Config.Hitbox.Method == "DHE (Dynamic)" then
+                    local sp, on = Camera:WorldToViewportPoint(entry._receivedPosition)
+                    if on then
+                        local sd = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+                        local pf = 1 - (sd / fov)
+                        local dynSize = 1 + (Config.Hitbox.MaxSize - 1) * pf
+                        sphere.Size = Vector3.new(dynSize, dynSize, dynSize)
+                    end
+                else
+                    local s = Config.Hitbox.MaxSize
+                    sphere.Size = Vector3.new(s, s, s)
+                end
+
+                sphere.Position = entry._receivedPosition
+                sphere.Transparency = Config.Hitbox.Transparency
+            elseif sphere then
+                sphere:Destroy()
+            end
+        elseif sphere then
+            sphere:Destroy()
+        end
+    end)
+
+    -- Cleanup spheres for disconnected players
+    for _, child in hitboxFolder:GetChildren() do
+        local player = Players:FindFirstChild(child.Name)
+        if not player then child:Destroy() end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- MAIN LOOPS
+-- ═══════════════════════════════════════════
+
+local pfConnections = {}
+
+-- Movement cache update
+table.insert(pfConnections, RunService.Stepped:Connect(function()
+    local ct = os.clock()
+    replicationInterface.operateOnAllEntries(function(player, entry)
+        if entry._isEnemy then
+            local ch = entry._thirdPersonObject and entry._thirdPersonObject._characterModelHash
+            movementCache.position[player] = movementCache.position[player] or {}
+            if ch and ch.Head then
+                table.insert(movementCache.position[player], 1, ch.Head.Position)
+                table.remove(movementCache.position[player], 16)
+            end
+        end
+    end)
+    table.insert(movementCache.time, 1, ct)
+    table.remove(movementCache.time, 16)
+end))
+
+-- Aimbot (RenderStepped for smooth camera)
+table.insert(pfConnections, RunService.RenderStepped:Connect(function(dt)
+    Camera = Workspace.CurrentCamera
+    UpdatePFAimbot(dt)
+end))
+
+-- ESP + Hitbox (Heartbeat)
+table.insert(pfConnections, RunService.Heartbeat:Connect(function()
+    Camera = Workspace.CurrentCamera
+    UpdatePFESP()
+    UpdatePFHitboxes()
+end))
+
+-- ═══════════════════════════════════════════
+-- CLEANUP
+-- ═══════════════════════════════════════════
+
+local function PFCleanup()
+    -- Restore hooks
+    if originalBulletNew then bulletObject.new = originalBulletNew end
+    if originalSend then network.send = originalSend end
+
+    -- Disconnect events
+    for _, conn in pfConnections do
+        pcall(function() conn:Disconnect() end)
+    end
+
+    -- Cleanup ESP
+    for p in pairs(PFESP) do RemovePFESP(p) end
+
+    -- Cleanup hitboxes
+    pcall(function() hitboxFolder:Destroy() end)
+
+    -- Clear flags
+    getgenv().AX_PF_HandlesAimbot = nil
+    getgenv().AX_PF_HandlesESP = nil
+    getgenv().AX_PF_HandlesSilent = nil
+    getgenv().AX_PF_HandlesHitbox = nil
+    getgenv().AX_PF_Cleanup = nil
+
+    warn("[AX-PF] ✅ Cleanup complete")
+end
+
+-- ═══════════════════════════════════════════
+-- PLAYER EVENTS
+-- ═══════════════════════════════════════════
+
+Players.PlayerRemoving:Connect(function(p)
+    if pfLockedPlayer == p then pfLockedPlayer = nil end
+    RemovePFESP(p)
+    movementCache.position[p] = nil
+    local sphere = hitboxFolder:FindFirstChild(p.Name)
+    if sphere then sphere:Destroy() end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Camera = Workspace.CurrentCamera
+    pfLockedPlayer = nil
+    pfAimTime = nil
+    hitboxFolder:ClearAllChildren()
+end)
+
+-- ═══════════════════════════════════════════
+-- REGISTER WITH MAIN SCRIPT
+-- ═══════════════════════════════════════════
+
+getgenv().AX_PF_HandlesAimbot = true
+getgenv().AX_PF_HandlesESP = true
+getgenv().AX_PF_HandlesSilent = true
+getgenv().AX_PF_HandlesHitbox = true
+getgenv().AX_PF_Cleanup = PFCleanup
+
+-- ═══════════════════════════════════════════
+-- NOTIFICATIONS
+-- ═══════════════════════════════════════════
+
+task.delay(3, function()
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "⚡ AX - Phantom Forces v4.0",
+            Text = "Internal hooks loaded! Silent+Aimbot+ESP+Hitbox",
+            Duration = 6
+        })
+    end)
+end)
+
+print("  ✅ PF MODULE v4.0 - Internal hooks active")
+print("  ✅ Silent Aim: bulletObject.new + network.send")
+print("  ✅ Aimbot: cameraInterface angles + trajectory")
+print("  ✅ ESP: replicationInterface + health + weapon")
+print("  ✅ Hitbox: replicationInterface spheres")
